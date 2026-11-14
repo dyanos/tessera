@@ -9,7 +9,8 @@
 #    (skipped when csec++ was built without Z3).
 # 3. self-host: tests/selfhost_concurrency/*.csec compiled by the self-hosted compiler must exit 42.
 #
-# Set UPDATE=1 to rewrite tests/expected_results.txt from this run.
+# Set UPDATE=1 to rewrite tests/expected_results.txt from this run (per-OS overrides:
+# tests/expected_results.<uname -s>.txt, e.g. Darwin, where OpenMP is unavailable).
 set -u
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo"
@@ -48,11 +49,21 @@ find tests/positive tests/semantic_positive tests/stdlib tests/selfhost_concurre
   fi
   echo "$f $e $r" >> "$results"
 done
+# Platform-dependent results (e.g. no OpenMP with Apple clang) live in
+# tests/expected_results.<uname -s>.txt as full "path emit run" lines that replace the generic ones.
+expected="$work/expected_results.txt"
+overrides="tests/expected_results.$(uname -s).txt"
+if [ -f "$overrides" ]; then
+  awk 'NR == FNR { o[$1] = $0; next } ($1 in o) { print o[$1]; next } { print }' \
+    "$overrides" tests/expected_results.txt > "$expected"
+else
+  cp tests/expected_results.txt "$expected"
+fi
 if [ "${UPDATE:-0}" = "1" ]; then
   cp "$results" tests/expected_results.txt
   echo "fixtures: wrote tests/expected_results.txt"
 else
-  if diff -u tests/expected_results.txt "$results" > "$work/fixtures.diff"; then
+  if diff -u "$expected" "$results" > "$work/fixtures.diff"; then
     echo "fixtures: $(wc -l < "$results" | tr -d ' ') matched"
   else
     echo "fixtures: MISMATCH (expected vs actual)"
