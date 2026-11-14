@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tessera_syntax::docs::{keyword_doc, type_doc, BUILTIN_FUNCTIONS, BUILTIN_METHODS};
-use tessera_syntax::highlight::{BUILTIN_NAMESPACES, BUILTIN_TYPES};
+use tessera_syntax::highlight::{BUILTIN_NAMESPACES, BUILTIN_TYPES, CONTRACT_WORDS};
 use tessera_syntax::lexer::KEYWORDS;
 use tessera_syntax::{highlight, Analysis, Class, Decl, DeclKind, FoldKind, Tok, TokKind};
 
@@ -419,6 +419,8 @@ pub fn hover(cur: &Source, imports: &[Arc<Source>], pos: Position) -> Option<Hov
                 format!("{}\n\n*built-in method*", md_code(&format!(".{word}(…)")))
             } else if BUILTIN_NAMESPACES.contains(&word) {
                 format!("**{word}** — built-in runtime object")
+            } else if CONTRACT_WORDS.contains(&word) || word == "result" {
+                format!("**{word}** — {}", keyword_doc(word)?)
             } else {
                 return None;
             }
@@ -583,6 +585,9 @@ const SNIPPETS: &[(&str, &str, &str)] = &[
     ("tensor", "new Tensor<${1:Double}, ${2:2}, ${3:2}>(${4:0.0})", "new tensor"),
     ("dict", "{${1:\"key\"}: ${2:value}}", "dictionary literal"),
     ("set", "{${1:a}, ${2:b}}", "set literal"),
+    ("contract", "def ${1:name}(${2:x}: ${3:Int}): ${4:Int}\n\trequires ${5:x >= 0}\n\tensures ${6:result >= 0}\n{\n\t$0\n}", "function with contract"),
+    ("invariant", "while (${1:i} < ${2:n})\n\tinvariant ${3:0 <= i and i <= n}\n\tdecreases ${4:n - i}\n{\n\t$0\n}", "loop with invariant"),
+    ("template", "template<${1:Int} ${2:N}>\nstruct ${3:Name}(${4:v: Long}) {\n\tdef operator +(o: ${3:Name}<${2:N}>): ${3:Name}<${2:N}> = $0\n}", "template struct with operator"),
     ("fordict", "for (${1:key}, ${2:value} <- ${3:dict}) {\n\t$0\n}", "dictionary loop"),
 ];
 
@@ -705,7 +710,7 @@ pub fn completion(cur: &Source, imports: &[Arc<Source>], pos: Position, snippets
             items.push(CompletionItem { label: n.to_string(), kind: Some(CompletionItemKind::MODULE), sort_text: Some(format!("5{n}")), ..Default::default() });
         }
     }
-    for k in KEYWORDS {
+    for k in KEYWORDS.iter().chain(CONTRACT_WORDS) {
         if seen.insert(k.to_string()) {
             items.push(CompletionItem {
                 label: k.to_string(),

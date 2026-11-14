@@ -212,6 +212,13 @@ The build produces:
 - `csec_native_runtime`: shared native runtime library copied next to the
   compiler executable.
 
+### Editor support
+
+- VS Code: `editors/vscode-tessera` (TextMate grammar).
+- OpenIDEA: `editors/openidea-tessera` (plugin plus the `tessera-lsp` language server: hover,
+  completion, snippets, go-to-definition, outline, diagnostics).
+- Vim / Neovim: `editors/vim-tessera` (syntax, indentation, filetype settings).
+
 ## Compiler Usage
 
 From the build output directory:
