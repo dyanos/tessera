@@ -590,6 +590,62 @@ CSEC_NATIVE_API int csec_set_is_subset(void* left, void* right);
 CSEC_NATIVE_API int csec_set_equals(void* left, void* right);
 CSEC_NATIVE_API int csec_set_is_disjoint(void* left, void* right);
 
+// std.math.algebra (algebra_runtime.inc)
+CSEC_NATIVE_API long long csec_alg_mod(long long a, long long n);
+CSEC_NATIVE_API long long csec_alg_add(long long a, long long b, long long n);
+CSEC_NATIVE_API long long csec_alg_sub(long long a, long long b, long long n);
+CSEC_NATIVE_API long long csec_alg_mul(long long a, long long b, long long n);
+CSEC_NATIVE_API long long csec_alg_pow(long long a, long long e, long long n);
+CSEC_NATIVE_API long long csec_alg_inv(long long a, long long n);
+CSEC_NATIVE_API int csec_alg_is_unit(long long a, long long n);
+CSEC_NATIVE_API long long csec_alg_gcd(long long a, long long b);
+CSEC_NATIVE_API int csec_alg_is_prime(long long n);
+CSEC_NATIVE_API long long csec_alg_euler_phi(long long n);
+CSEC_NATIVE_API long long csec_alg_order(long long a, long long n);
+CSEC_NATIVE_API long long csec_alg_legendre(long long a, long long p);
+CSEC_NATIVE_API long long csec_alg_sqrt(long long a, long long p);
+CSEC_NATIVE_API int csec_alg_is_square(long long a, long long p);
+CSEC_NATIVE_API long long csec_alg_primitive_root(long long p);
+CSEC_NATIVE_API long long csec_alg_require_modulus(long long n);
+CSEC_NATIVE_API long long csec_alg_require_prime(long long p);
+CSEC_NATIVE_API long long csec_alg_require_same(long long a, long long b);
+CSEC_NATIVE_API char* csec_alg_residue_to_string(long long v, long long n);
+CSEC_NATIVE_API long long csec_poly_constant(long long c, long long p);
+CSEC_NATIVE_API long long csec_poly_monomial(long long c, long long k, long long p);
+CSEC_NATIVE_API long long csec_poly_characteristic(long long h);
+CSEC_NATIVE_API long long csec_poly_add(long long a, long long b);
+CSEC_NATIVE_API long long csec_poly_sub(long long a, long long b);
+CSEC_NATIVE_API long long csec_poly_mul(long long a, long long b);
+CSEC_NATIVE_API long long csec_poly_scale(long long a, long long k);
+CSEC_NATIVE_API long long csec_poly_div(long long a, long long b);
+CSEC_NATIVE_API long long csec_poly_rem(long long a, long long b);
+CSEC_NATIVE_API long long csec_poly_pow(long long a, long long e);
+CSEC_NATIVE_API long long csec_poly_gcd(long long a, long long b);
+CSEC_NATIVE_API long long csec_poly_derivative(long long a);
+CSEC_NATIVE_API long long csec_poly_monic(long long a);
+CSEC_NATIVE_API int csec_poly_degree(long long a);
+CSEC_NATIVE_API long long csec_poly_coeff(long long a, long long i);
+CSEC_NATIVE_API long long csec_poly_eval(long long a, long long v);
+CSEC_NATIVE_API int csec_poly_equals(long long a, long long b);
+CSEC_NATIVE_API int csec_poly_is_irreducible(long long a);
+CSEC_NATIVE_API char* csec_poly_to_string(long long a);
+CSEC_NATIVE_API long long csec_gf_find_modulus(long long p, long long k);
+CSEC_NATIVE_API long long csec_gf_modulus_from_poly(long long h);
+CSEC_NATIVE_API long long csec_gf_degree(long long m, long long p);
+CSEC_NATIVE_API long long csec_gf_order(long long m, long long p);
+CSEC_NATIVE_API long long csec_gf_reduce(long long a, long long p, long long m);
+CSEC_NATIVE_API long long csec_gf_from_int(long long v, long long p);
+CSEC_NATIVE_API long long csec_gf_add(long long a, long long b, long long p);
+CSEC_NATIVE_API long long csec_gf_sub(long long a, long long b, long long p);
+CSEC_NATIVE_API long long csec_gf_mul(long long a, long long b, long long p, long long m);
+CSEC_NATIVE_API long long csec_gf_pow(long long a, long long e, long long p, long long m);
+CSEC_NATIVE_API long long csec_gf_inv(long long a, long long p, long long m);
+CSEC_NATIVE_API long long csec_gf_from_poly(long long h, long long p, long long m);
+CSEC_NATIVE_API long long csec_gf_to_poly(long long a, long long p);
+CSEC_NATIVE_API long long csec_gf_element_order(long long a, long long p, long long m);
+CSEC_NATIVE_API long long csec_gf_primitive_element(long long p, long long m);
+CSEC_NATIVE_API char* csec_gf_to_string(long long a, long long p);
+
 #ifdef __cplusplus
 }
 #endif

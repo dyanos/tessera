@@ -10,12 +10,13 @@ def main(): Int {
     val flag = isBig(big);      // Bool
     val mixed = big > a;        // Bool from a Long/Int comparison
     val masked = big & 65535;   // Long
+    val shifted = big >> a;     // Long (a mixed-width shift keeps the left type)
     val text = "n=" + a;        // String
     val c = 'x';                // Char
     val d = {"k": big};         // Dict<String, Long>
     var acc = d["k"] - big;     // Long
     acc = acc + 1;
-    if (flag and mixed and masked == 24064 and h == 1500000000.0 and acc == 1 and text == "n=1" and c == 'x') {
+    if (flag and mixed and masked == 24064 and shifted == 1500000000 and h == 1500000000.0 and acc == 1 and text == "n=1" and c == 'x') {
         return 0;
     }
     return 1;

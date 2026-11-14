@@ -221,6 +221,16 @@ class Counter() {
 }
 ```
 
+A unary operator (`-`, `+`, `!`, `~`) is overloaded by an `operator` method without parameters,
+next to the binary form of the same operator:
+
+```ts
+struct Money(cents: Long) {
+    def operator -(): Money = new Money(0 - cents)          // -m
+    def operator -(o: Money): Money = new Money(cents - o.cents)  // m - n
+}
+```
+
 ## Structs
 
 A `struct` declares a value type — its fields are copied field-by-field on
@@ -454,6 +464,7 @@ The shipped modules live in `lib/std`:
 | `std.math.natural` | `natDiv`, `natMod`, `natPow`, `natGcd`, `natLcm`, `natSqrt`, `isPrime`, `factorial`, `binomial`, `fibonacci` |
 | `std.math.real` | `pi()`, `euler()`, `approxEqual`, `hypot`, `cbrt`, `nthRoot`, `logBase`, ... |
 | `std.math.complex` | `imaginaryUnit()`, `complex`, `conj`, `cabs`, `carg`, `cexp`, `clog`, `csqrt`, `cpowInt`, `cpow`, `csin`, `ccos` |
+| `std.math.algebra` | `integersMod(n)` (Z/nZ), `primeField(p)` (GF(p), p must be prime), `F.x()` (GF(p)[x]), `galoisField(p, k)` (GF(p^k)); elements use `+ - * / % **`, unary `-`, `==` (LANGUAGE_SPEC.md §11) |
 | `std.symbolic` | `sym("x^2+1")`, `diff`, `integrate`, `expand`, `simplify`, `subst`, `solve`, `evalAt`, `symText`, `symLatex` |
 | `std.pipe` | `pipeNew`, `pipeWriteLine`, `pipeReadLine`, `pipeClose`, `pipeAtEnd`; `pipeOpenProcess(cmd)` with `processWriteLine`/`processReadLine`/`processFinish` |
 | `std.shared` | `sharedNew(bytes)`, `sharedOpen(name, bytes)`, `sharedGet/SetLong`, `sharedAddLong`, `sharedRead/WriteString`, `sharedLock/Unlock` |
@@ -502,6 +513,28 @@ def main(): Int {
     val df = symText(diff(f, "x"));          // "3*x^2 + 2"
     val i = imaginaryUnit();
     val minusOne = i * i;                    // -1 + 0i
+    return 0;
+}
+```
+
+Rings and fields (`std.math.algebra`) are values with overloaded operators:
+
+```tessera
+import std.math.algebra
+
+def main(): Int {
+    val F = primeField(7);                  // GF(7); a non-prime stops with AlgebraError
+    val a = F.of(3);
+    val b = a * F.of(5) + 1;                // 2 (mod 7)
+    val inv = a ** -1;                      // 5 (mod 7)
+    val R = integersMod(12);                // Z/12Z, a ring that is not a field
+    val u = R.of(5).inverse();              // 5 (mod 12); R.of(4).inverse() is an error
+    val x = F.x();
+    val f = x ** 2 + x * 3 + 1;             // a polynomial in GF(7)[x]
+    val r = f % (x + 1);                    // Euclidean remainder: 6
+    val K = galoisField(2, 8);              // GF(256)
+    val g = K.generator();
+    println((g ** 7 + g + 1).inverse().toString());
     return 0;
 }
 ```

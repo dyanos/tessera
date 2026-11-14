@@ -83,6 +83,7 @@ name that no imported module declared is an ordinary unresolved call (an error).
 | `std.math.natural` | `Nat` division/modulo/power/gcd/lcm/isqrt, primality, factorial, binomial, Fibonacci |
 | `std.math.real` | constants and real-number helpers |
 | `std.math.complex` | complex numbers: `imaginaryUnit()`, `conj`, `cabs`, `carg`, `cexp`, `clog`, `csqrt`, `cpow`, ... |
+| `std.math.algebra` | rings and fields with operator overloading: Z/nZ, GF(p), GF(p)[x], GF(p^k) (§11) |
 | `std.symbolic` | symbolic algebra: parse, simplify, expand, diff, integrate, subst, solve, evaluate, print |
 | `std.pipe` | byte/line pipes between threads and microthreads; child processes with piped stdin/stdout (§6) |
 | `std.shared` | shared memory: private (threads/microthreads) or named (across OS processes) (§6) |
@@ -461,6 +462,53 @@ var seen: Set<String> = {};         // `{}` is an empty set only when the type s
   `isSubset(s)`, `isSuperset(s)`, `isDisjoint(s)`, `toString()`.
 - **Iteration.** `for (x <- s) { ... }` visits the elements in insertion order.
 
+## 11. Rings and fields (`import std.math.algebra`)
+
+Algebraic structures are ordinary values with operator overloading (struct `operator` methods,
+including the unary `def operator -(): T`). A structure is created at run time with its parameters
+checked; its elements remember the structure, and combining elements of different structures stops
+the program with `AlgebraError: ...` (exit status 1).
+
+| Structure | Created by | Element | Operators |
+| --- | --- | --- | --- |
+| ring Z/nZ (n >= 1) | `integersMod(n)` | `Zmod` | `+ - *`, `/` (by a unit), unary `-`, `** e` (e < 0 uses the inverse), `== !=`; also with a `Long` |
+| prime field GF(p) | `primeField(p)` -- `p` must be prime | `Fp` | as `Zmod`, `/` by any nonzero element |
+| polynomial ring GF(p)[x] | `F.x()`, `F.constant(c)`, `F.monomial(c, k)` | `PolyFp` | `+ - *`, `/` and `%` (Euclidean), unary `-`, `** e`, `== !=`; with `Long` and `Fp` |
+| finite field GF(p^k) | `galoisField(p, k)` or `galoisField(m)` for an irreducible `m` | `GFq` | as `Fp` |
+
+```csec
+import std.math.algebra
+
+val F = primeField(7);                 // primeField(8): AlgebraError, use galoisField(2, 3)
+val a = F.of(3);
+val c = a * F.of(5) + 1;               // 2 (mod 7)
+val x = F.x();
+val f = x ** 2 + x * 3 + 1;            // irreducible over GF(7)
+val K = galoisField(2, 8);             // modulus x^8 + x^4 + x^3 + x + 1
+val g = K.generator();
+val h = (g ** 7 + g + 1).inverse();
+```
+
+- **Arithmetic.** Residues are kept in `[0, n)`; products use 128-bit intermediates, so every
+  modulus below 2^63 is exact. Primality is a deterministic Miller-Rabin test for 64-bit integers.
+- **Z/nZ** (`IntegersMod`): `of`, `zero`, `one`, `modulus`, `order`, `unitCount` (Euler's phi),
+  `isField`. Elements: `value`, `modulus`, `isZero`, `isUnit`, `inverse`, `order`, `toString`
+  (`"5 (mod 12)"`).
+- **GF(p)** (`PrimeField`): `of`, `zero`, `one`, `characteristic`, `order`, `generator` (a
+  primitive root), `x`, `constant`, `monomial`. Elements add `legendre`, `isSquare`, and `sqrt`
+  (Tonelli-Shanks; the smaller root).
+- **GF(p)[x]** (`PolyFp`): `degree` (-1 for zero), `coeff(i)`, `leading`, `eval(v)`, `derivative`,
+  `monic`, `gcd` (monic), `isIrreducible` (Rabin's test), `toString` (`"x^2 + 3x + 1"`).
+  Polynomials are runtime handles that are not freed.
+- **GF(p^k)** (`GaloisField`): `characteristic`, `degree`, `order`, `modulus`, `zero`, `one`,
+  `of(c)`, `of(f)` (the class of a polynomial), `generator` (the class `a` of x),
+  `primitiveElement`, `element(packed)`. `galoisField(p, k)` uses the smallest monic irreducible
+  polynomial of degree k (ordered by base-p digits). An element is packed in one `Long` (its
+  coefficients as base-p digits), so p^(k+1) must stay below 2^62. Elements: `inverse`, `order`,
+  `poly`, `packed`, `toString` (in the generator `a`, e.g. `"a^7 + a + 1"`).
+- The structures are values: there is no type-level parameter, so `GF(7)` and `GF(11)` elements
+  share the type `Fp` and are told apart at run time.
+
 ## 5. Self-hosted compiler support
 
 The self-hosted compiler (`selfhost/`, whose emitter lives in `src/native_runtime/*.inc`) implements:
@@ -489,7 +537,8 @@ Narrower than the native compiler:
   literals are native-only.
 - The value aggregates of §4 (`Complex`, `Rational`, `Quaternion`) and therefore
   `std.math.complex` are native-only, because the self-host has no aggregate value
-  types.
+  types. For the same reason `std.math.algebra` (§11), whose elements are structs, is
+  native-only.
 - The self-host does not type-check: the share-nothing and borrow rules of §2–§3 are
   enforced by the native compiler only.
 - Set operators (`|`, `&`, `-`, `^`, comparisons, `in`), `for` over a set, and the set-algebra
