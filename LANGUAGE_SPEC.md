@@ -84,6 +84,7 @@ name that no imported module declared is an ordinary unresolved call (an error).
 | `std.math.real` | constants and real-number helpers |
 | `std.math.complex` | complex numbers: `imaginaryUnit()`, `conj`, `cabs`, `carg`, `cexp`, `clog`, `csqrt`, `cpow`, ... |
 | `std.math.algebra` | rings and fields with operator overloading: Z/nZ, GF(p), GF(p)[x], GF(p^k) (§11) |
+| `std.logic` | formulas, validity / counterexamples with Z3, and an LCF-style proof kernel (§13) |
 | `std.symbolic` | symbolic algebra: parse, simplify, expand, diff, integrate, subst, solve, evaluate, print |
 | `std.pipe` | byte/line pipes between threads and microthreads; child processes with piped stdin/stdout (§6) |
 | `std.shared` | shared memory: private (threads/microthreads) or named (across OS processes) (§6) |
@@ -625,6 +626,45 @@ is unavailable.
 The self-hosted compiler accepts all of this syntax: it drops the specification clauses and
 compiles `assert` as a run-time check (§5).
 
+## 13. Logic and proofs (`import std.logic`)
+
+`std.logic` makes formulas values, decides them with the Z3 solver, and checks proofs in a small
+LCF-style kernel.
+
+- **Formulas and terms.** `prop(name)` is a proposition, `intVar(name)` an integer variable,
+  `intVal(n)` an integer constant, `trueFormula()` / `falseFormula()`. Terms combine with `+ - *` (also
+  with a `Long`) and unary `-`; comparisons `== != < <= > >=` build formulas; formulas combine with
+  `&`, `|`, `!`, and the methods `implies` and `iff`; `forAll(x, f)` and `exists(x, f)` quantify an
+  integer variable. Integer terms are mathematical integers (no overflow). Formulas are hash-consed:
+  `f.sameAs(g)` is syntactic equality; `f.substitute(x, t)` substitutes without capture.
+- **Decision.** `isValid(f)`, `isSatisfiable(f)`, `counterexample(f)` (an assignment making `f`
+  false, `""` if valid), `model(f)` (one making it true), `equivalent(f, g)`. An undecided query
+  counts as "not proved". Z3 is loaded when first needed: `libz3` next to the program, on the
+  library path, or named by `CSEC_Z3_LIBRARY`; `z3Available()` tells whether it was found.
+- **Theorems.** A `Thm` is `hypotheses |- conclusion` and can only be produced by the kernel's rules:
+  `assume(f)`, `trueIntro()`, `impIntro(a, t)` (discharges `a`), `impElim`/`modusPonens`,
+  `andIntro`, `andElim1`, `andElim2`, `orIntro1(t, b)`, `orIntro2(a, t)`, `orElim(tOr, fromA, fromB)`,
+  `notIntro(a, t)`, `notElim(tA, tNotA)`, `exFalso(t, f)`, `byContradiction(a, t)` (classical),
+  `iffIntro`, `iffElim1`, `iffElim2`, `allIntro(x, t)` (x not free in the hypotheses),
+  `allElim(t, witness)`, `existsIntro(f, witness, t)`, `refl(t)`, `rewrite(eq, t)`, and
+  `decide(f)`, which adds `|- f` when Z3 proves `f` valid and marks the theorem (and every theorem
+  derived from it) as relying on that oracle (`usesOracle()`, printed as `[by Z3]`). A rule applied
+  to theorems of the wrong shape stops with `LogicError: ...`. `t.isProofOf(f)` is true for a closed
+  theorem whose conclusion is exactly `f`.
+
+```csec
+val p = prop("p");
+val q = prop("q");
+val h = assume(p & q);
+val swap = impIntro(p & q, andIntro(andElim2(h), andElim1(h)));
+swap.toString();                          // "|- p & q -> q & p"
+isValid(forAll(intVar("x"), intVar("x") * intVar("x") >= intVal(0)));   // true
+```
+
+The kernel is independent of `csec++ --verify` (§12): contracts are proved by the verifier, while
+`std.logic` reasons about formulas a program builds. Like other struct-based modules, it is
+native-only (§5).
+
 ## 5. Self-hosted compiler support
 
 The self-hosted compiler (`selfhost/`, whose emitter lives in `src/native_runtime/*.inc`) implements:
@@ -655,8 +695,8 @@ Narrower than the native compiler:
   literals are native-only.
 - The value aggregates of §4 (`Complex`, `Rational`, `Quaternion`) and therefore
   `std.math.complex` are native-only, because the self-host has no aggregate value
-  types. For the same reason `std.math.algebra` (§11), whose elements are structs, is
-  native-only.
+  types. For the same reason `std.math.algebra` (§11) and `std.logic` (§13), whose values
+  are structs, are native-only.
 - The self-host does not type-check: the share-nothing and borrow rules of §2–§3 are
   enforced by the native compiler only.
 - Set operators (`|`, `&`, `-`, `^`, comparisons, `in`), `for` over a set, and the set-algebra

@@ -500,6 +500,7 @@ The shipped modules live in `lib/std`:
 | `std.math.natural` | `natDiv`, `natMod`, `natPow`, `natGcd`, `natLcm`, `natSqrt`, `isPrime`, `factorial`, `binomial`, `fibonacci` |
 | `std.math.real` | `pi()`, `euler()`, `approxEqual`, `hypot`, `cbrt`, `nthRoot`, `logBase`, ... |
 | `std.math.complex` | `imaginaryUnit()`, `complex`, `conj`, `cabs`, `carg`, `cexp`, `clog`, `csqrt`, `cpowInt`, `cpow`, `csin`, `ccos` |
+| `std.logic` | `prop`, `intVar`, `intVal`, `forAll`, `exists`; `isValid`, `counterexample`, `model`, `equivalent` (Z3); proof kernel `assume`, `impIntro`, `modusPonens`, `andIntro`, ..., `decide` (LANGUAGE_SPEC.md §13) |
 | `std.math.algebra` | `integersMod(n)` (Z/nZ), `primeField(p)` (GF(p), p must be prime), `F.x()` (GF(p)[x]), `galoisField(p, k)` (GF(p^k)); elements use `+ - * / % **`, unary `-`, `==` (LANGUAGE_SPEC.md §11) |
 | `std.symbolic` | `sym("x^2+1")`, `diff`, `integrate`, `expand`, `simplify`, `subst`, `solve`, `evalAt`, `symText`, `symLatex` |
 | `std.pipe` | `pipeNew`, `pipeWriteLine`, `pipeReadLine`, `pipeClose`, `pipeAtEnd`; `pipeOpenProcess(cmd)` with `processWriteLine`/`processReadLine`/`processFinish` |
@@ -571,6 +572,24 @@ def main(): Int {
     val K = galoisField(2, 8);              // GF(256)
     val g = K.generator();
     println((g ** 7 + g + 1).inverse().toString());
+    return 0;
+}
+```
+
+Formulas and proofs (`std.logic`):
+
+```tessera
+import std.logic
+
+def main(): Int {
+    val p = prop("p");
+    val q = prop("q");
+    println(counterexample(p.implies(q)));           // p = true, q = false
+    val x = intVar("x");
+    println("valid: " + isValid(forAll(x, x * x >= intVal(0))));  // valid: true (asks Z3)
+    val h = assume(p & q);
+    val swap = impIntro(p & q, andIntro(andElim2(h), andElim1(h)));
+    println(swap.toString());                         // |- p & q -> q & p
     return 0;
 }
 ```

@@ -1,0 +1,37 @@
+// Formulas, automatic decision with Z3, and proofs checked by the std.logic kernel.
+import std.logic
+
+def main(): Int {
+    if (!z3Available()) {
+        println("libz3 was not found (put it next to the program or set CSEC_Z3_LIBRARY)");
+        return 1;
+    }
+    val p = prop("p");
+    val q = prop("q");
+
+    // Decision: tautologies, counterexamples, equivalences.
+    println("contraposition valid: " + isValid(p.implies(q).iff((!q).implies(!p))));
+    println("p -> q fails when " + counterexample(p.implies(q)));
+    println("de Morgan: " + equivalent(!(p | q), !p & !q));
+
+    // Integer arithmetic with quantifiers.
+    val x = intVar("x");
+    val y = intVar("y");
+    println("every square is >= 0: " + isValid(forAll(x, x * x >= intVal(0))));
+    println("x + y > x fails when " + counterexample(x + y > x));
+    println("a negative square root of 49: " + model(x * x == 49 & x < intVal(0)));
+
+    // A proof built from the kernel's rules: (p -> q) -> !q -> !p.
+    val pq = assume(p.implies(q));
+    val notQ = assume(!q);
+    val notP = notIntro(p, notElim(modusPonens(pq, assume(p)), notQ));
+    val contrapositive = impIntro(p.implies(q), impIntro(!q, notP));
+    println(contrapositive.toString());
+    println("checked without the solver: " + !contrapositive.usesOracle());
+
+    // Combine a solver-proved lemma with kernel reasoning.
+    val lemma = decide(forAll(x, (x + 1) * (x - 1) == x * x - 1));
+    println(lemma.toString());
+    println(allElim(lemma, intVal(12)).toString());
+    return 0;
+}
