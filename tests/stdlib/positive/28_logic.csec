@@ -1,0 +1,49 @@
+import std.logic
+// Formulas, Z3-backed decision, and kernel proofs.
+def main(): Int {
+    if (!z3Available()) { return 0; }   // the solver is optional at run time
+
+    val p = prop("p");
+    val q = prop("q");
+    val r = prop("r");
+    if (!isValid((p & q).implies(p))) { return 1; }
+    if (isValid(p.implies(q)) or counterexample(p.implies(q)) != "p = true, q = false") { return 2; }
+    if (!equivalent(!(p & q), !p | !q) or !equivalent(p.implies(q), (!q).implies(!p))) { return 3; }
+    if (isSatisfiable(p & !p) or !isSatisfiable(p | q)) { return 4; }
+
+    val x = intVar("x");
+    val y = intVar("y");
+    if (!isValid(forAll(x, x * x >= intVal(0)))) { return 5; }
+    if (isValid(x + y > x)) { return 6; }
+    if (model(x * x == 49 & x < intVal(0)) != "x = -7") { return 7; }
+    if (!isValid(exists(x, x * 3 == 21))) { return 8; }
+    if (!(x + 1).sameAs(x + 1) or (x + 1).sameAs(x + 2)) { return 16; }
+
+    // p & q -> q & p by the kernel's rules alone.
+    val h = assume(p & q);
+    val swap = impIntro(p & q, andIntro(andElim2(h), andElim1(h)));
+    if (!swap.isProofOf((p & q).implies(q & p)) or swap.usesOracle()) { return 9; }
+
+    // Hypothetical syllogism: (p -> q) -> (q -> r) -> p -> r.
+    val pq = assume(p.implies(q));
+    val qr = assume(q.implies(r));
+    val chain = impIntro(p.implies(q), impIntro(q.implies(r), impIntro(p, modusPonens(qr, modusPonens(pq, assume(p))))));
+    if (!chain.isProofOf(p.implies(q).implies(q.implies(r).implies(p.implies(r))))) { return 10; }
+
+    // Excluded middle, classically.
+    val notLem = assume(!(p | !p));
+    val notP = notIntro(p, notElim(orIntro1(assume(p), !p), notLem));
+    val lem = byContradiction(p | !p, notElim(orIntro2(p, notP), notLem));
+    if (!lem.isProofOf(p | !p)) { return 11; }
+
+    // Quantifiers and equality.
+    val square = decide(forAll(x, (x + 1) * (x + 1) == x * x + x * 2 + 1));
+    if (!square.usesOracle() or !square.isClosed()) { return 12; }
+    val seven = allElim(square, intVal(7));
+    if (seven.toString() != "|- (7 + 1) * (7 + 1) == 7 * 7 + 7 * 2 + 1   [by Z3]") { return 13; }
+    val witness = existsIntro(exists(y, y == 4), intVal(4), refl(intVal(4)));
+    if (!witness.isProofOf(exists(y, y == 4)) or witness.usesOracle()) { return 14; }
+    val general = allIntro(x, refl(x));
+    if (general.toString() != "|- forall x. x == x") { return 15; }
+    return 0;
+}

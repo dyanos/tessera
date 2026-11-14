@@ -7,7 +7,17 @@ struct Money(cents: Long) {
     def value(): Long = cents
 }
 
+// `!` overloaded to return a struct (not a Boolean), as formula libraries do.
+struct Flags(bits: Long) {
+    def operator !(): Flags = new Flags(15 - bits)
+    def operator &(o: Flags): Flags = new Flags(bits & o.bits)
+    def value(): Long = bits
+}
+
 def main(): Int {
+    val f = !new Flags(5);
+    val g = !(f & f);
+    if (f.value() != 10 or g.value() != 5) { return 3; }
     val a = new Money(250);
     val b = -a;
     val c = -(a - new Money(50));

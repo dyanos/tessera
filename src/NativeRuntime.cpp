@@ -64,3 +64,4 @@
 #include "native_runtime/http_runtime.inc"
 #include "native_runtime/dict_runtime.inc"
 #include "native_runtime/algebra_runtime.inc"
+#include "native_runtime/logic_runtime.inc"

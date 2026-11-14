@@ -25,13 +25,24 @@ Symbol* findUnaryOperator(const std::string& op, ASTNode* operand) {
 	if (!classSymbol) {
 		return nullptr;
 	}
-	std::vector<std::unique_ptr<Type>> noArguments;
-	auto* method = cg.symbolTable.lookupMethod(*classSymbol, "operator" + op, noArguments);
-	auto* funcType = method ? dynamic_cast<FunctionType*>(method->type.get()) : nullptr;
-	if (!funcType || funcType->parameterTypes.size() != 1) {
-		return nullptr;  // only a binary overload of the same operator
+	// A method is registered without its receiver while the program is type-checked and with it
+	// (as an llvm::Function) once it is generated; the unary overload is the one without operands.
+	const std::string name = "operator" + op;
+	for (const ClassSymbol* cls = classSymbol; cls; cls = cls->superClassSymbol) {
+		for (const auto& entry : cls->methods) {
+			Symbol* candidate = entry.second.get();
+			if (!candidate || candidate->name != name) continue;
+			auto* funcType = dynamic_cast<FunctionType*>(candidate->type.get());
+			if (!funcType) continue;
+			if (auto* function = llvm::dyn_cast_or_null<llvm::Function>(candidate->value)) {
+				if (function->arg_size() == 1) return candidate;
+			}
+			else if (funcType->parameterTypes.empty()) {
+				return candidate;
+			}
+		}
 	}
-	return method;
+	return nullptr;
 }
 }
 

@@ -1,0 +1,208 @@
+// std.logic -- formulas, decision with the Z3 solver, and an LCF-style proof kernel.
+//
+//     import std.logic
+//
+//     val p = prop("p");
+//     val q = prop("q");
+//     val f = (p & q).implies(p);              // operators: & | ! and the methods implies / iff
+//     isValid(f);                              // true
+//     counterexample(p.implies(q));            // "p = true, q = false"
+//
+//     val x = intVar("x");
+//     val y = intVar("y");
+//     isValid(forAll(x, x * x >= intVal(0))); // true: integer arithmetic is mathematical
+//     counterexample(x + y > x);               // "x = 0, y = 0" (some falsifying assignment)
+//
+//     // Proofs: theorems are made only by the kernel's rules.
+//     val h = assume(p & q);                   // p & q |- p & q
+//     val t = impIntro(p & q, andIntro(andElim2(h), andElim1(h)));
+//     t.toString();                            // "|- p & q -> q & p"
+//     t.isProofOf((p & q).implies(q & p));     // true: closed, and proves exactly that formula
+//
+// Formulas are values: equal formulas have equal handles (`f.sameAs(g)`). `isValid` and friends,
+// and the `decide` rule, need the Z3 library (libz3) at run time -- next to the program, on the
+// library path, or named by the CSEC_Z3_LIBRARY environment variable; `z3Available()` tells.
+// Theorems proved with `decide` record that they rely on Z3 (`usesOracle()`). Misuse (a rule applied
+// to a theorem of the wrong shape, ...) prints "LogicError: ..." and exits with status 1.
+
+external def csec_logic_true(): Long;
+external def csec_logic_false(): Long;
+external def csec_logic_prop(name: String): Long;
+external def csec_logic_not(a: Long): Long;
+external def csec_logic_binary(connective: Int, a: Long, b: Long): Long;
+external def csec_logic_quantifier(universal: Int, variable: Long, body: Long): Long;
+external def csec_logic_int_var(name: String): Long;
+external def csec_logic_num(value: Long): Long;
+external def csec_logic_arith(op: Int, a: Long, b: Long): Long;
+external def csec_logic_neg(a: Long): Long;
+external def csec_logic_cmp(op: Int, a: Long, b: Long): Long;
+external def csec_logic_to_string(h: Long): String;
+external def csec_logic_substitute(f: Long, variable: Long, t: Long): Long;
+external def csec_logic_z3_available(): Int;
+external def csec_logic_is_valid(f: Long): Int;
+external def csec_logic_is_satisfiable(f: Long): Int;
+external def csec_logic_counterexample(f: Long): String;
+external def csec_logic_model(f: Long): String;
+external def csec_thm_assume(f: Long): Long;
+external def csec_thm_true_intro(): Long;
+external def csec_thm_imp_intro(f: Long, t: Long): Long;
+external def csec_thm_imp_elim(tImp: Long, tA: Long): Long;
+external def csec_thm_and_intro(t1: Long, t2: Long): Long;
+external def csec_thm_and_elim(t: Long, which: Int): Long;
+external def csec_thm_or_intro(t: Long, other: Long, which: Int): Long;
+external def csec_thm_or_elim(tOr: Long, tA: Long, tB: Long): Long;
+external def csec_thm_not_intro(f: Long, t: Long): Long;
+external def csec_thm_not_elim(tA: Long, tNotA: Long): Long;
+external def csec_thm_ex_falso(t: Long, f: Long): Long;
+external def csec_thm_by_contradiction(f: Long, t: Long): Long;
+external def csec_thm_iff_intro(tAB: Long, tBA: Long): Long;
+external def csec_thm_iff_elim(t: Long, which: Int): Long;
+external def csec_thm_all_intro(variable: Long, t: Long): Long;
+external def csec_thm_all_elim(t: Long, witness: Long): Long;
+external def csec_thm_exists_intro(f: Long, witness: Long, t: Long): Long;
+external def csec_thm_refl(t: Long): Long;
+external def csec_thm_rewrite(tEq: Long, t: Long): Long;
+external def csec_thm_decide(f: Long): Long;
+external def csec_thm_conclusion(t: Long): Long;
+external def csec_thm_hypothesis_count(t: Long): Long;
+external def csec_thm_hypothesis(t: Long, i: Long): Long;
+external def csec_thm_uses_oracle(t: Long): Int;
+external def csec_thm_to_string(t: Long): String;
+
+// ---------------------------------------------------------------------------------------------
+// Formulas and terms
+// ---------------------------------------------------------------------------------------------
+
+// A formula: a proposition, a comparison of integer terms, a connective, or a quantifier.
+struct Formula(h: Long) {
+    def handle(): Long = h
+    def toString(): String = csec_logic_to_string(h)
+    // Syntactic equality (formulas are hash-consed).
+    def sameAs(o: Formula): Boolean = h == o.h
+    def implies(o: Formula): Formula = new Formula(csec_logic_binary(2, h, o.h))
+    def iff(o: Formula): Formula = new Formula(csec_logic_binary(3, h, o.h))
+    // The formula with the integer variable x replaced by t (capture-avoiding).
+    def substitute(x: Term, t: Term): Formula = new Formula(csec_logic_substitute(h, x.h, t.h))
+    // Decided by Z3 (a LogicError when Z3 is unavailable; "unknown" counts as not proved).
+    def isValid(): Boolean = csec_logic_is_valid(h) == 1
+    def isSatisfiable(): Boolean = csec_logic_is_satisfiable(h) == 1
+    def counterexample(): String = csec_logic_counterexample(h)
+    def model(): String = csec_logic_model(h)
+
+    def operator &(o: Formula): Formula = new Formula(csec_logic_binary(0, h, o.h))
+    def operator |(o: Formula): Formula = new Formula(csec_logic_binary(1, h, o.h))
+    def operator !(): Formula = new Formula(csec_logic_not(h))
+}
+
+// An integer term (mathematical integers: no overflow).
+struct Term(h: Long) {
+    def handle(): Long = h
+    def toString(): String = csec_logic_to_string(h)
+    def sameAs(o: Term): Boolean = h == o.h
+    def eq(o: Term): Formula = new Formula(csec_logic_cmp(0, h, o.h))
+    def ne(o: Term): Formula = new Formula(csec_logic_cmp(1, h, o.h))
+
+    def operator +(o: Term): Term = new Term(csec_logic_arith(0, h, o.h))
+    def operator -(o: Term): Term = new Term(csec_logic_arith(1, h, o.h))
+    def operator *(o: Term): Term = new Term(csec_logic_arith(2, h, o.h))
+    def operator +(k: Long): Term = new Term(csec_logic_arith(0, h, csec_logic_num(k)))
+    def operator -(k: Long): Term = new Term(csec_logic_arith(1, h, csec_logic_num(k)))
+    def operator *(k: Long): Term = new Term(csec_logic_arith(2, h, csec_logic_num(k)))
+    def operator -(): Term = new Term(csec_logic_neg(h))
+    // Comparisons build formulas.
+    def operator ==(o: Term): Formula = new Formula(csec_logic_cmp(0, h, o.h))
+    def operator !=(o: Term): Formula = new Formula(csec_logic_cmp(1, h, o.h))
+    def operator <(o: Term): Formula = new Formula(csec_logic_cmp(2, h, o.h))
+    def operator <=(o: Term): Formula = new Formula(csec_logic_cmp(3, h, o.h))
+    def operator >(o: Term): Formula = new Formula(csec_logic_cmp(4, h, o.h))
+    def operator >=(o: Term): Formula = new Formula(csec_logic_cmp(5, h, o.h))
+    def operator ==(k: Long): Formula = new Formula(csec_logic_cmp(0, h, csec_logic_num(k)))
+    def operator !=(k: Long): Formula = new Formula(csec_logic_cmp(1, h, csec_logic_num(k)))
+    def operator <(k: Long): Formula = new Formula(csec_logic_cmp(2, h, csec_logic_num(k)))
+    def operator <=(k: Long): Formula = new Formula(csec_logic_cmp(3, h, csec_logic_num(k)))
+    def operator >(k: Long): Formula = new Formula(csec_logic_cmp(4, h, csec_logic_num(k)))
+    def operator >=(k: Long): Formula = new Formula(csec_logic_cmp(5, h, csec_logic_num(k)))
+}
+
+def prop(name: String): Formula = new Formula(csec_logic_prop(name))
+def trueFormula(): Formula = new Formula(csec_logic_true())
+def falseFormula(): Formula = new Formula(csec_logic_false())
+def intVar(name: String): Term = new Term(csec_logic_int_var(name))
+def intVal(value: Long): Term = new Term(csec_logic_num(value))
+def forAll(x: Term, body: Formula): Formula = new Formula(csec_logic_quantifier(1, x.h, body.h))
+def exists(x: Term, body: Formula): Formula = new Formula(csec_logic_quantifier(0, x.h, body.h))
+
+// ---------------------------------------------------------------------------------------------
+// Decision (Z3)
+// ---------------------------------------------------------------------------------------------
+
+def z3Available(): Boolean = csec_logic_z3_available() != 0
+def isValid(f: Formula): Boolean = csec_logic_is_valid(f.h) == 1
+def isSatisfiable(f: Formula): Boolean = csec_logic_is_satisfiable(f.h) == 1
+// An assignment making f false ("" when f is valid).
+def counterexample(f: Formula): String = csec_logic_counterexample(f.h)
+// An assignment making f true ("" when f is unsatisfiable).
+def model(f: Formula): String = csec_logic_model(f.h)
+def equivalent(f: Formula, g: Formula): Boolean = csec_logic_is_valid(csec_logic_binary(3, f.h, g.h)) == 1
+
+// ---------------------------------------------------------------------------------------------
+// Theorems and the kernel's rules
+// ---------------------------------------------------------------------------------------------
+
+// `hypotheses |- conclusion`, made only by the rules below.
+struct Thm(h: Long) {
+    def conclusion(): Formula = new Formula(csec_thm_conclusion(h))
+    def hypothesisCount(): Long = csec_thm_hypothesis_count(h)
+    def hypothesis(i: Long): Formula = new Formula(csec_thm_hypothesis(h, i))
+    // No open hypotheses.
+    def isClosed(): Boolean = csec_thm_hypothesis_count(h) == 0
+    // A closed theorem whose conclusion is exactly f.
+    def isProofOf(f: Formula): Boolean = csec_thm_hypothesis_count(h) == 0 and csec_thm_conclusion(h) == f.h
+    // True when Z3 (the `decide` rule) was used anywhere in the proof.
+    def usesOracle(): Boolean = csec_thm_uses_oracle(h) != 0
+    def toString(): String = csec_thm_to_string(h)
+}
+
+// f |- f
+def assume(f: Formula): Thm = new Thm(csec_thm_assume(f.h))
+// |- true
+def trueIntro(): Thm = new Thm(csec_thm_true_intro())
+// From G |- B, derive G \ {A} |- A -> B (discharges the hypothesis A).
+def impIntro(a: Formula, t: Thm): Thm = new Thm(csec_thm_imp_intro(a.h, t.h))
+// Modus ponens: from A -> B and A, derive B.
+def impElim(tImp: Thm, tA: Thm): Thm = new Thm(csec_thm_imp_elim(tImp.h, tA.h))
+def modusPonens(tImp: Thm, tA: Thm): Thm = new Thm(csec_thm_imp_elim(tImp.h, tA.h))
+// From A and B, derive A & B.
+def andIntro(t1: Thm, t2: Thm): Thm = new Thm(csec_thm_and_intro(t1.h, t2.h))
+// From A & B, derive A (andElim1) or B (andElim2).
+def andElim1(t: Thm): Thm = new Thm(csec_thm_and_elim(t.h, 0))
+def andElim2(t: Thm): Thm = new Thm(csec_thm_and_elim(t.h, 1))
+// From A, derive A | b (orIntro1); from B, derive a | B (orIntro2).
+def orIntro1(t: Thm, b: Formula): Thm = new Thm(csec_thm_or_intro(t.h, b.h, 0))
+def orIntro2(a: Formula, t: Thm): Thm = new Thm(csec_thm_or_intro(t.h, a.h, 1))
+// From A | B, (A |- C) and (B |- C), derive C.
+def orElim(tOr: Thm, fromA: Thm, fromB: Thm): Thm = new Thm(csec_thm_or_elim(tOr.h, fromA.h, fromB.h))
+// From G |- false, derive G \ {A} |- !A.
+def notIntro(a: Formula, t: Thm): Thm = new Thm(csec_thm_not_intro(a.h, t.h))
+// From A and !A, derive false.
+def notElim(tA: Thm, tNotA: Thm): Thm = new Thm(csec_thm_not_elim(tA.h, tNotA.h))
+// From false, derive anything.
+def exFalso(t: Thm, f: Formula): Thm = new Thm(csec_thm_ex_falso(t.h, f.h))
+// Classical: from G |- false, derive G \ {!A} |- A.
+def byContradiction(a: Formula, t: Thm): Thm = new Thm(csec_thm_by_contradiction(a.h, t.h))
+// From A -> B and B -> A, derive A <-> B; from A <-> B, derive A -> B (iffElim1) or B -> A (iffElim2).
+def iffIntro(tAB: Thm, tBA: Thm): Thm = new Thm(csec_thm_iff_intro(tAB.h, tBA.h))
+def iffElim1(t: Thm): Thm = new Thm(csec_thm_iff_elim(t.h, 0))
+def iffElim2(t: Thm): Thm = new Thm(csec_thm_iff_elim(t.h, 1))
+// From P (x not free in the hypotheses), derive forall x. P.
+def allIntro(x: Term, t: Thm): Thm = new Thm(csec_thm_all_intro(x.h, t.h))
+// From forall x. P, derive P[x := witness].
+def allElim(t: Thm, witness: Term): Thm = new Thm(csec_thm_all_elim(t.h, witness.h))
+// From P[x := witness], derive exists x. P (given as f).
+def existsIntro(f: Formula, witness: Term, t: Thm): Thm = new Thm(csec_thm_exists_intro(f.h, witness.h, t.h))
+// |- t == t
+def refl(t: Term): Thm = new Thm(csec_thm_refl(t.h))
+// From a == b and P, derive P with a replaced by b.
+def rewrite(tEq: Thm, t: Thm): Thm = new Thm(csec_thm_rewrite(tEq.h, t.h))
+// |- f when Z3 proves f valid (a LogicError with a counterexample otherwise); marks the oracle.
+def decide(f: Formula): Thm = new Thm(csec_thm_decide(f.h))

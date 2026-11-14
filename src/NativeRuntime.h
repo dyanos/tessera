@@ -647,6 +647,51 @@ CSEC_NATIVE_API long long csec_gf_element_order(long long a, long long p, long l
 CSEC_NATIVE_API long long csec_gf_primitive_element(long long p, long long m);
 CSEC_NATIVE_API char* csec_gf_to_string(long long a, long long p);
 
+// std.logic (logic_runtime.inc)
+CSEC_NATIVE_API long long csec_logic_true(void);
+CSEC_NATIVE_API long long csec_logic_false(void);
+CSEC_NATIVE_API long long csec_logic_prop(const char* name);
+CSEC_NATIVE_API long long csec_logic_not(long long a);
+CSEC_NATIVE_API long long csec_logic_binary(int connective, long long a, long long b);
+CSEC_NATIVE_API long long csec_logic_quantifier(int universal, long long variable, long long body);
+CSEC_NATIVE_API long long csec_logic_int_var(const char* name);
+CSEC_NATIVE_API long long csec_logic_num(long long value);
+CSEC_NATIVE_API long long csec_logic_arith(int op, long long a, long long b);
+CSEC_NATIVE_API long long csec_logic_neg(long long a);
+CSEC_NATIVE_API long long csec_logic_cmp(int op, long long a, long long b);
+CSEC_NATIVE_API char* csec_logic_to_string(long long h);
+CSEC_NATIVE_API long long csec_logic_substitute(long long f, long long variable, long long t);
+CSEC_NATIVE_API int csec_logic_z3_available(void);
+CSEC_NATIVE_API int csec_logic_is_valid(long long f);
+CSEC_NATIVE_API int csec_logic_is_satisfiable(long long f);
+CSEC_NATIVE_API char* csec_logic_counterexample(long long f);
+CSEC_NATIVE_API char* csec_logic_model(long long f);
+CSEC_NATIVE_API long long csec_thm_assume(long long f);
+CSEC_NATIVE_API long long csec_thm_true_intro(void);
+CSEC_NATIVE_API long long csec_thm_imp_intro(long long f, long long t);
+CSEC_NATIVE_API long long csec_thm_imp_elim(long long tImp, long long tA);
+CSEC_NATIVE_API long long csec_thm_and_intro(long long t1, long long t2);
+CSEC_NATIVE_API long long csec_thm_and_elim(long long t, int which);
+CSEC_NATIVE_API long long csec_thm_or_intro(long long t, long long other, int which);
+CSEC_NATIVE_API long long csec_thm_or_elim(long long tOr, long long tA, long long tB);
+CSEC_NATIVE_API long long csec_thm_not_intro(long long f, long long t);
+CSEC_NATIVE_API long long csec_thm_not_elim(long long tA, long long tNotA);
+CSEC_NATIVE_API long long csec_thm_ex_falso(long long t, long long f);
+CSEC_NATIVE_API long long csec_thm_by_contradiction(long long f, long long t);
+CSEC_NATIVE_API long long csec_thm_iff_intro(long long tAB, long long tBA);
+CSEC_NATIVE_API long long csec_thm_iff_elim(long long t, int which);
+CSEC_NATIVE_API long long csec_thm_all_intro(long long variable, long long t);
+CSEC_NATIVE_API long long csec_thm_all_elim(long long t, long long witness);
+CSEC_NATIVE_API long long csec_thm_exists_intro(long long f, long long witness, long long t);
+CSEC_NATIVE_API long long csec_thm_refl(long long t);
+CSEC_NATIVE_API long long csec_thm_rewrite(long long tEq, long long t);
+CSEC_NATIVE_API long long csec_thm_decide(long long f);
+CSEC_NATIVE_API long long csec_thm_conclusion(long long t);
+CSEC_NATIVE_API long long csec_thm_hypothesis_count(long long t);
+CSEC_NATIVE_API long long csec_thm_hypothesis(long long t, long long i);
+CSEC_NATIVE_API int csec_thm_uses_oracle(long long t);
+CSEC_NATIVE_API char* csec_thm_to_string(long long t);
+
 #ifdef __cplusplus
 }
 #endif
