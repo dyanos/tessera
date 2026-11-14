@@ -1,0 +1,1 @@
+tests/positive/04_collections/053_parallel_api_variants.csec 0 7

@@ -65,6 +65,10 @@ pub const INFIX_WORDS: &[&str] = &[
     "inner", "outer", "tensor", "union", "intersect", "diff", "implies", "step", "is",
 ];
 pub const DSL_ENTRY: &[&str] = &["molecule", "cfd", "ode", "protein"];
+/// Contract clauses (`docs/grammar.md`, LANGUAGE_SPEC.md §12): keywords only between a signature or
+/// loop header and its body, e.g. `def f(x: Int): Int requires x > 0 ensures result > x = x + 1`.
+/// `result` is the return value inside an `ensures` clause.
+pub const CONTRACT_WORDS: &[&str] = &["requires", "ensures", "invariant", "decreases"];
 
 const PUNCT: &[&str] = &["(", ")", "{", "}", "[", "]", ",", ";", ".", ":"];
 
@@ -120,6 +124,8 @@ pub fn highlight(src: &str, toks: &[Tok]) -> Vec<(Range<usize>, Class)> {
     let mut paren_depth = 0usize;
     let mut param_list_depth: Option<usize> = None;
     let mut def_armed = false;
+    // Inside a contract clause (until the body's `{`, `=`, or a `;`): `result` is a keyword.
+    let mut in_contract = false;
 
     let mut si = 0usize;
     for (i, t) in toks.iter().enumerate() {
@@ -190,6 +196,14 @@ pub fn highlight(src: &str, toks: &[Tok]) -> Vec<(Range<usize>, Class)> {
                     || (DSL_ENTRY.contains(&prev_text) && prev.is_some_and(|p| p.kind == TokKind::Keyword))
                 {
                     Class::TypeDecl
+                } else if CONTRACT_WORDS.contains(&word)
+                    && prev.is_some_and(|p| ends_operand(src, p))
+                    && next.is_some_and(|n| starts_operand(src, n))
+                {
+                    in_contract = true;
+                    Class::Keyword
+                } else if in_contract && word == "result" {
+                    Class::Keyword
                 } else if in_dsl && DSL_WORDS.contains(&word) {
                     Class::Keyword
                 } else if POLICY_WORDS.contains(&word)
@@ -225,6 +239,7 @@ pub fn highlight(src: &str, toks: &[Tok]) -> Vec<(Range<usize>, Class)> {
             TokKind::Op => {
                 match word {
                     "{" => {
+                        in_contract = false;
                         brace_depth += 1;
                         if dsl_armed {
                             dsl_stack.push(brace_depth);
@@ -253,7 +268,11 @@ pub fn highlight(src: &str, toks: &[Tok]) -> Vec<(Range<usize>, Class)> {
                         }
                         paren_depth = paren_depth.saturating_sub(1);
                     }
-                    ";" => def_armed = false,
+                    ";" => {
+                        def_armed = false;
+                        in_contract = false;
+                    }
+                    "=" => in_contract = false,
                     "$" | "$$" => in_latex = !in_latex,
                     _ => {}
                 }
@@ -312,6 +331,19 @@ mod tests {
         assert_eq!(class_of("molecule Water { atom O at (0, 0, 0) }", "atom"), Some(Class::Keyword));
         assert_eq!(class_of("molecule Water { atom O at (0, 0, 0) }", "Water"), Some(Class::TypeDecl));
         assert_eq!(class_of("val atom = 1;", "atom"), None);
+    }
+
+    #[test]
+    fn contract_clauses() {
+        let src = "def f(x: Int): Int requires x > 0 ensures result > x = x + 1;";
+        assert_eq!(class_of(src, "requires"), Some(Class::Keyword));
+        assert_eq!(class_of(src, "ensures"), Some(Class::Keyword));
+        assert_eq!(class_of(src, "result"), Some(Class::Keyword));
+        let lp = "while (i < n) invariant 0 <= i decreases n - i { i += 1; }";
+        assert_eq!(class_of(lp, "invariant"), Some(Class::Keyword));
+        assert_eq!(class_of(lp, "decreases"), Some(Class::Keyword));
+        assert_eq!(class_of("val requires = 1;", "requires"), None);
+        assert_eq!(class_of("val result = f(1);", "result"), None);
     }
 
     #[test]

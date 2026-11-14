@@ -156,9 +156,14 @@ void appendQuoted(std::string& out, const char* text) {
 }
 
 void appendDouble(std::string& out, double value) {
+    // The shortest text that reads back as the same double (what std::to_chars produces; written
+    // with snprintf because Apple's libc++ only has floating-point to_chars from macOS 13.3).
     char buffer[64];
-    auto result = std::to_chars(buffer, buffer + sizeof(buffer), value);
-    std::string text(buffer, result.ptr);
+    for (int precision = 1; precision <= 17; ++precision) {
+        std::snprintf(buffer, sizeof(buffer), "%.*g", precision, value);
+        if (std::strtod(buffer, nullptr) == value) break;
+    }
+    std::string text(buffer);
     // Python prints whole floats with a trailing ".0".
     if (text.find_first_of(".eEni") == std::string::npos) text += ".0";
     out += text;

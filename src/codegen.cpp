@@ -287,6 +287,9 @@ llvm::Type* CodeGenerator::getLLVMType(const Type* type) {
             return TensorRuntime::getTensorPointerType(*this);
         }
         auto* classSymbol = symbolTable.lookupClass(type->getName());
+        if (classSymbol && !classSymbol->classType && materializeTemplateClass(type->getName())) {
+            classSymbol = symbolTable.lookupClass(type->getName());
+        }
 
 		// Symbol??ClassSymbol濡?罹먯뒪?낇븯??classType???묎렐
         if (classSymbol) {
@@ -331,9 +334,13 @@ llvm::Type* CodeGenerator::getLLVMType(const Type* type) {
             for (auto& ta : genericType->typeArguments) {
                 mangledName += "$" + (ta ? ta->getName() : "Unknown");
             }
-            // Look up the instantiated class
+            // Look up the instantiated class (generating one registered during type checking).
             auto* classSymbol = symbolTable.lookupClass(mangledName);
-            if (classSymbol) {
+            if (classSymbol && !classSymbol->classType) {
+                materializeTemplateClass(mangledName);
+                classSymbol = symbolTable.lookupClass(mangledName);
+            }
+            if (classSymbol && classSymbol->classType) {
                 return classSymbol->classType;
             }
             std::cerr << "Error: Template class '" << mangledName << "' not instantiated yet" << std::endl;

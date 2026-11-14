@@ -1,0 +1,33 @@
+// Template classes and structs whose methods use their own instance type (operator overloading),
+// with a non-type parameter used as a value and in nested `new` expressions.
+template<Int P>
+struct Residue(v: Long) {
+    def value(): Long = v % P
+    def operator +(o: Residue<P>): Residue<P> = new Residue<P>((v + o.v) % P)
+    def operator *(o: Residue<P>): Residue<P> = new Residue<P>((v * o.v) % P)
+    def operator -(): Residue<P> = new Residue<P>((P - v % P) % P)
+    def operator ==(o: Residue<P>): Boolean = v % P == o.v % P
+    def square(): Residue<P> {
+        val me: Residue<P> = new Residue<P>(v);
+        return me * me;
+    }
+}
+
+template<typename T>
+class Pair(first: T, second: T) {
+    def swap(): Pair<T> = new Pair<T>(second, first)
+    def left(): T = first
+}
+
+def main(): Int {
+    val a = new Residue<7>(3);
+    val b = new Residue<7>(5);
+    if ((a + b * b).value() != 0) { return 1; }
+    if ((-a).value() != 4 or a.square().value() != 2) { return 2; }
+    if (!(a + a == new Residue<7>(6))) { return 3; }
+    val c = new Residue<11>(10);
+    if ((c + c).value() != 9) { return 4; }
+    val p = new Pair<Int>(1, 2).swap();
+    if (p.left() != 2) { return 5; }
+    return 0;
+}

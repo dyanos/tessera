@@ -71,3 +71,5 @@
 #*.rtf   diff=astextplain
 #*.RTF   diff=astextplain
 *.parquet binary
+# Shell scripts must keep LF line endings so they run on Linux and macOS.
+*.sh text eol=lf

@@ -169,11 +169,55 @@ Microthreads (`std.microthread`, `go`/`async`) work on Windows (fibers), Linux,
 and macOS. On x86-64 and arm64 (including Apple Silicon) they use a small
 assembly context switch rather than the deprecated `ucontext` API.
 
+### Linux and macOS with conda-forge LLVM
+
+This is the setup the continuous-integration jobs (`.github/workflows/ci.yml`, Ubuntu x86-64 and
+macOS arm64) use, and it needs no root access:
+
+```sh
+conda create -n tessera -c conda-forge "llvmdev=18.*" zlib zstd libxml2 cmake ninja
+conda activate tessera
+sh scripts/fetch_z3.sh                  # optional: Z3 for `csec++ --verify` and std.logic
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+      -DLLVM_DIR="$CONDA_PREFIX/lib/cmake/llvm" -DCMAKE_PREFIX_PATH="$CONDA_PREFIX"
+cmake --build build
+sh tests/run_suite.sh Debug/csec++      # fixtures, --verify diagnostics, self-host
+```
+
+Packaged LLVMs on Linux and macOS (conda-forge, Homebrew, apt) are built to be used through their
+shared `libLLVM`; CMake detects that (`LLVM_LINK_LLVM_DYLIB`) and links it instead of the static
+component libraries (`-DCSEC_LLVM_SHARED=ON/OFF` overrides). It also compiles csec++ with `NDEBUG`
+when LLVM was built without assertions, because some LLVM classes change layout with `NDEBUG`.
+
+### Z3 (`csec++ --verify`, `std.logic`)
+
+Z3 is optional. By default csec++ links the shared library (`libz3.dll`, `libz3.so`, `libz3.dylib`):
+`scripts/fetch_z3.ps1` (Windows, SHA-256 checked) or `scripts/fetch_z3.sh` (Linux, macOS) downloads
+the official release into `deps/z3`, and CMake copies `libz3.dll` next to `csec++.exe`. To link Z3
+statically instead, so that neither csec++ nor the runtime needs the shared library, build the static
+library from source and select it:
+
+```sh
+sh scripts/build_z3_static.sh                       # Linux, macOS -> deps/z3-static
+powershell -File scripts\build_z3_static.ps1 -Config Debug   # Windows, from a VS developer prompt
+cmake -S . -B build -G Ninja -DCSEC_Z3_LINK=STATIC ...
+```
+
+On Windows the static library must use the same C runtime as csec++: `-Config Debug` for a Debug
+build, `-Config Release` (add `-DllCrt` with `-DCSEC_RELEASE_DLL_CRT=ON`) for a Release build.
+
 The build produces:
 
 - `csec++`: compiler executable.
 - `csec_native_runtime`: shared native runtime library copied next to the
   compiler executable.
+
+### Editor support
+
+- VS Code: `editors/vscode-tessera` (TextMate grammar).
+- OpenIDEA: `editors/openidea-tessera` (plugin plus the `tessera-lsp` language server: hover,
+  completion, snippets, go-to-definition, outline, diagnostics).
+- Vim / Neovim: `editors/vim-tessera` (syntax, indentation, filetype settings).
 
 ## Compiler Usage
 

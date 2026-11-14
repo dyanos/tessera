@@ -507,8 +507,19 @@ val h = (g ** 7 + g + 1).inverse();
   polynomial of degree k (ordered by base-p digits). An element is packed in one `Long` (its
   coefficients as base-p digits), so p^(k+1) must stay below 2^62. Elements: `inverse`, `order`,
   `poly`, `packed`, `toString` (in the generator `a`, e.g. `"a^7 + a + 1"`).
-- The structures are values: there is no type-level parameter, so `GF(7)` and `GF(11)` elements
-  share the type `Fp` and are told apart at run time.
+- The structures above are values: `GF(7)` and `GF(11)` elements share the type `Fp` and are told
+  apart at run time.
+- **Type-level moduli.** `Mod<N>` (Z/NZ) and `GF<P>` (the prime field) are template structs whose
+  modulus is part of the type: `new GF<7>(3) * new GF<5>(2)` is a compile-time type error
+  (`no 'operator*' of GF<7> accepts an operand of type GF<5>`). They have the same operators as
+  `Zmod` / `Fp` (and `inverse`, `order`, `sqrt`, `toString`, ...). `GF<P>` checks that `P` is prime
+  on use (once per prime, then cached), so `GF<8>` stops with an AlgebraError. Moduli up to 2^63
+  are exact: `new GF<9223372036854775783>(...)`.
+
+Template classes and structs (`template<Int N> struct S(...) { def operator +(o: S<N>): S<N> ... }`)
+may refer to their own instance type; every instance (`S<7>`, `S<11>`) is a distinct class, and an
+operator whose overloads accept none of the right operand's types is a type error. Instances used
+while the program is type-checked are registered then and generated with the rest of the code.
 
 ## 12. Contracts and static verification (`csec++ --verify`)
 
@@ -622,6 +633,12 @@ Linux) downloads the official release into `deps/z3` (the Windows script checks 
 then finds it (`CSEC_WITH_Z3=AUTO`, or set `Z3_ROOT`; a system install is found too) and copies
 `libz3.dll` next to `csec++.exe`. Without Z3, `csec++` builds normally and `--verify` reports that it
 is unavailable.
+
+`-DCSEC_Z3_LINK=STATIC` links a static Z3 into csec++ and into the System.Native runtime instead,
+so neither needs the shared library at run time (the default, `SHARED`, links `libz3`). The official
+releases ship no static library; `scripts/build_z3_static.ps1` / `scripts/build_z3_static.sh` build
+one from the same Z3 version into `deps/z3-static` (on Windows matching csec++'s C runtime:
+`-Config Debug` or `-Config Release [-DllCrt]`).
 
 The self-hosted compiler accepts all of this syntax: it drops the specification clauses and
 compiles `assert` as a run-time check (§5).

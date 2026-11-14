@@ -1,0 +1,9 @@
+// Template instances with different arguments are different types.
+template<Int P>
+struct Residue(v: Long) {
+    def operator +(o: Residue<P>): Residue<P> = new Residue<P>((v + o.v) % P)
+}
+def main(): Int {
+    val a = new Residue<7>(3) + new Residue<11>(3);
+    return 0;
+}

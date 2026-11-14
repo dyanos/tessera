@@ -451,7 +451,19 @@ long long csec_alg_require_modulus(long long n) {
 }
 
 long long csec_alg_require_prime(long long p) {
-    if (!csec_algebra::isPrime(p)) {
+    // GF<P> checks its prime on every operation; remember the primes already proved.
+    static std::mutex cacheMutex;
+    static std::vector<long long> proved;
+    {
+        std::lock_guard<std::mutex> lock(cacheMutex);
+        for (long long known : proved) if (known == p) return p;
+    }
+    if (csec_algebra::isPrime(p)) {
+        std::lock_guard<std::mutex> lock(cacheMutex);
+        if (proved.size() < 64) proved.push_back(p);
+        return p;
+    }
+    {
         std::string hint;
         if (p > 1) {
             const auto factors = csec_algebra::primeFactors(p);

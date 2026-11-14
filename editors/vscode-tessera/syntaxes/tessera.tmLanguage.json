@@ -7,6 +7,7 @@
     { "include": "#strings" },
     { "include": "#numbers" },
     { "include": "#declarations" },
+    { "include": "#contracts" },
     { "include": "#keywords" },
     { "include": "#types" },
     { "include": "#constants" },
@@ -54,7 +55,7 @@
             },
             {
               "name": "meta.interpolation.tessera",
-              "begin": "\\\\\\$\\{",
+              "begin": "\\$\\{",
               "beginCaptures": {
                 "0": { "name": "punctuation.section.interpolation.begin.tessera" }
               },
@@ -114,6 +115,16 @@
         }
       ]
     },
+    "contracts": {
+      "comment": "Contract clauses (LANGUAGE_SPEC.md section 12) run from the keyword to the body: {, a lone =, or ;. Inside them `result` is the return value.",
+      "begin": "(?<!\\.)\\b(requires|ensures|invariant|decreases)\\b",
+      "beginCaptures": { "1": { "name": "keyword.control.contract.tessera" } },
+      "end": "(?=\\{|;|(?<![=!<>])=(?![=>]))",
+      "patterns": [
+        { "name": "variable.language.result.tessera", "match": "(?<!\\.)\\bresult\\b" },
+        { "include": "$self" }
+      ]
+    },
     "keywords": {
       "patterns": [
         {
@@ -126,7 +137,7 @@
       "patterns": [
         {
           "name": "storage.type.tessera",
-          "match": "\\b(?:Int|Long|Float|Double|Real|Bool|Boolean|Char|String|Nat|Unit|Void|Tensor|Vector|Matrix|Array|Dict|Set|Shared|Weak|Regex)\\b"
+          "match": "\\b(?:Int|Long|Short|Byte|Float|Double|Real|Bool|Boolean|Char|String|Nat|Integer|Natural|Unit|Void|Tensor|Vector|Matrix|Array|Dict|Set|Shared|Weak|Regex)\\b"
         }
       ]
     },

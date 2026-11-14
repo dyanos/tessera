@@ -142,6 +142,67 @@ def integersMod(n: Long): IntegersMod = new IntegersMod(csec_alg_require_modulus
 def zmod(v: Long, n: Long): Zmod = new Zmod(csec_alg_mod(v, csec_alg_require_modulus(n)), n)
 
 // ---------------------------------------------------------------------------------------------
+// Type-level moduli: Mod<N> (the ring Z/NZ) and GF<P> (the prime field), where the modulus is part
+// of the type. `new GF<7>(3) + new GF<11>(3)` is a compile-time type error; with the runtime-parameter
+// types below (Zmod, Fp) the same mistake is an AlgebraError when the program runs.
+// ---------------------------------------------------------------------------------------------
+
+template<Long N>
+struct Mod(r: Long) {
+    def value(): Long = csec_alg_mod(r, N)
+    def modulus(): Long = N
+    def isZero(): Boolean = csec_alg_mod(r, N) == 0
+    def isUnit(): Boolean = csec_alg_is_unit(r, N) != 0
+    def inverse(): Mod<N> = new Mod<N>(csec_alg_inv(r, N))
+    def order(): Long = csec_alg_order(r, N)
+    def toString(): String = csec_alg_residue_to_string(csec_alg_mod(r, N), N)
+
+    def operator +(o: Mod<N>): Mod<N> = new Mod<N>(csec_alg_add(r, o.r, N))
+    def operator -(o: Mod<N>): Mod<N> = new Mod<N>(csec_alg_sub(r, o.r, N))
+    def operator *(o: Mod<N>): Mod<N> = new Mod<N>(csec_alg_mul(r, o.r, N))
+    def operator /(o: Mod<N>): Mod<N> = new Mod<N>(csec_alg_mul(r, csec_alg_inv(o.r, N), N))
+    def operator +(k: Long): Mod<N> = new Mod<N>(csec_alg_add(r, k, N))
+    def operator -(k: Long): Mod<N> = new Mod<N>(csec_alg_sub(r, k, N))
+    def operator *(k: Long): Mod<N> = new Mod<N>(csec_alg_mul(r, k, N))
+    def operator -(): Mod<N> = new Mod<N>(csec_alg_sub(0, r, N))
+    def operator **(e: Long): Mod<N> = new Mod<N>(csec_alg_pow(r, e, N))
+    def operator ==(o: Mod<N>): Boolean = csec_alg_mod(r, N) == csec_alg_mod(o.r, N)
+    def operator !=(o: Mod<N>): Boolean = csec_alg_mod(r, N) != csec_alg_mod(o.r, N)
+    def operator ==(k: Long): Boolean = csec_alg_mod(r, N) == csec_alg_mod(k, N)
+    def operator !=(k: Long): Boolean = csec_alg_mod(r, N) != csec_alg_mod(k, N)
+}
+
+// GF<P>: P must be prime -- every operation checks it (once per prime, then cached), so a GF<8>
+// stops with an AlgebraError on first use.
+template<Long P>
+struct GF(r: Long) {
+    def value(): Long = csec_alg_mod(r, csec_alg_require_prime(P))
+    def characteristic(): Long = csec_alg_require_prime(P)
+    def isZero(): Boolean = csec_alg_mod(r, csec_alg_require_prime(P)) == 0
+    def inverse(): GF<P> = new GF<P>(csec_alg_inv(r, csec_alg_require_prime(P)))
+    def order(): Long = csec_alg_order(r, csec_alg_require_prime(P))
+    def isSquare(): Boolean = csec_alg_is_square(r, csec_alg_require_prime(P)) != 0
+    def sqrt(): GF<P> = new GF<P>(csec_alg_sqrt(r, csec_alg_require_prime(P)))
+    def legendre(): Long = csec_alg_legendre(r, csec_alg_require_prime(P))
+    def toString(): String = csec_alg_residue_to_string(csec_alg_mod(r, csec_alg_require_prime(P)), P)
+
+    def operator +(o: GF<P>): GF<P> = new GF<P>(csec_alg_add(r, o.r, csec_alg_require_prime(P)))
+    def operator -(o: GF<P>): GF<P> = new GF<P>(csec_alg_sub(r, o.r, csec_alg_require_prime(P)))
+    def operator *(o: GF<P>): GF<P> = new GF<P>(csec_alg_mul(r, o.r, csec_alg_require_prime(P)))
+    def operator /(o: GF<P>): GF<P> = new GF<P>(csec_alg_mul(r, csec_alg_inv(o.r, csec_alg_require_prime(P)), P))
+    def operator +(k: Long): GF<P> = new GF<P>(csec_alg_add(r, k, csec_alg_require_prime(P)))
+    def operator -(k: Long): GF<P> = new GF<P>(csec_alg_sub(r, k, csec_alg_require_prime(P)))
+    def operator *(k: Long): GF<P> = new GF<P>(csec_alg_mul(r, k, csec_alg_require_prime(P)))
+    def operator /(k: Long): GF<P> = new GF<P>(csec_alg_mul(r, csec_alg_inv(k, csec_alg_require_prime(P)), P))
+    def operator -(): GF<P> = new GF<P>(csec_alg_sub(0, r, csec_alg_require_prime(P)))
+    def operator **(e: Long): GF<P> = new GF<P>(csec_alg_pow(r, e, csec_alg_require_prime(P)))
+    def operator ==(o: GF<P>): Boolean = csec_alg_mod(r, P) == csec_alg_mod(o.r, P)
+    def operator !=(o: GF<P>): Boolean = csec_alg_mod(r, P) != csec_alg_mod(o.r, P)
+    def operator ==(k: Long): Boolean = csec_alg_mod(r, P) == csec_alg_mod(k, P)
+    def operator !=(k: Long): Boolean = csec_alg_mod(r, P) != csec_alg_mod(k, P)
+}
+
+// ---------------------------------------------------------------------------------------------
 // GF(p): the prime field of integers modulo a prime p
 // ---------------------------------------------------------------------------------------------
 

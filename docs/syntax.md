@@ -656,6 +656,24 @@ class Holder(initial: T) {
 }
 ```
 
+A template class or struct may use its own instance type in its methods, which is
+what operator overloading needs. Each instance is a distinct type, so mixing
+instances with different arguments is a compile-time type error:
+
+```ts
+template<Int P>
+struct Residue(v: Long) {
+    def operator +(o: Residue<P>): Residue<P> = new Residue<P>((v + o.v) % P)
+    def operator -(): Residue<P> = new Residue<P>((P - v) % P)
+}
+
+val a = new Residue<7>(3) + new Residue<7>(5);   // Residue<7>
+val b = new Residue<7>(3) + new Residue<11>(3);  // error: no 'operator+' of Residue<7>
+                                                 //        accepts an operand of type Residue<11>
+```
+
+`std.math.algebra` provides `Mod<N>` and `GF<P>` built this way (LANGUAGE_SPEC.md §11).
+
 Generic library-shaped types such as `Vector[Int]` and `Matrix[Double]` can be
 used in signatures as opaque reference types until a concrete runtime
 implementation is provided.

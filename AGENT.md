@@ -15,4 +15,7 @@ documentation in sync as part of the same change.
   relevant `selfhost/` compiler code is stale.
 - Lexical changes (keywords, operators, literals) also go into the editor lexer in
   `editors/openidea-tessera/crates/tessera-syntax/src/lexer.rs`; its `cargo test`
-  lexes every repository `.csec` file.
+  lexes every repository `.csec` file. Highlighting word lists live in three editors and
+  change together: OpenIDEA (`tessera-syntax/src/highlight.rs`, hover text in `docs.rs`),
+  VS Code (`editors/vscode-tessera/syntaxes/tessera.tmLanguage.json`), and Vim
+  (`editors/vim-tessera/syntax/tessera.vim`).
