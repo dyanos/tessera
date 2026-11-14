@@ -370,6 +370,15 @@ std::string resolveSystemLibraryPath(const char* path) {
 
 extern "C" {
 
+// A failed assert(...): `where` is "file:line", `message` the condition text (and the user message).
+void csec_assert_fail(const char* where, const char* message) {
+    std::fflush(stdout);
+    if (where) std::fprintf(stderr, "AssertionError: %s: %s\n", where, message ? message : "");
+    else std::fprintf(stderr, "AssertionError: %s\n", message ? message : "assertion failed");
+    std::fflush(stderr);
+    std::exit(1);
+}
+
 void csec_print_string(const char* value) {
     std::printf("%s", value ? value : "");
 }

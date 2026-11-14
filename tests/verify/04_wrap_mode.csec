@@ -1,0 +1,17 @@
+// verify-flags: --verify-wrap
+// With --verify-wrap integers wrap around like the compiled program, so overflow is not an error
+// and wrap-around arithmetic can be proved.
+def hashStep(h: Int, c: Int): Int
+    ensures result == h * 31 + c
+{
+    return h * 31 + c;
+}
+
+def wrapsToMinimum(x: Int): Int
+    requires x == 2147483647
+    ensures result == -2147483648
+{
+    return x + 1;
+}
+
+def main(): Int = 0

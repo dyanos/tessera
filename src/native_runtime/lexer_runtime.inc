@@ -842,6 +842,93 @@ static std::string csec_lex_repair_leading_r_token(const std::string& text) {
 
 extern "C" {
 
+// Contract clauses (`requires`/`ensures` after a function signature, `invariant`/`decreases` after a
+// while/for header) are specifications for `csec++ --verify`; they are never compiled. Remove their
+// tokens so the self-host emitter sees an ordinary signature or loop header. A token stream without
+// clauses is returned unchanged.
+static char* csec_strip_contract_clauses(char* tokens) {
+    if (!tokens) return tokens;
+    std::vector<std::pair<char, std::string>> items;
+    {
+        const char* line = tokens;
+        while (*line) {
+            const char* end = std::strchr(line, '\n');
+            const size_t length = end ? static_cast<size_t>(end - line) : std::strlen(line);
+            if (length >= 2) items.emplace_back(line[0], std::string(line + 2, length - 2));
+            if (!end) break;
+            line = end + 1;
+        }
+    }
+    auto is = [&](size_t i, char kind, const char* text) {
+        return i < items.size() && items[i].first == kind && items[i].second == text;
+    };
+    auto closing = [&](size_t open) -> size_t {
+        int depth = 0;
+        for (size_t i = open; i < items.size(); ++i) {
+            if (is(i, 'O', "(")) ++depth;
+            else if (is(i, 'O', ")") && --depth == 0) return i;
+        }
+        return items.size();
+    };
+    auto clauseWord = [&](size_t i, bool function) {
+        if (i >= items.size() || items[i].first != 'I') return false;
+        const std::string& t = items[i].second;
+        return function ? (t == "requires" || t == "ensures") : (t == "invariant" || t == "decreases");
+    };
+    // Drops the clauses starting at `i`; returns the index of the body ('{' or, for functions, '=').
+    std::vector<bool> keep(items.size(), true);
+    bool stripped = false;
+    auto dropClauses = [&](size_t i, bool function) {
+        while (clauseWord(i, function)) {
+            int depth = 0;
+            keep[i++] = false;
+            stripped = true;
+            for (; i < items.size(); ++i) {
+                if (depth == 0 && (clauseWord(i, function) || is(i, 'O', "{") || (function && is(i, 'O', "=")))) break;
+                if (is(i, 'O', "(") || is(i, 'O', "[")) ++depth;
+                else if ((is(i, 'O', ")") || is(i, 'O', "]")) && depth > 0) --depth;
+                keep[i] = false;
+            }
+        }
+    };
+    for (size_t i = 0; i < items.size(); ++i) {
+        if (is(i, 'K', "def")) {
+            size_t open = i + 1;
+            while (open < items.size() && !is(open, 'O', "(") && !is(open, 'O', "{") && !is(open, 'O', ";")) ++open;
+            if (!is(open, 'O', "(")) continue;
+            size_t j = closing(open) + 1;
+            if (is(j, 'O', ":")) {
+                // Skip the return type: up to the body or a clause word, outside brackets.
+                int depth = 0;
+                for (++j; j < items.size(); ++j) {
+                    if (depth == 0 && (is(j, 'O', "{") || is(j, 'O', "=") || is(j, 'O', ";") || clauseWord(j, true))) break;
+                    if (is(j, 'O', "(") || is(j, 'O', "[") || is(j, 'O', "<")) ++depth;
+                    else if ((is(j, 'O', ")") || is(j, 'O', "]") || is(j, 'O', ">")) && depth > 0) --depth;
+                    else if (is(j, 'O', ">>")) depth = depth > 1 ? depth - 2 : 0;
+                }
+            }
+            dropClauses(j, true);
+        }
+        else if ((is(i, 'K', "while") || is(i, 'K', "for")) && is(i + 1, 'O', "(")) {
+            dropClauses(closing(i + 1) + 1, false);
+        }
+    }
+    if (!stripped) return tokens;
+    std::string rebuilt;
+    for (size_t i = 0; i < items.size(); ++i) {
+        if (!keep[i]) continue;
+        rebuilt += items[i].first;
+        rebuilt += ':';
+        rebuilt += items[i].second;
+        rebuilt += '\n';
+    }
+    char* result = static_cast<char*>(std::malloc(rebuilt.size() + 1));
+    if (!result) return tokens;
+    std::memcpy(result, rebuilt.c_str(), rebuilt.size() + 1);
+    std::free(tokens);
+    return result;
+}
+
 char* csec_tokenize_source(const char* sourceText) {
     std::string source = sourceText ? sourceText : "";
     long long builder = csec_token_builder_new();
@@ -916,7 +1003,7 @@ char* csec_tokenize_source(const char* sourceText) {
     }
 
     csec_token_builder_append(builder, 'E', "<eof>");
-    return csec_token_builder_finish(builder);
+    return csec_strip_contract_clauses(csec_token_builder_finish(builder));
 }
 
 char csec_token_kind_at(const char* tokens, int ordinal) {

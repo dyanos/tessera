@@ -151,6 +151,7 @@ set(_
     "type_checker.cpp"
     "type_utils.cpp"
     "utils.cpp"
+    "verifier.cpp"
 )
 source_group("?뚯뒪 ?뚯씪" FILES ${_})
 
@@ -375,6 +376,34 @@ if(WIN32)
 endif()
 if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_definitions(${PROJECT_NAME} PRIVATE _ALLOW_COMPILER_AND_STL_VERSION_MISMATCH)
+endif()
+
+# `csec++ --verify` proves contracts with the Z3 SMT solver (an external library). AUTO uses it when
+# found: deps/z3 (scripts/fetch_z3.ps1 / scripts/fetch_z3.sh), Z3_ROOT, or the system paths.
+set(CSEC_WITH_Z3 AUTO CACHE STRING "Link Z3 for --verify (AUTO, ON, OFF)")
+set_property(CACHE CSEC_WITH_Z3 PROPERTY STRINGS AUTO ON OFF)
+if(NOT CSEC_WITH_Z3 STREQUAL "OFF")
+    set(_csec_z3_hints "${CMAKE_CURRENT_SOURCE_DIR}/deps/z3" "$ENV{Z3_ROOT}" "${Z3_ROOT}")
+    find_path(CSEC_Z3_INCLUDE_DIR z3++.h HINTS ${_csec_z3_hints} PATH_SUFFIXES include include/z3)
+    find_library(CSEC_Z3_LIBRARY NAMES libz3 z3 HINTS ${_csec_z3_hints} PATH_SUFFIXES bin lib)
+    if(CSEC_Z3_INCLUDE_DIR AND CSEC_Z3_LIBRARY)
+        message(STATUS "--verify: Z3 from ${CSEC_Z3_LIBRARY}")
+        target_include_directories(${PROJECT_NAME} PRIVATE "${CSEC_Z3_INCLUDE_DIR}")
+        target_compile_definitions(${PROJECT_NAME} PRIVATE CSEC_HAVE_Z3)
+        target_link_libraries(${PROJECT_NAME} PRIVATE "${CSEC_Z3_LIBRARY}")
+        if(WIN32)
+            # The import library sits next to libz3.dll; copy the DLL beside csec++.exe.
+            get_filename_component(_csec_z3_dir "${CSEC_Z3_LIBRARY}" DIRECTORY)
+            if(EXISTS "${_csec_z3_dir}/libz3.dll")
+                add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_csec_z3_dir}/libz3.dll" $<TARGET_FILE_DIR:${PROJECT_NAME}>)
+            endif()
+        endif()
+    elseif(CSEC_WITH_Z3 STREQUAL "ON")
+        message(FATAL_ERROR "CSEC_WITH_Z3=ON but z3++.h / libz3 were not found (run scripts/fetch_z3.ps1)")
+    else()
+        message(STATUS "--verify: Z3 not found; csec++ is built without the verifier")
+    endif()
 endif()
 
 use_props(${PROJECT_NAME} "${CMAKE_CONFIGURATION_TYPES}" "${DEFAULT_CXX_PROPS}")

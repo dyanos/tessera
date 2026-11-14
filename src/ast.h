@@ -1,5 +1,7 @@
 // ast.h
 #pragma once
+#include <string>
+#include <vector>
 
 #include "type.h"
 
@@ -56,11 +58,33 @@ enum class ASTNodeType {
 };
 
 class ASTVisitor;
+class ASTNode;
+
+// Specification clauses for static verification (`csec++ --verify`): `requires`/`ensures` on a
+// function, `invariant`/`decreases` on a loop. They are checked by the verifier and never compiled.
+struct ContractClause {
+    std::unique_ptr<ASTNode> expression;
+    int line = 0;
+    std::string text;  // the clause as written, for diagnostics
+};
+
+struct ContractClauses {
+    std::vector<ContractClause> requiresClauses;
+    std::vector<ContractClause> ensuresClauses;
+    std::vector<ContractClause> invariants;
+    std::vector<ContractClause> decreases;
+    bool empty() const {
+        return requiresClauses.empty() && ensuresClauses.empty() && invariants.empty() && decreases.empty();
+    }
+};
 
 class ASTNode {
 public:
     ASTNodeType nodeType = ASTNodeType::NONE;
     std::unique_ptr<Type> type;
+    // Source line in the import-expanded program (0 when unknown); see sourceLocationOf in main.cpp.
+    int line = 0;
+    std::shared_ptr<ContractClauses> contracts;
 
     virtual ~ASTNode() = default;
     virtual void accept(ASTVisitor& visitor) = 0;

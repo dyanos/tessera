@@ -577,6 +577,17 @@ void TypeChecker::visit(FunctionDeclarationNode& node) {
         }
     }
 
+    if (node.contracts) {
+        // `requires` sees the parameters; `ensures` also sees `result`, the returned value.
+        for (auto& clause : node.contracts->requiresClauses) checkContractClause(clause, "requires", true);
+        cg.symbolTable.enterScope();
+        if (node.returnType && !node.returnType->isVoidTy() && node.returnType->getName() != "Unit") {
+            bindVariable("result", node.returnType, false);
+        }
+        for (auto& clause : node.contracts->ensuresClauses) checkContractClause(clause, "ensures", true);
+        cg.symbolTable.exitScope();
+    }
+
     if (node.isUnsafe) {
         ++unsafeContextDepth;
     }
@@ -868,6 +879,7 @@ void TypeChecker::visit(ForStatementNode& node) {
         bindVariable(node.variable, std::make_unique<BasicType>("Int"), false);
         declareOwnership(node.variable, std::make_unique<BasicType>("Int"));
     }
+    visitLoopContracts(node);
     if (node.body) {
         node.body->accept(*this);
     }
@@ -1636,11 +1648,34 @@ void TypeChecker::visit(FilterStatementNode& node) {
     cg.symbolTable.exitScope();
 }
 
+void TypeChecker::checkContractClause(ContractClause& clause, const std::string& kind, bool boolean) {
+    if (!clause.expression) return;
+    clause.expression->accept(*this);
+    auto clauseType = clause.expression->getType();
+    if (!isResolvedType(clauseType)) return;
+    const bool isBool = clauseType->getName() == "Boolean" || clauseType->getName() == "Bool";
+    if (boolean && !isBool) {
+        reportError("Type error: '" + kind + " " + clause.text + "' must be a Bool condition, not '" +
+                    clauseType->getName() + "'");
+    }
+    if (!boolean && !clauseType->isIntegerTy()) {
+        reportError("Type error: '" + kind + " " + clause.text + "' must be an integer measure, not '" +
+                    clauseType->getName() + "'");
+    }
+}
+
+void TypeChecker::visitLoopContracts(ASTNode& loop) {
+    if (!loop.contracts) return;
+    for (auto& clause : loop.contracts->invariants) checkContractClause(clause, "invariant", true);
+    for (auto& clause : loop.contracts->decreases) checkContractClause(clause, "decreases", false);
+}
+
 void TypeChecker::visit(WhileStatementNode& node) {
     if (node.condition) {
         node.condition->accept(*this);
         checkTypeResolved(node.condition->getType(), "while condition");
     }
+    visitLoopContracts(node);
     if (node.body) {
         // Path-sensitivity for loops (M3). A while body that always returns runs at most once and
         // diverges on that run, so any moves it makes never reach the code after the loop — the loop

@@ -1,0 +1,12 @@
+﻿02_contract_errors.csec:5: error: '-x' overflows for the minimum Int
+02_contract_errors.csec:12: error: 'a + b' may overflow Int
+02_contract_errors.csec:16: error: possible division by zero in 'a / b'
+02_contract_errors.csec:16: error: 'a / b' overflows when dividing the minimum Int by -1
+02_contract_errors.csec:27: error: call 'needsPositive(k)' may violate the requirement 'n > 0' of 'needsPositive'
+02_contract_errors.csec:31: error: the requires clauses of 'impossible' contradict each other; it can never be called
+02_contract_errors.csec:40: error: 'wrongPost' may return without satisfying 'ensures result > x'
+02_contract_errors.csec:44: warning: condition 'x > 5 and x < 3' is always false here; its branch never runs
+02_contract_errors.csec:45: warning: condition 'x >= 0 or x < 0' is always true here
+02_contract_errors.csec:51: error: assertion 'v == 3' may fail
+verified: needsPositive (1 check)
+verify: 9 function(s), 15 check(s), 8 error(s), 2 warning(s)

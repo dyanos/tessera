@@ -1,0 +1,5 @@
+﻿03_loop_errors.csec:7: error: loop invariant 'i == 0' may not hold when the loop is entered
+03_loop_errors.csec:7: error: loop invariant 'i == 0' may not be preserved by an iteration
+03_loop_errors.csec:21: error: loop invariant 's == i' may not be preserved by an iteration
+03_loop_errors.csec:35: error: 'decreases n - i' may not decrease in an iteration (the loop may not terminate)
+verify: 4 function(s), 13 check(s), 4 error(s), 0 warning(s)

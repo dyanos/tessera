@@ -19,6 +19,7 @@ extern "C" {
 #endif
 
 CSEC_NATIVE_API void csec_print_string(const char* value);
+CSEC_NATIVE_API void csec_assert_fail(const char* where, const char* message);
 CSEC_NATIVE_API void csec_print_i64(long long value);
 CSEC_NATIVE_API void csec_print_double(double value);
 CSEC_NATIVE_API void csec_print_bool(int value);

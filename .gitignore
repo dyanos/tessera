@@ -50,3 +50,6 @@ build_cmake/
 
 # std.dataframe round-trip test output
 tests/stdlib/data/*.tmp.*
+
+# External libraries fetched by scripts/fetch_z3.* (not committed)
+deps/

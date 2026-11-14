@@ -1,0 +1,42 @@
+// Loop invariants must hold on entry and be preserved; `decreases` must shrink and stay >= 0.
+def badEntry(n: Int): Int
+    requires 0 <= n and n <= 100
+{
+    var i = 1;
+    while (i < n)
+        invariant i == 0              // false on entry
+    {
+        i = i + 1;
+    }
+    return i;
+}
+
+def notPreserved(n: Int): Int
+    requires 0 <= n and n <= 100
+{
+    var i = 0;
+    var s = 0;
+    while (i < n)
+        invariant 0 <= i and i <= n
+        invariant s == i              // the body adds 2
+    {
+        i = i + 1;
+        s = s + 2;
+    }
+    return s;
+}
+
+def mayNotTerminate(n: Int): Int
+    requires 0 <= n and n <= 100
+{
+    var i = 0;
+    while (i < n)
+        invariant 0 <= i and i <= n
+        decreases n - i               // the body does not change i
+    {
+        val unused = i;
+    }
+    return i;
+}
+
+def main(): Int = 0

@@ -285,6 +285,42 @@ static std::string csec_dict_initializer_type(const char* tokens, int start, int
     return "";
 }
 
+// ---- assert(condition[, message]) ----
+
+static bool csec_module_uses_assert(const char* tokens) {
+    for (int cursor = 0; csec_token_kind_at(tokens, cursor) != 'E'; ++cursor) {
+        if (csec_native_token_is(tokens, cursor, 'I', "assert") && csec_native_token_is(tokens, cursor + 1, 'O', "(")) return true;
+    }
+    return false;
+}
+
+static std::string csec_assert_definitions(const char* tokens) {
+    return csec_module_uses_assert(tokens) ? "declare void @csec_assert_fail(ptr, ptr)\n\n" : "";
+}
+
+// The statement `assert(c)` / `assert(c, "message")` at [cursor, next): a false condition calls
+// csec_assert_fail (prints AssertionError and exits 1). "" when the statement is not an assert.
+static std::string csec_emit_assert_statement(const char* tokens, int cursor, int next) {
+    if (!csec_native_token_is(tokens, cursor, 'I', "assert") || !csec_native_token_is(tokens, cursor + 1, 'O', "(")) return "";
+    const int close = csec_find_closing_token(tokens, cursor + 1, next, "(", ")");
+    if (close <= cursor + 2) return "";
+    const auto arguments = csec_dict_split_items(tokens, cursor + 2, close);
+    if (arguments.empty()) return "";
+    const std::string seed = std::to_string(cursor);
+    std::string output = csec_emit_i1_expression(tokens, arguments[0].first, arguments[0].second, "%assert.cond." + seed);
+    output += "  br i1 %assert.cond." + seed + ", label %assert.ok." + seed + ", label %assert.fail." + seed + "\n";
+    output += "assert.fail." + seed + ":\n";
+    std::string message = "null";
+    if (arguments.size() >= 2) {
+        output += csec_emit_ptr_expression(tokens, arguments[1].first, arguments[1].second, "%assert.message." + seed);
+        message = "%assert.message." + seed;
+    }
+    output += "  call void @csec_assert_fail(ptr null, ptr " + message + ")\n";
+    output += "  br label %assert.ok." + seed + "\n";
+    output += "assert.ok." + seed + ":\n";
+    return output;
+}
+
 static bool csec_module_uses_dicts(const char* tokens) {
     for (int cursor = 0; csec_token_kind_at(tokens, cursor) != 'E'; ++cursor) {
         if ((csec_native_token_is(tokens, cursor, 'I', "Dict") || csec_native_token_is(tokens, cursor, 'I', "Set")) &&

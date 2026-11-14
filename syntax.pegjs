@@ -57,8 +57,14 @@ FunctionDeclaration
   = "def" __ FunctionRest
 
 FunctionRest
-  = MemberName _ "(" _ Parameters? _ ")" _ (":" _ Type)? _
+  = MemberName _ "(" _ Parameters? _ ")" _ (":" _ Type)? _ (ContractClause _)*
     ("=" _ Expression / "{" _ Statement* _ "}")?
+
+ContractClause
+  = ("requires" / "ensures") __ Expression
+
+LoopSpec
+  = ("invariant" / "decreases") __ Expression
 
 Parameters
   = Parameter (_ "," _ Parameter)*
@@ -91,10 +97,10 @@ IfStatement
   = "if" _ "constexpr"? _ "(" _ Expression _ ")" _ Block (_ "else" _ (Block / IfStatement))?
 
 ForStatement
-  = "for" _ "(" _ Identifier _ "<-" _ Expression (_ ("to" / "until") __ Expression)? _ ")" _ Block
+  = "for" _ "(" _ Identifier _ "<-" _ Expression (_ ("to" / "until") __ Expression)? _ ")" _ (LoopSpec _)* Block
 
 WhileStatement
-  = "while" _ "(" _ Expression _ ")" _ Block
+  = "while" _ "(" _ Expression _ ")" _ (LoopSpec _)* Block
 
 MapStatement
   = "map" _ "(" _ Identifier _ "<-" _ Expression _ ")" _ Block

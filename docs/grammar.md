@@ -103,7 +103,8 @@ dotted-name  = identifier { '.' identifier } ;
 attribute    = '[@' ident [ '(' [ arg-list ] ')' ] ']' ;     (* [@DllImport("m","cos")], [@Intrinsic] *)
 
 function     = [ 'async' ] [ 'unsafe' ] [ 'inline' ] [ 'constexpr' ]
-               'def' fn-name '(' [ params ] ')' [ ':' type ] fn-body ;
+               'def' fn-name '(' [ params ] ')' [ ':' type ] { contract } fn-body ;
+contract     = 'requires' expr | 'ensures' expr ;            (* contextual words; see LANGUAGE_SPEC.md 12 *)
 fn-name      = member-name | 'operator' operator ;        (* a keyword may name a method: def filter(...) *)
                                                             (* operator - / + / ! / ~ with no parameters overloads the unary form *)
 member-name  = identifier | keyword ;                      (* after '.' or 'def' only *)
@@ -168,8 +169,9 @@ l-value      = identifier
              | names ;                                       (* tuple destructure: a, b, c = f() *)
 
 if-stmt      = 'if' '(' expr ')' block [ 'else' ( block | if-stmt ) ] ;
-while-stmt   = 'while' '(' expr ')' block ;
-for-stmt     = 'for' '(' identifier '<-' iterable ')' block ;
+while-stmt   = 'while' '(' expr ')' { loop-spec } block ;
+for-stmt     = 'for' '(' identifier '<-' iterable ')' { loop-spec } block ;
+loop-spec    = 'invariant' expr | 'decreases' expr ;        (* checked by csec++ --verify only *)
              | 'for' '(' identifier ',' identifier '<-' token-range ')' block ;
              | 'for' '(' identifier ',' identifier '<-' expr ')' block ;   (* key, value of a Dict *)
 iterable     = expr | range ;
@@ -183,7 +185,7 @@ comprehension= ( 'map' | 'filter' ) '(' identifier '<-' iterable ')' block
              | ( 'preduce' ) '(' policy ',' identifier ',' identifier '<-' iterable ',' expr ')' block ;
 policy       = 'cpu' | 'simd' | 'openmp' | 'gpu' ;           (* contextual *)
 
-expr-stmt    = expr terminator ;
+expr-stmt    = expr terminator ;                            (* assert(c[, msg]) is a checked builtin *)
 block        = '{' { statement } '}' ;
 ```
 

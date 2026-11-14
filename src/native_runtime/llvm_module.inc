@@ -449,6 +449,8 @@ static std::string csec_generate_llvm_flat_body_typed(const char* tokens, int bo
         } else if ((csec_native_token_is(tokens, cursor, 'K', "go") || csec_native_token_is(tokens, cursor, 'K', "await")) &&
                    cursor + 1 < next) {
             output += csec_emit_i32_expression(tokens, cursor, next, "%discard." + std::to_string(cursor));
+        } else if (!csec_emit_assert_statement(tokens, cursor, next).empty()) {
+            output += csec_emit_assert_statement(tokens, cursor, next);
         } else if (!csec_emit_println_statement(tokens, cursor, next).empty()) {
             output += csec_emit_println_statement(tokens, cursor, next);
         } else if (csec_native_token_is(tokens, cursor, 'I', "free") &&
@@ -587,6 +589,8 @@ int csec_generate_llvm_module_into(const char* tokens, long long builder) {
     if (!lambdaDefinitions.empty() && csec_string_builder_append(builder, lambdaDefinitions.c_str()) != 0) return -1;
     const std::string concurrencyDefinitions = csec_concurrency_definitions(tokens);
     if (!concurrencyDefinitions.empty() && csec_string_builder_append(builder, concurrencyDefinitions.c_str()) != 0) return -1;
+    const std::string assertDefinitions = csec_assert_definitions(tokens);
+    if (!assertDefinitions.empty() && csec_string_builder_append(builder, assertDefinitions.c_str()) != 0) return -1;
     const std::string dictDefinitions = csec_dict_definitions(tokens);
     if (!dictDefinitions.empty() && csec_string_builder_append(builder, dictDefinitions.c_str()) != 0) return -1;
 
