@@ -20,7 +20,9 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#if defined(_WIN32)
+#if defined(CSEC_Z3_STATIC)
+#include <z3.h>
+#elif defined(_WIN32)
 #include <windows.h>
 #else
 #include <dlfcn.h>
@@ -272,6 +274,16 @@ Z3Api& z3() {
     std::lock_guard<std::recursive_mutex> lock(mutex());
     if (tried) return api;
     tried = true;
+#if defined(CSEC_Z3_STATIC)
+    // Z3 is linked into this runtime (CSEC_Z3_LINK=STATIC).
+    api.mkConfig = reinterpret_cast<Z3Config (*)()>(&Z3_mk_config);
+    api.mkContext = reinterpret_cast<Z3Context (*)(Z3Config)>(&Z3_mk_context);
+    api.delConfig = reinterpret_cast<void (*)(Z3Config)>(&Z3_del_config);
+    api.evalSmtlib = reinterpret_cast<const char* (*)(Z3Context, const char*)>(&Z3_eval_smtlib2_string);
+    api.delContext = reinterpret_cast<void (*)(Z3Context)>(&Z3_del_context);
+    api.loaded = true;
+    return api;
+#else
     std::vector<std::string> candidates;
     if (const char* path = std::getenv("CSEC_Z3_LIBRARY")) candidates.push_back(path);
 #if defined(_WIN32)
@@ -280,19 +292,34 @@ Z3Api& z3() {
     auto symbolOf = [](void* lib, const char* s) -> void* {
         return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(lib), s));
     };
+    // csec++ itself links libz3 when it was built with --verify support.
+    void* lib = reinterpret_cast<void*>(GetModuleHandleA("libz3.dll"));
 #else
 #if defined(__APPLE__)
     candidates.push_back("libz3.dylib");
-#endif
+    candidates.push_back("/opt/homebrew/lib/libz3.dylib");  // Homebrew on Apple silicon
+    candidates.push_back("/usr/local/lib/libz3.dylib");     // Homebrew on Intel, manual installs
+#else
     candidates.push_back("libz3.so");
     candidates.push_back("libz3.so.4");
-    auto open = [](const std::string& p) -> void* { return dlopen(p.c_str(), RTLD_NOW); };
-    auto symbolOf = [](void* lib, const char* s) -> void* { return dlsym(lib, s); };
 #endif
+    auto open = [](const std::string& p) -> void* { return dlopen(p.c_str(), RTLD_NOW | RTLD_GLOBAL); };
+    auto symbolOf = [](void* lib, const char* s) -> void* { return dlsym(lib, s); };
+    // Already in the process (csec++ links libz3 for --verify): use those symbols.
     void* lib = nullptr;
-    for (const auto& candidate : candidates) {
-        lib = open(candidate);
-        if (lib) break;
+    bool inProcess = dlsym(RTLD_DEFAULT, "Z3_mk_config") != nullptr;
+    if (inProcess) {
+        api.mkConfig = reinterpret_cast<Z3Config (*)()>(dlsym(RTLD_DEFAULT, "Z3_mk_config"));
+        api.mkContext = reinterpret_cast<Z3Context (*)(Z3Config)>(dlsym(RTLD_DEFAULT, "Z3_mk_context"));
+        api.delConfig = reinterpret_cast<void (*)(Z3Config)>(dlsym(RTLD_DEFAULT, "Z3_del_config"));
+        api.evalSmtlib = reinterpret_cast<const char* (*)(Z3Context, const char*)>(dlsym(RTLD_DEFAULT, "Z3_eval_smtlib2_string"));
+        api.delContext = reinterpret_cast<void (*)(Z3Context)>(dlsym(RTLD_DEFAULT, "Z3_del_context"));
+        api.loaded = api.mkConfig && api.mkContext && api.delConfig && api.evalSmtlib && api.delContext;
+        if (api.loaded) return api;
+    }
+#endif
+    for (size_t i = 0; !lib && i < candidates.size(); ++i) {
+        lib = open(candidates[i]);
     }
     if (!lib) {
         api.error = "the Z3 solver library (libz3) was not found; put it next to the program or set CSEC_Z3_LIBRARY";
@@ -306,6 +333,7 @@ Z3Api& z3() {
     api.loaded = api.mkConfig && api.mkContext && api.delConfig && api.evalSmtlib && api.delContext;
     if (!api.loaded) api.error = "libz3 does not export the expected Z3 C API";
     return api;
+#endif
 }
 
 // Runs a script; returns Z3's output.

@@ -18,7 +18,11 @@ mkdir -p "$deps"
 curl -fL -o "$deps/$name.zip" "https://github.com/Z3Prover/z3/releases/download/z3-$VERSION/$name.zip"
 # Compare with the release's published digest (GitHub release page / API "digest" field).
 shasum -a 256 "$deps/$name.zip"
-unzip -q -o "$deps/$name.zip" -d "$deps"
+if command -v unzip >/dev/null 2>&1; then
+  unzip -q -o "$deps/$name.zip" -d "$deps"
+else
+  python3 -m zipfile -e "$deps/$name.zip" "$deps"
+fi
 mv "$deps/$name" "$deps/z3"
 rm "$deps/$name.zip"
 echo "Z3 $VERSION is in $deps/z3"

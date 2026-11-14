@@ -44,6 +44,13 @@ def main(): Int {
     val i = L.generator();                                       // i^2 = -1
     if (i * i != -L.one() or (i + 1) ** 8 != 1) { return 20; }
 
+    // Type-level moduli: GF<7> and GF<11> are different types (mixing them does not compile).
+    val g = new GF<7>(3);
+    if (g * new GF<7>(5) + 1 != 2 or g ** -1 != 5 or (-g).value() != 4) { return 22; }
+    val m = new Mod<12>(5);
+    if (m * new Mod<12>(7) != 11 or m.inverse().value() != 5 or new Mod<12>(4).isUnit()) { return 23; }
+    if ((new GF<9223372036854775783>(9223372036854775000) * new GF<9223372036854775783>(9223372036854775000)).value() != 613089) { return 24; }
+
     // Exact arithmetic near 2^63.
     val P = primeField(9223372036854775783);
     val big = P.of(9223372036854775000);

@@ -11,6 +11,9 @@
 #include <unordered_map>
 #include <unordered_set>
 
+// Generates a template class instance registered during type checking (ClassInstanceCreationNode.cpp).
+bool materializeTemplateClass(const std::string& mangledName);
+
 class CodeGenerator {
 public:
     static CodeGenerator& getInstance() {
@@ -44,6 +47,9 @@ public:
     // forever; this set lets construction detect the cycle and emit a diagnostic instead of
     // overflowing the compiler's stack.
     std::unordered_set<std::string> classesUnderConstruction;
+    // False while the program is type-checked, true once code generation starts. Template classes
+    // used during type checking are only registered then and generated when this becomes true.
+    bool generatingCode = false;
 
     llvm::LLVMContext& getContext() { return context; }
 

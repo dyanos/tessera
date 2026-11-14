@@ -98,6 +98,10 @@ llvm::Value* IdentifierNode::codegen() {
             // this scalar is only meaningful when the target is Nat, where coerceToNat() reparses the
             // exact text via from_decimal and ignores this (truncated) placeholder.
             long long parsed = std::strtoll(value.c_str(), nullptr, 10);
+            // Text beyond the Int range (e.g. a substituted `Long` template argument) is a Long.
+            if (parsed < INT32_MIN || parsed > INT32_MAX) {
+                return llvm::ConstantInt::get(llvm::Type::getInt64Ty(cg.context), parsed, true);
+            }
             return llvm::ConstantInt::get(llvm::Type::getInt32Ty(cg.context), static_cast<int32_t>(parsed));
         }
 		std::cerr << "Undefined variable: " << value << std::endl;
@@ -193,7 +197,8 @@ std::unique_ptr<Type> IdentifierNode::getType() {
         return std::make_unique<BasicType>("Boolean");
     }
     if (isIntegerLiteralText(value)) {
-        return std::make_unique<BasicType>("Int");
+        const long long parsed = std::strtoll(value.c_str(), nullptr, 10);
+        return std::make_unique<BasicType>(parsed < INT32_MIN || parsed > INT32_MAX ? "Long" : "Int");
     }
 
 	return std::make_unique<BasicType>("Real");

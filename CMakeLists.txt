@@ -355,6 +355,14 @@ if(WIN32)
 else()
     target_link_libraries(csec_native_runtime PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
 endif()
+# ELF shared libraries resolve even their own exported functions through the global symbol table,
+# and `csec++ --run-ir` loads a second copy of the runtime (the one beside csec++) next to the one
+# csec++ links. Without -Bsymbolic a call inside one copy can land in the other, whose state (handle
+# tables, threads, channels) is different. Bind the runtime's references to its own definitions.
+# (macOS two-level namespaces already do this; Windows DLLs never interpose.)
+if(UNIX AND NOT APPLE)
+    target_link_options(csec_native_runtime PRIVATE "LINKER:-Bsymbolic")
+endif()
 add_dependencies(${PROJECT_NAME} csec_native_runtime)
 target_link_libraries(${PROJECT_NAME} PRIVATE csec_native_runtime Threads::Threads)
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
@@ -380,9 +388,41 @@ endif()
 
 # `csec++ --verify` proves contracts with the Z3 SMT solver (an external library). AUTO uses it when
 # found: deps/z3 (scripts/fetch_z3.ps1 / scripts/fetch_z3.sh), Z3_ROOT, or the system paths.
+#
+# CSEC_Z3_LINK=SHARED (default) links the shared library (libz3.dll / libz3.so / libz3.dylib): csec++
+# needs it at run time, and std.logic loads it on demand. CSEC_Z3_LINK=STATIC links a static libz3
+# into both csec++ and the System.Native runtime, so neither needs the shared library; build it with
+# scripts/build_z3_static.ps1 / scripts/build_z3_static.sh (deps/z3-static) or point Z3_ROOT at one.
 set(CSEC_WITH_Z3 AUTO CACHE STRING "Link Z3 for --verify (AUTO, ON, OFF)")
 set_property(CACHE CSEC_WITH_Z3 PROPERTY STRINGS AUTO ON OFF)
-if(NOT CSEC_WITH_Z3 STREQUAL "OFF")
+set(CSEC_Z3_LINK SHARED CACHE STRING "How to link Z3: SHARED (the libz3 shared library) or STATIC")
+set_property(CACHE CSEC_Z3_LINK PROPERTY STRINGS SHARED STATIC)
+if(NOT CSEC_WITH_Z3 STREQUAL "OFF" AND CSEC_Z3_LINK STREQUAL "STATIC")
+    set(_csec_z3_hints "${CMAKE_CURRENT_SOURCE_DIR}/deps/z3-static" "$ENV{Z3_ROOT}" "${Z3_ROOT}")
+    find_path(CSEC_Z3_STATIC_INCLUDE_DIR z3++.h HINTS ${_csec_z3_hints} PATH_SUFFIXES include NO_DEFAULT_PATH)
+    if(WIN32)
+        set(_csec_z3_static_names libz3-static.lib libz3.lib z3.lib)
+    else()
+        set(_csec_z3_static_names libz3.a libz3-static.a)
+    endif()
+    find_library(CSEC_Z3_STATIC_LIBRARY NAMES ${_csec_z3_static_names} HINTS ${_csec_z3_hints} PATH_SUFFIXES lib lib64 NO_DEFAULT_PATH)
+    if(CSEC_Z3_STATIC_INCLUDE_DIR AND CSEC_Z3_STATIC_LIBRARY)
+        message(STATUS "--verify and std.logic: static Z3 from ${CSEC_Z3_STATIC_LIBRARY}")
+        foreach(_csec_target ${PROJECT_NAME} csec_native_runtime)
+            target_include_directories(${_csec_target} PRIVATE "${CSEC_Z3_STATIC_INCLUDE_DIR}")
+            target_compile_definitions(${_csec_target} PRIVATE CSEC_HAVE_Z3 CSEC_Z3_STATIC)
+            target_link_libraries(${_csec_target} PRIVATE "${CSEC_Z3_STATIC_LIBRARY}")
+            if(NOT WIN32)
+                target_link_libraries(${_csec_target} PRIVATE Threads::Threads)
+            endif()
+        endforeach()
+    elseif(CSEC_WITH_Z3 STREQUAL "ON")
+        message(FATAL_ERROR "CSEC_Z3_LINK=STATIC but no static libz3 was found in deps/z3-static or Z3_ROOT "
+                            "(run scripts/build_z3_static.ps1 or scripts/build_z3_static.sh)")
+    else()
+        message(STATUS "--verify: no static Z3 found (CSEC_Z3_LINK=STATIC); csec++ is built without the verifier")
+    endif()
+elseif(NOT CSEC_WITH_Z3 STREQUAL "OFF")
     set(_csec_z3_hints "${CMAKE_CURRENT_SOURCE_DIR}/deps/z3" "$ENV{Z3_ROOT}" "${Z3_ROOT}")
     find_path(CSEC_Z3_INCLUDE_DIR z3++.h HINTS ${_csec_z3_hints} PATH_SUFFIXES include include/z3)
     find_library(CSEC_Z3_LIBRARY NAMES libz3 z3 HINTS ${_csec_z3_hints} PATH_SUFFIXES bin lib)
@@ -453,6 +493,13 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     ${LLVM_INCLUDE_DIRS}
 )
+# Some LLVM classes change layout with NDEBUG, so code using the LLVM headers must agree with the
+# LLVM build. Prebuilt packages (Homebrew, conda-forge, apt) are built without assertions: compile
+# csec++ with NDEBUG for them even in a Debug build, or it crashes inside LLVM. (MSVC builds use a
+# matching vcpkg LLVM per configuration.)
+if(NOT MSVC AND NOT LLVM_ENABLE_ASSERTIONS)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE NDEBUG)
+endif()
 
 ################################################################################
 # Compile definitions
@@ -566,9 +613,27 @@ llvm_map_components_to_libnames(LLVM_COMPONENT_LIBS
 # LLVMLinkInInterpreter) live in those static libraries; also linking the LLVM-C shared library
 # (shipped e.g. by conda-forge) would give the process two copies of LLVM, so the JIT registered in
 # the DLL's copy would be invisible to the static ExecutionEngine ("JIT has not been linked in").
-target_link_libraries(${PROJECT_NAME} PRIVATE
-    ${LLVM_COMPONENT_LIBS}
-)
+#
+# Packages built with LLVM_LINK_LLVM_DYLIB (conda-forge, Homebrew, apt's llvm-dev) are meant to be
+# used through their single shared libLLVM; linking their static component archives instead
+# crashes inside the X86 backend on Linux. Use libLLVM there (it also holds the C entry points),
+# and keep the static components for vcpkg / source builds and on Windows.
+if(NOT DEFINED CSEC_LLVM_SHARED)
+    if(NOT WIN32 AND LLVM_LINK_LLVM_DYLIB AND TARGET LLVM)
+        set(_csec_llvm_shared_default ON)
+    else()
+        set(_csec_llvm_shared_default OFF)
+    endif()
+    set(CSEC_LLVM_SHARED ${_csec_llvm_shared_default} CACHE BOOL "Link the shared libLLVM instead of the static LLVM components")
+endif()
+if(CSEC_LLVM_SHARED)
+    message(STATUS "Linking the shared libLLVM")
+    target_link_libraries(${PROJECT_NAME} PRIVATE LLVM)
+else()
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        ${LLVM_COMPONENT_LIBS}
+    )
+endif()
 if(WIN32)
     find_library(CSEC_ZLIB_DEBUG_LIBRARY
         NAMES zlibd z

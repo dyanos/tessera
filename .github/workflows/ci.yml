@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unix:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-24.04
+          - name: macos-arm64
+            os: macos-14
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      # LLVM 18 from conda-forge (the same package the Linux port was developed with); Ninja and
+      # CMake come from conda too so both platforms build the same way.
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: tessera
+          channels: conda-forge
+          conda-remove-defaults: "true"
+
+      - name: Install LLVM and build tools
+        run: conda install -y "llvmdev=18.*" zlib zstd libxml2 cmake ninja
+
+      - name: Fetch Z3
+        run: sh scripts/fetch_z3.sh
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          -DLLVM_DIR="$CONDA_PREFIX/lib/cmake/llvm" -DCMAKE_PREFIX_PATH="$CONDA_PREFIX"
+          -DCSEC_WITH_Z3=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: sh tests/run_suite.sh Debug/csec++

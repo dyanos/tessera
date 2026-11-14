@@ -1,8 +1,8 @@
 // main.cpp
-#ifdef _WIN32
-#define _CRTDBG_MAP_ALLOC
 #include "source_map.h"
 #include "verifier.h"
+#ifdef _WIN32
+#define _CRTDBG_MAP_ALLOC
 #include <stdlib.h>
 #include <crtdbg.h>
 #include <direct.h>
@@ -277,7 +277,19 @@ int runIRFile(const std::string& inputFile, const std::vector<std::string>& runt
     llvm::InitializeNativeTargetAsmPrinter();
     llvm::InitializeNativeTargetAsmParser();
 
-    std::filesystem::path runtimePath = std::filesystem::path(programName).parent_path() / "System.Native.dll";
+    // The runtime sits next to csec++ (System.Native.dll, libSystem.Native.so, libSystem.Native.dylib).
+    // Locate csec++ itself rather than trusting argv[0], which has no directory when run from PATH.
+    static int mainExecutableAnchor = 0;
+    std::filesystem::path executable = llvm::sys::fs::getMainExecutable(programName, &mainExecutableAnchor);
+    if (executable.empty()) executable = std::filesystem::path(programName);
+#if defined(_WIN32)
+    const char* runtimeFileName = "System.Native.dll";
+#elif defined(__APPLE__)
+    const char* runtimeFileName = "libSystem.Native.dylib";
+#else
+    const char* runtimeFileName = "libSystem.Native.so";
+#endif
+    std::filesystem::path runtimePath = executable.parent_path() / runtimeFileName;
     std::string runtimeLoadError;
     llvm::sys::DynamicLibrary runtimeLibrary = llvm::sys::DynamicLibrary::getPermanentLibrary(
         runtimePath.string().c_str(), &runtimeLoadError);
@@ -371,10 +383,16 @@ int runIRFile(const std::string& inputFile, const std::vector<std::string>& runt
     arguments.push_back(inputFile);
     arguments.insert(arguments.end(), runtimeArgs.begin(), runtimeArgs.end());
 
-#ifdef _WIN32
+    // The program reads its arguments through the runtime (commandLineArg / csec_command_line_arg),
+    // e.g. the self-hosted compiler's input and output paths: hand them to the loaded runtime.
     using SetCommandLineArgs = void (*)(int, char**);
+#ifdef _WIN32
     auto setCommandLineArgs = reinterpret_cast<SetCommandLineArgs>(
         ::GetProcAddress(runtimeModule, "csec_set_command_line_args"));
+#else
+    auto setCommandLineArgs = reinterpret_cast<SetCommandLineArgs>(
+        runtimeLibrary.getAddressOfSymbol("csec_set_command_line_args"));
+#endif
     if (!setCommandLineArgs) {
         std::cerr << "Native runtime does not export csec_set_command_line_args." << std::endl;
         return 1;
@@ -385,7 +403,6 @@ int runIRFile(const std::string& inputFile, const std::vector<std::string>& runt
         runtimeArgv.push_back(argument.data());
     }
     setCommandLineArgs(static_cast<int>(runtimeArgv.size()), runtimeArgv.data());
-#endif
 
     return engine->runFunctionAsMain(entryFunction, arguments, {});
 }
@@ -1592,6 +1609,7 @@ int main(int argc, char** argv) {
         auto mainFile = std::filesystem::weakly_canonical(std::filesystem::path(inputFile), canonicalError);
         return verifyProgram(ast.get(), canonicalError ? inputFile : mainFile.string());
     }
+    CodeGenerator::getInstance().generatingCode = true;
     ast->codegen();
 
     // Keep IR dumping opt-in; unconditional dumps make large template suites unreasonably slow.

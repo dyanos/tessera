@@ -32,7 +32,7 @@ public:
     }
 
     void visit(ParameterNode& node) override {
-        std::cout << "- " << node.name << ": " << node.type << std::endl;
+        std::cout << "- " << node.name << ": " << (node.type ? node.type->getName() : "?") << std::endl;
     }
 
     void visit(BlockNode& node) override {
@@ -133,7 +133,7 @@ public:
 
     void visit(ClassInstanceCreationNode& node) override {
         std::cout << "NewCallExpression:" << std::endl;
-        std::cout << "Type: " << node.type << std::endl;
+        std::cout << "Type: " << (node.type ? node.type->getName() : node.className) << std::endl;
         std::cout << "Arguments:" << std::endl;
         for (auto& arg : node.arguments) {
             arg->accept(*this);
@@ -142,7 +142,7 @@ public:
 
     void visit(ArrayCreationExpressionNode& node) override {
         std::cout << "NewArrayExpression:" << std::endl;
-        std::cout << "Type: " << node.type << std::endl;
+        std::cout << "Type: " << (node.type ? node.type->getName() : "?") << std::endl;
         std::cout << "Size:" << std::endl;
 		for (auto& size : node.sizes) {
 			size->accept(*this);
@@ -167,7 +167,8 @@ public:
 
 	void visit(CastingExpressionNode& node) override {
 		std::cout << "CastingExpression:" << std::endl;
-		std::cout << "Type: " << node.typeNode << std::endl;
+		std::cout << "Type:" << std::endl;
+		if (node.typeNode) node.typeNode->accept(*this);
 		std::cout << "Expression:" << std::endl;
 		node.expression->accept(*this);
 	}

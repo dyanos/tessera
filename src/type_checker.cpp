@@ -635,6 +635,51 @@ void TypeChecker::visit(ExpressionNode& node) {
     checkTypeResolved(node.getType(), "expression");
 }
 
+// `a op b` where a's class (or struct) overloads `op`: one of those overloads must accept b's type.
+// Template instances are distinct classes, so GF<7> + GF<11> is rejected here.
+static std::string displayClassName(const std::string& name) {
+    const size_t dollar = name.find('$');
+    if (dollar == std::string::npos) return name;
+    std::string text = name.substr(0, dollar) + "<";
+    std::string rest = name.substr(dollar + 1);
+    for (char& c : rest) if (c == '$') c = ',';
+    size_t pos = 0;
+    while ((pos = rest.find(',', pos)) != std::string::npos) { rest.replace(pos, 1, ", "); pos += 2; }
+    return text + rest + ">";
+}
+
+bool TypeChecker::checkClassOperatorOperand(const std::string& op, const Type* leftType, const Type* rightType) {
+    if (!leftType || !rightType || leftType->getKind() != Type::Kind::CLASS) return true;
+    if (rightType->getKind() == Type::Kind::UNKNOWN) return true;
+    auto& table = CodeGenerator::getInstance().symbolTable;
+    ClassSymbol* classSymbol = table.lookupClass(leftType->getName());
+    if (!classSymbol) return true;
+    const std::string name = "operator" + op;
+    bool overloaded = false;
+    for (const ClassSymbol* cls = classSymbol; cls; cls = cls->superClassSymbol) {
+        for (const auto& entry : cls->methods) {
+            const Symbol* candidate = entry.second.get();
+            if (!candidate || candidate->name != name) continue;
+            auto* funcType = dynamic_cast<const FunctionType*>(candidate->type.get());
+            if (!funcType || funcType->parameterTypes.empty()) continue;  // the unary form
+            // Registered without the receiver while type checking, with it once generated.
+            const bool generated = llvm::isa_and_nonnull<llvm::Function>(candidate->value);
+            if (generated && funcType->parameterTypes.size() != 2) continue;
+            if (!generated && funcType->parameterTypes.size() != 1) continue;
+            overloaded = true;
+            const auto& parameter = funcType->parameterTypes.back();
+            if (!parameter || parameter->equals(*rightType) || rightType->isSubtypeOf(*parameter) ||
+                isNumericWidening(*rightType, *parameter)) {
+                return true;
+            }
+        }
+    }
+    if (!overloaded) return true;
+    reportError("Type error: no 'operator" + op + "' of " + displayClassName(leftType->getName()) +
+                " accepts an operand of type " + displayClassName(rightType->getName()));
+    return false;
+}
+
 void TypeChecker::visit(BinaryExpressionNode& node) {
     if (node.left) {
         node.left->accept(*this);
@@ -645,6 +690,9 @@ void TypeChecker::visit(BinaryExpressionNode& node) {
     if (node.left && node.right) {
         auto leftType = node.left->getType();
         auto rightType = node.right->getType();
+        if (!checkClassOperatorOperand(node.op, leftType.get(), rightType.get())) {
+            return;
+        }
         if ((node.op == "in" || node.op == "notin") && isSetType(rightType.get())) {
             checkDictValue(setElementType(rightType.get()), node.left.get(), "set element");
         }
@@ -1094,10 +1142,24 @@ void TypeChecker::visit(MethodCallNode& node) {
     checkTypeResolved(node.getType(), "method call");
 }
 
+static bool isIntegerLiteralText(const std::string& text) {
+    size_t start = !text.empty() && (text[0] == '+' || text[0] == '-') ? 1 : 0;
+    if (start >= text.size()) return false;
+    for (size_t i = start; i < text.size(); ++i) {
+        if (text[i] < '0' || text[i] > '9') return false;
+    }
+    return true;
+}
+
 void TypeChecker::visit(IdentifierNode& node) {
     checkIdentifierUse(node.value);
     auto* symbol = CodeGenerator::getInstance().symbolTable.lookup(node.value);
     if (!symbol) {
+        // A non-type template parameter substituted into an instance's body is its value's text
+        // (e.g. `7`); its type comes from IdentifierNode::getType, so do not pin it to Real.
+        if (isIntegerLiteralText(node.value) || node.value == "true" || node.value == "false") {
+            return;
+        }
         node.type = std::make_unique<BasicType>("Real");
         return;
     }

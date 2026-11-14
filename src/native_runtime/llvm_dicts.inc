@@ -308,16 +308,16 @@ static std::string csec_emit_assert_statement(const char* tokens, int cursor, in
     if (arguments.empty()) return "";
     const std::string seed = std::to_string(cursor);
     std::string output = csec_emit_i1_expression(tokens, arguments[0].first, arguments[0].second, "%assert.cond." + seed);
-    output += "  br i1 %assert.cond." + seed + ", label %assert.ok." + seed + ", label %assert.fail." + seed + "\n";
-    output += "assert.fail." + seed + ":\n";
+    output += "  br i1 %assert.cond." + seed + ", label %assert.ok." + seed + ", label %assert.fail." + seed + "\n";
+    output += "assert.fail." + seed + ":\n";
     std::string message = "null";
     if (arguments.size() >= 2) {
         output += csec_emit_ptr_expression(tokens, arguments[1].first, arguments[1].second, "%assert.message." + seed);
         message = "%assert.message." + seed;
     }
-    output += "  call void @csec_assert_fail(ptr null, ptr " + message + ")\n";
-    output += "  br label %assert.ok." + seed + "\n";
-    output += "assert.ok." + seed + ":\n";
+    output += "  call void @csec_assert_fail(ptr null, ptr " + message + ")\n";
+    output += "  br label %assert.ok." + seed + "\n";
+    output += "assert.ok." + seed + ":\n";
     return output;
 }
 
