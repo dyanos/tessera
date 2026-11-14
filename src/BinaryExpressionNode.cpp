@@ -1082,6 +1082,15 @@ llvm::Value* BinaryExpressionNode::codegen() {
         if (op == "|") return cg.builder.CreateOr(leftValue, rightValue, "ortmp");
         return cg.builder.CreateXor(leftValue, rightValue, "xortmp");
     }
+    else if ((op == "<<" || op == ">>") && leftTypeName != rightTypeName &&
+             left->getType()->isIntegerTy() && right->getType()->isIntegerTy() &&
+             leftValue->getType()->isIntegerTy() && rightValue->getType()->isIntegerTy()) {
+        // `longValue >> intCount`: the shift count takes the width of the shifted value, which is
+        // also the result type.
+        rightValue = cg.builder.CreateIntCast(rightValue, leftValue->getType(), false, "shift.count");
+        if (op == "<<") return cg.builder.CreateShl(leftValue, rightValue, "shltmp");
+        return cg.builder.CreateAShr(leftValue, rightValue, "ashrtmp");
+    }
     else if (op == "&") {
         if (leftTypeName != rightTypeName || !left->getType()->isIntegerTy()) {
             std::cerr << "Type error: Operator '" << op << "' requires same integer operand types" << std::endl;

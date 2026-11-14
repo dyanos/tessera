@@ -105,6 +105,7 @@ attribute    = '[@' ident [ '(' [ arg-list ] ')' ] ']' ;     (* [@DllImport("m",
 function     = [ 'async' ] [ 'unsafe' ] [ 'inline' ] [ 'constexpr' ]
                'def' fn-name '(' [ params ] ')' [ ':' type ] fn-body ;
 fn-name      = member-name | 'operator' operator ;        (* a keyword may name a method: def filter(...) *)
+                                                            (* operator - / + / ! / ~ with no parameters overloads the unary form *)
 member-name  = identifier | keyword ;                      (* after '.' or 'def' only *)
 fn-body      = block | '=' expr ;                            (* block form or expression body *)
 params       = param { ',' param } ;

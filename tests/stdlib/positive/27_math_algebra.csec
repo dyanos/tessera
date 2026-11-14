@@ -1,0 +1,52 @@
+import std.math.algebra
+// Rings and fields with operator overloading: Z/nZ, GF(p), GF(p)[x], GF(p^k).
+def main(): Int {
+    // The prime field GF(7).
+    val F = primeField(7);
+    val a = F.of(3);
+    val b = F.of(5);
+    if (a * b + 1 != 2) { return 1; }
+    if (a / b != F.of(2) or a ** -1 != 5 or -a != 4) { return 2; }
+    if ((a ** 6) != F.one()) { return 3; }                   // Fermat: a^(p-1) = 1
+    if (F.generator().order() != 6 or F.of(2).order() != 3) { return 4; }
+    if (F.of(2).sqrt() != 3 or F.of(3).isSquare()) { return 5; }
+    if (a.toString() != "3 (mod 7)") { return 6; }
+
+    // The ring Z/12Z: not a field, 4 is a zero divisor, 5 is a unit.
+    val R = integersMod(12);
+    if (R.isField() or R.unitCount() != 4) { return 7; }
+    if (R.of(5) * R.of(7) != 11 or R.of(5).inverse() != 5) { return 8; }
+    if (R.of(4).isUnit() or !(R.of(4) * R.of(3)).isZero()) { return 9; }
+
+    // The polynomial ring GF(7)[x].
+    val x = F.x();
+    val f = x ** 2 + x * 3 + 1;
+    val g = x + 1;
+    if (f.toString() != "x^2 + 3x + 1" or f.degree() != 2) { return 10; }
+    if ((f / g) * g + f % g != f) { return 11; }               // Euclidean division
+    if (!f.isIrreducible() or (x ** 2 - 1).isIrreducible()) { return 12; }
+    if (f.eval(a) != 5 or f.derivative() != x * 2 + 3) { return 13; }
+    if ((x ** 2 - 1).gcd(x ** 2 + x * 5 + 4) != x + 1) { return 14; }
+
+    // The finite field GF(2^8) (AES's x^8 + x^4 + x^3 + x + 1 is the smallest modulus).
+    val K = galoisField(2, 8);
+    if (K.modulus().toString() != "x^8 + x^4 + x^3 + x + 1" or K.order() != 256) { return 15; }
+    val y = K.generator();
+    val h = y ** 7 + y + 1;
+    if (h * h.inverse() != K.one() or h / h != 1) { return 16; }
+    if (h + h != K.zero()) { return 17; }                       // characteristic 2
+    if (K.primitiveElement().order() != 255) { return 18; }
+    if (y ** 255 != 1 or y ** 256 != y) { return 19; }
+
+    // GF(9) from a chosen irreducible polynomial over GF(3).
+    val t = primeField(3).x();
+    val L = galoisField(t ** 2 + 1);
+    val i = L.generator();                                       // i^2 = -1
+    if (i * i != -L.one() or (i + 1) ** 8 != 1) { return 20; }
+
+    // Exact arithmetic near 2^63.
+    val P = primeField(9223372036854775783);
+    val big = P.of(9223372036854775000);
+    if (big * big != 613089) { return 21; }
+    return 0;
+}

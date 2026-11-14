@@ -1,0 +1,304 @@
+// std.math.algebra -- rings and fields: Z/nZ, prime fields GF(p), polynomial rings GF(p)[x], and
+// finite fields GF(p^k), all with operator overloading.
+//
+//     import std.math.algebra
+//
+//     val F = primeField(7);             // GF(7); primeField(8) stops with "AlgebraError: ..."
+//     val a = F.of(3);
+//     val b = F.of(5);
+//     val c = a * b + 1;                 // 2 (mod 7)
+//     val d = a / b;                     // division by the inverse of b
+//     val e = a ** -1;                   // 5 (mod 7)
+//
+//     val R = integersMod(12);           // the ring Z/12Z (any modulus n >= 1)
+//     val u = R.of(5) * R.of(7);         // 11 (mod 12); R.of(4).inverse() fails: 4 is not a unit
+//
+//     val x = F.x();                     // the polynomial ring GF(7)[x]
+//     val f = x ** 2 + x * 3 + 1;        // x^2 + 3x + 1
+//     val q = f / (x + 1);               // Euclidean division (also %)
+//
+//     val K = galoisField(2, 8);         // GF(2^8) = GF(2)[x]/(m) with the smallest irreducible m
+//     val g = K.generator();             // the class of x, written `a` when printed
+//     val h = g ** 7 + g + 1;            // field arithmetic with + - * / ** and unary -
+//
+// Elements remember their ring: combining elements of different rings (mod 7 with mod 11, GF(2^8)
+// with GF(2^4), ...) stops the program with an AlgebraError, as do division by a non-unit and a
+// field built on a non-prime characteristic. Moduli up to 2^63 are exact (128-bit products).
+// GF(p^k) needs p^(k+1) < 2^62. Polynomials are runtime handles that are never freed.
+
+external def csec_alg_mod(a: Long, n: Long): Long;
+external def csec_alg_add(a: Long, b: Long, n: Long): Long;
+external def csec_alg_sub(a: Long, b: Long, n: Long): Long;
+external def csec_alg_mul(a: Long, b: Long, n: Long): Long;
+external def csec_alg_pow(a: Long, e: Long, n: Long): Long;
+external def csec_alg_inv(a: Long, n: Long): Long;
+external def csec_alg_is_unit(a: Long, n: Long): Int;
+external def csec_alg_gcd(a: Long, b: Long): Long;
+external def csec_alg_is_prime(n: Long): Int;
+external def csec_alg_euler_phi(n: Long): Long;
+external def csec_alg_order(a: Long, n: Long): Long;
+external def csec_alg_legendre(a: Long, p: Long): Long;
+external def csec_alg_sqrt(a: Long, p: Long): Long;
+external def csec_alg_is_square(a: Long, p: Long): Int;
+external def csec_alg_primitive_root(p: Long): Long;
+external def csec_alg_require_modulus(n: Long): Long;
+external def csec_alg_require_prime(p: Long): Long;
+external def csec_alg_require_same(a: Long, b: Long): Long;
+external def csec_alg_residue_to_string(v: Long, n: Long): String;
+external def csec_poly_constant(c: Long, p: Long): Long;
+external def csec_poly_monomial(c: Long, k: Long, p: Long): Long;
+external def csec_poly_characteristic(h: Long): Long;
+external def csec_poly_add(a: Long, b: Long): Long;
+external def csec_poly_sub(a: Long, b: Long): Long;
+external def csec_poly_mul(a: Long, b: Long): Long;
+external def csec_poly_scale(a: Long, k: Long): Long;
+external def csec_poly_div(a: Long, b: Long): Long;
+external def csec_poly_rem(a: Long, b: Long): Long;
+external def csec_poly_pow(a: Long, e: Long): Long;
+external def csec_poly_gcd(a: Long, b: Long): Long;
+external def csec_poly_derivative(a: Long): Long;
+external def csec_poly_monic(a: Long): Long;
+external def csec_poly_degree(a: Long): Int;
+external def csec_poly_coeff(a: Long, i: Long): Long;
+external def csec_poly_eval(a: Long, v: Long): Long;
+external def csec_poly_equals(a: Long, b: Long): Int;
+external def csec_poly_is_irreducible(a: Long): Int;
+external def csec_poly_to_string(a: Long): String;
+external def csec_gf_find_modulus(p: Long, k: Long): Long;
+external def csec_gf_modulus_from_poly(h: Long): Long;
+external def csec_gf_degree(m: Long, p: Long): Long;
+external def csec_gf_order(m: Long, p: Long): Long;
+external def csec_gf_from_int(v: Long, p: Long): Long;
+external def csec_gf_add(a: Long, b: Long, p: Long): Long;
+external def csec_gf_sub(a: Long, b: Long, p: Long): Long;
+external def csec_gf_mul(a: Long, b: Long, p: Long, m: Long): Long;
+external def csec_gf_pow(a: Long, e: Long, p: Long, m: Long): Long;
+external def csec_gf_inv(a: Long, p: Long, m: Long): Long;
+external def csec_gf_from_poly(h: Long, p: Long, m: Long): Long;
+external def csec_gf_to_poly(a: Long, p: Long): Long;
+external def csec_gf_element_order(a: Long, p: Long, m: Long): Long;
+external def csec_gf_primitive_element(p: Long, m: Long): Long;
+external def csec_gf_to_string(a: Long, p: Long): String;
+
+// ---------------------------------------------------------------------------------------------
+// Number theory helpers
+// ---------------------------------------------------------------------------------------------
+
+// Deterministic for every 64-bit n.
+def isPrimeLong(n: Long): Boolean = csec_alg_is_prime(n) != 0
+def gcdLong(a: Long, b: Long): Long = csec_alg_gcd(a, b)
+// Euler's totient: the number of units of Z/nZ.
+def eulerPhi(n: Long): Long = csec_alg_euler_phi(n)
+
+// ---------------------------------------------------------------------------------------------
+// Z/nZ: the ring of integers modulo n
+// ---------------------------------------------------------------------------------------------
+
+// An element of Z/nZ; `r` is the residue in [0, n).
+struct Zmod(r: Long, n: Long) {
+    def value(): Long = r
+    def modulus(): Long = n
+    def isZero(): Boolean = r == 0
+    def isUnit(): Boolean = csec_alg_is_unit(r, n) != 0
+    // The multiplicative inverse (AlgebraError when r is not a unit).
+    def inverse(): Zmod = new Zmod(csec_alg_inv(r, n), n)
+    // The multiplicative order of a unit.
+    def order(): Long = csec_alg_order(r, n)
+    def toString(): String = csec_alg_residue_to_string(r, n)
+
+    def operator +(o: Zmod): Zmod = new Zmod(csec_alg_add(r, o.r, csec_alg_require_same(n, o.n)), n)
+    def operator -(o: Zmod): Zmod = new Zmod(csec_alg_sub(r, o.r, csec_alg_require_same(n, o.n)), n)
+    def operator *(o: Zmod): Zmod = new Zmod(csec_alg_mul(r, o.r, csec_alg_require_same(n, o.n)), n)
+    // Multiplication by the inverse of o (AlgebraError when o is not a unit).
+    def operator /(o: Zmod): Zmod = new Zmod(csec_alg_mul(r, csec_alg_inv(o.r, csec_alg_require_same(n, o.n)), n), n)
+    def operator +(k: Long): Zmod = new Zmod(csec_alg_add(r, k, n), n)
+    def operator -(k: Long): Zmod = new Zmod(csec_alg_sub(r, k, n), n)
+    def operator *(k: Long): Zmod = new Zmod(csec_alg_mul(r, k, n), n)
+    def operator /(k: Long): Zmod = new Zmod(csec_alg_mul(r, csec_alg_inv(k, n), n), n)
+    def operator -(): Zmod = new Zmod(csec_alg_sub(0, r, n), n)
+    // A negative exponent uses the inverse.
+    def operator **(e: Long): Zmod = new Zmod(csec_alg_pow(r, e, n), n)
+    def operator ==(o: Zmod): Boolean = r == o.r and n == o.n
+    def operator !=(o: Zmod): Boolean = r != o.r or n != o.n
+    def operator ==(k: Long): Boolean = r == csec_alg_mod(k, n)
+    def operator !=(k: Long): Boolean = r != csec_alg_mod(k, n)
+}
+
+// The ring Z/nZ itself.
+struct IntegersMod(n: Long) {
+    def of(v: Long): Zmod = new Zmod(csec_alg_mod(v, n), n)
+    def zero(): Zmod = new Zmod(0, n)
+    def one(): Zmod = new Zmod(csec_alg_mod(1, n), n)
+    def modulus(): Long = n
+    // The number of elements.
+    def order(): Long = n
+    // The number of units (Euler's totient of n).
+    def unitCount(): Long = csec_alg_euler_phi(n)
+    // Z/nZ is a field exactly when n is prime.
+    def isField(): Boolean = csec_alg_is_prime(n) != 0
+}
+
+def integersMod(n: Long): IntegersMod = new IntegersMod(csec_alg_require_modulus(n))
+def zmod(v: Long, n: Long): Zmod = new Zmod(csec_alg_mod(v, csec_alg_require_modulus(n)), n)
+
+// ---------------------------------------------------------------------------------------------
+// GF(p): the prime field of integers modulo a prime p
+// ---------------------------------------------------------------------------------------------
+
+// An element of GF(p); `r` is the residue in [0, p).
+struct Fp(r: Long, p: Long) {
+    def value(): Long = r
+    def characteristic(): Long = p
+    def isZero(): Boolean = r == 0
+    // The multiplicative inverse (AlgebraError for zero).
+    def inverse(): Fp = new Fp(csec_alg_inv(r, p), p)
+    // The multiplicative order of a nonzero element.
+    def order(): Long = csec_alg_order(r, p)
+    // Legendre symbol: 1 for a nonzero square, -1 for a non-square, 0 for zero.
+    def legendre(): Long = csec_alg_legendre(r, p)
+    def isSquare(): Boolean = csec_alg_is_square(r, p) != 0
+    // The smaller square root (AlgebraError for a non-square).
+    def sqrt(): Fp = new Fp(csec_alg_sqrt(r, p), p)
+    def toString(): String = csec_alg_residue_to_string(r, p)
+
+    def operator +(o: Fp): Fp = new Fp(csec_alg_add(r, o.r, csec_alg_require_same(p, o.p)), p)
+    def operator -(o: Fp): Fp = new Fp(csec_alg_sub(r, o.r, csec_alg_require_same(p, o.p)), p)
+    def operator *(o: Fp): Fp = new Fp(csec_alg_mul(r, o.r, csec_alg_require_same(p, o.p)), p)
+    def operator /(o: Fp): Fp = new Fp(csec_alg_mul(r, csec_alg_inv(o.r, csec_alg_require_same(p, o.p)), p), p)
+    def operator +(k: Long): Fp = new Fp(csec_alg_add(r, k, p), p)
+    def operator -(k: Long): Fp = new Fp(csec_alg_sub(r, k, p), p)
+    def operator *(k: Long): Fp = new Fp(csec_alg_mul(r, k, p), p)
+    def operator /(k: Long): Fp = new Fp(csec_alg_mul(r, csec_alg_inv(k, p), p), p)
+    def operator -(): Fp = new Fp(csec_alg_sub(0, r, p), p)
+    def operator **(e: Long): Fp = new Fp(csec_alg_pow(r, e, p), p)
+    def operator ==(o: Fp): Boolean = r == o.r and p == o.p
+    def operator !=(o: Fp): Boolean = r != o.r or p != o.p
+    def operator ==(k: Long): Boolean = r == csec_alg_mod(k, p)
+    def operator !=(k: Long): Boolean = r != csec_alg_mod(k, p)
+    // `a * f` for a polynomial f over the same field.
+    def operator *(f: PolyFp): PolyFp = new PolyFp(csec_poly_scale(f.h, r))
+}
+
+// The prime field GF(p) itself.
+struct PrimeField(p: Long) {
+    def of(v: Long): Fp = new Fp(csec_alg_mod(v, p), p)
+    def zero(): Fp = new Fp(0, p)
+    def one(): Fp = new Fp(csec_alg_mod(1, p), p)
+    def characteristic(): Long = p
+    // The number of elements.
+    def order(): Long = p
+    // A generator of the multiplicative group (a primitive root modulo p).
+    def generator(): Fp = new Fp(csec_alg_primitive_root(p), p)
+    // The variable x of the polynomial ring GF(p)[x].
+    def x(): PolyFp = new PolyFp(csec_poly_monomial(1, 1, p))
+    // The constant polynomial c.
+    def constant(c: Long): PolyFp = new PolyFp(csec_poly_constant(c, p))
+    // c * x^k
+    def monomial(c: Long, k: Long): PolyFp = new PolyFp(csec_poly_monomial(c, k, p))
+}
+
+// GF(p) for a prime p (AlgebraError otherwise).
+def primeField(p: Long): PrimeField = new PrimeField(csec_alg_require_prime(p))
+
+// ---------------------------------------------------------------------------------------------
+// GF(p)[x]: polynomials over a prime field (a Euclidean domain)
+// ---------------------------------------------------------------------------------------------
+
+struct PolyFp(h: Long) {
+    def handle(): Long = h
+    def characteristic(): Long = csec_poly_characteristic(h)
+    // -1 for the zero polynomial.
+    def degree(): Int = csec_poly_degree(h)
+    def isZero(): Boolean = csec_poly_degree(h) < 0
+    // The coefficient of x^i.
+    def coeff(i: Long): Fp = new Fp(csec_poly_coeff(h, i), csec_poly_characteristic(h))
+    def leading(): Fp = new Fp(csec_poly_coeff(h, csec_poly_degree(h)), csec_poly_characteristic(h))
+    def eval(v: Fp): Fp = new Fp(csec_poly_eval(h, v.r), csec_alg_require_same(csec_poly_characteristic(h), v.p))
+    def eval(v: Long): Fp = new Fp(csec_poly_eval(h, v), csec_poly_characteristic(h))
+    def derivative(): PolyFp = new PolyFp(csec_poly_derivative(h))
+    // The polynomial divided by its leading coefficient.
+    def monic(): PolyFp = new PolyFp(csec_poly_monic(h))
+    // The monic greatest common divisor.
+    def gcd(o: PolyFp): PolyFp = new PolyFp(csec_poly_gcd(h, o.h))
+    def isIrreducible(): Boolean = csec_poly_is_irreducible(h) != 0
+    def toString(): String = csec_poly_to_string(h)
+
+    def operator +(o: PolyFp): PolyFp = new PolyFp(csec_poly_add(h, o.h))
+    def operator -(o: PolyFp): PolyFp = new PolyFp(csec_poly_sub(h, o.h))
+    def operator *(o: PolyFp): PolyFp = new PolyFp(csec_poly_mul(h, o.h))
+    // Euclidean quotient and remainder: f == (f / g) * g + f % g.
+    def operator /(o: PolyFp): PolyFp = new PolyFp(csec_poly_div(h, o.h))
+    def operator %(o: PolyFp): PolyFp = new PolyFp(csec_poly_rem(h, o.h))
+    def operator +(k: Long): PolyFp = new PolyFp(csec_poly_add(h, csec_poly_constant(k, csec_poly_characteristic(h))))
+    def operator -(k: Long): PolyFp = new PolyFp(csec_poly_sub(h, csec_poly_constant(k, csec_poly_characteristic(h))))
+    def operator *(k: Long): PolyFp = new PolyFp(csec_poly_scale(h, k))
+    def operator +(c: Fp): PolyFp = new PolyFp(csec_poly_add(h, csec_poly_constant(c.r, c.p)))
+    def operator -(c: Fp): PolyFp = new PolyFp(csec_poly_sub(h, csec_poly_constant(c.r, c.p)))
+    def operator *(c: Fp): PolyFp = new PolyFp(csec_poly_mul(h, csec_poly_constant(c.r, c.p)))
+    def operator -(): PolyFp = new PolyFp(csec_poly_scale(h, -1))
+    def operator **(e: Long): PolyFp = new PolyFp(csec_poly_pow(h, e))
+    def operator ==(o: PolyFp): Boolean = csec_poly_equals(h, o.h) != 0
+    def operator !=(o: PolyFp): Boolean = csec_poly_equals(h, o.h) == 0
+}
+
+// ---------------------------------------------------------------------------------------------
+// GF(p^k): finite fields GF(p)[x]/(m) for an irreducible m of degree k
+// ---------------------------------------------------------------------------------------------
+
+// An element of GF(p^k): `v` packs the coefficients of its polynomial representative in base p;
+// `m` is the field's packed monic modulus.
+struct GFq(v: Long, p: Long, m: Long) {
+    def packed(): Long = v
+    def characteristic(): Long = p
+    def isZero(): Boolean = v == 0
+    def inverse(): GFq = new GFq(csec_gf_inv(v, p, m), p, m)
+    // The multiplicative order of a nonzero element.
+    def order(): Long = csec_gf_element_order(v, p, m)
+    // The polynomial representative (degree < k).
+    def poly(): PolyFp = new PolyFp(csec_gf_to_poly(v, p))
+    // Written in the generator `a`, e.g. "a^2 + a + 1".
+    def toString(): String = csec_gf_to_string(v, p)
+
+    def operator +(o: GFq): GFq = new GFq(csec_gf_add(v, o.v, p), p, csec_alg_require_same(m, o.m))
+    def operator -(o: GFq): GFq = new GFq(csec_gf_sub(v, o.v, p), p, csec_alg_require_same(m, o.m))
+    def operator *(o: GFq): GFq = new GFq(csec_gf_mul(v, o.v, p, csec_alg_require_same(m, o.m)), p, m)
+    def operator /(o: GFq): GFq = new GFq(csec_gf_mul(v, csec_gf_inv(o.v, p, csec_alg_require_same(m, o.m)), p, m), p, m)
+    def operator +(k: Long): GFq = new GFq(csec_gf_add(v, csec_gf_from_int(k, p), p), p, m)
+    def operator -(k: Long): GFq = new GFq(csec_gf_sub(v, csec_gf_from_int(k, p), p), p, m)
+    def operator *(k: Long): GFq = new GFq(csec_gf_mul(v, csec_gf_from_int(k, p), p, m), p, m)
+    def operator -(): GFq = new GFq(csec_gf_sub(0, v, p), p, m)
+    def operator **(e: Long): GFq = new GFq(csec_gf_pow(v, e, p, m), p, m)
+    def operator ==(o: GFq): Boolean = v == o.v and m == o.m
+    def operator !=(o: GFq): Boolean = v != o.v or m != o.m
+    def operator ==(k: Long): Boolean = v == csec_gf_from_int(k, p)
+    def operator !=(k: Long): Boolean = v != csec_gf_from_int(k, p)
+}
+
+// The field GF(p^k) = GF(p)[x]/(m).
+struct GaloisField(p: Long, m: Long) {
+    def characteristic(): Long = p
+    // k, the degree over GF(p).
+    def degree(): Long = csec_gf_degree(m, p)
+    // The number of elements, p^k.
+    def order(): Long = csec_gf_order(m, p)
+    // The defining irreducible polynomial m.
+    def modulus(): PolyFp = new PolyFp(csec_gf_to_poly(m, p))
+    def zero(): GFq = new GFq(0, p, m)
+    def one(): GFq = new GFq(csec_gf_from_int(1, p), p, m)
+    // The constant c (an element of the prime subfield).
+    def of(c: Long): GFq = new GFq(csec_gf_from_int(c, p), p, m)
+    // The class of the polynomial f (reduced modulo m).
+    def of(f: PolyFp): GFq = new GFq(csec_gf_from_poly(f.h, p, m), p, m)
+    // The class `a` of x; it generates the field over GF(p).
+    def generator(): GFq = new GFq(csec_gf_from_poly(csec_poly_monomial(1, 1, p), p, m), p, m)
+    // A generator of the multiplicative group (order p^k - 1).
+    def primitiveElement(): GFq = new GFq(csec_gf_primitive_element(p, m), p, m)
+    // The element whose packed base-p digits are `packed` (0 <= packed < p^k).
+    def element(packed: Long): GFq = new GFq(csec_gf_from_poly(csec_gf_to_poly(packed, p), p, m), p, m)
+}
+
+// GF(p^k) using the smallest monic irreducible polynomial of degree k over GF(p).
+def galoisField(p: Long, k: Long): GaloisField = new GaloisField(p, csec_gf_find_modulus(p, k))
+// GF(p^k) = GF(p)[x]/(modulus) for a chosen irreducible polynomial (AlgebraError otherwise).
+def galoisField(modulus: PolyFp): GaloisField =
+    new GaloisField(csec_poly_characteristic(modulus.h), csec_gf_modulus_from_poly(modulus.h))

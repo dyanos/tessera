@@ -1,0 +1,17 @@
+// A struct can overload the unary operators (`def operator -(): T`) next to the binary ones; this
+// used to crash code generation.
+struct Money(cents: Long) {
+    def operator -(): Money = new Money(0 - cents)
+    def operator -(o: Money): Money = new Money(cents - o.cents)
+    def operator !(): Boolean = cents == 0
+    def value(): Long = cents
+}
+
+def main(): Int {
+    val a = new Money(250);
+    val b = -a;
+    val c = -(a - new Money(50));
+    if (b.value() != -250 or c.value() != -200) { return 1; }
+    if (!(a - a) == false) { return 2; }
+    return 0;
+}

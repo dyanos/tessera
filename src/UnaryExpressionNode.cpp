@@ -13,12 +13,56 @@ void UnaryExpressionNode::accept(ASTVisitor& visitor)
 	visitor.visit(*this);
 }
 
+namespace {
+// `def operator -(): T` (also `+`, `!`, `~`) on a class or value struct: the zero-argument overload.
+Symbol* findUnaryOperator(const std::string& op, ASTNode* operand) {
+	auto& cg = CodeGenerator::getInstance();
+	auto operandType = operand ? operand->getType() : nullptr;
+	if (!operandType || operandType->getKind() != Type::Kind::CLASS) {
+		return nullptr;
+	}
+	auto* classSymbol = cg.symbolTable.lookupClass(operandType->getName());
+	if (!classSymbol) {
+		return nullptr;
+	}
+	std::vector<std::unique_ptr<Type>> noArguments;
+	auto* method = cg.symbolTable.lookupMethod(*classSymbol, "operator" + op, noArguments);
+	auto* funcType = method ? dynamic_cast<FunctionType*>(method->type.get()) : nullptr;
+	if (!funcType || funcType->parameterTypes.size() != 1) {
+		return nullptr;  // only a binary overload of the same operator
+	}
+	return method;
+}
+}
+
 llvm::Value* UnaryExpressionNode::codegen()
 {
 	llvm::Value* value = expression->codegen();
 	if (!value) {
 		std::cerr << "Error: Unary expression failed" << std::endl;
 		return nullptr;
+	}
+
+	if (op == "-" || op == "+" || op == "!" || op == "~") {
+		if (Symbol* method = findUnaryOperator(op, expression.get())) {
+			auto& cg = CodeGenerator::getInstance();
+			auto* function = llvm::dyn_cast_or_null<llvm::Function>(method->value);
+			if (!function || function->arg_size() != 1) {
+				std::cerr << "Error: Invalid unary operator overload 'operator" << op << "'" << std::endl;
+				return nullptr;
+			}
+			// `this` is passed by address; a struct operand may arrive as a value (a call result).
+			llvm::Type* selfType = function->getFunctionType()->getParamType(0);
+			if (selfType->isPointerTy() && value->getType()->isStructTy()) {
+				llvm::Value* slot = cg.builder.CreateAlloca(value->getType(), nullptr, "unary.self");
+				cg.builder.CreateStore(value, slot);
+				value = slot;
+			}
+			else if (selfType->isStructTy() && value->getType()->isPointerTy()) {
+				value = cg.builder.CreateLoad(selfType, value, "unary.self");
+			}
+			return cg.builder.CreateCall(function, {value}, function->getReturnType()->isVoidTy() ? "" : "unary.call");
+		}
 	}
 
 	if (op == "-") {
@@ -145,6 +189,12 @@ std::unique_ptr<Type> UnaryExpressionNode::getType() {
     auto exprType = expression ? expression->getType() : std::make_unique<UnknownType>();
     if (!exprType) {
         return std::make_unique<UnknownType>();
+    }
+    if (op == "-" || op == "+" || op == "!" || op == "~") {
+        if (Symbol* method = findUnaryOperator(op, expression.get())) {
+            auto* funcType = dynamic_cast<FunctionType*>(method->type.get());
+            if (funcType && funcType->returnType) return funcType->returnType->clone();
+        }
     }
     if (op == "!") {
         return std::make_unique<BasicType>("Boolean");
