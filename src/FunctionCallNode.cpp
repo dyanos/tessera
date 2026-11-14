@@ -1,4 +1,6 @@
 #include "codegen.h"
+#include "source_map.h"
+#include "verifier.h"
 #include "dict_support.h"
 
 #include "FunctionCallNode.h"
@@ -2117,6 +2119,44 @@ llvm::Value* FunctionCallNode::codegen() {
         return block;
     }
 
+    if (functionName == "assert" && !argValues.empty()) {
+        // assert(condition[, message]): checked statically by --verify; at run time a false condition
+        // prints "AssertionError: file:line: condition [message]" and exits with status 1.
+        auto* i8PtrTy = llvm::PointerType::getUnqual(cg.context);
+        llvm::Value* condition = argValues[0];
+        if (!condition->getType()->isIntegerTy(1)) {
+            condition = condition->getType()->isIntegerTy()
+                ? cg.builder.CreateICmpNE(condition, llvm::ConstantInt::get(condition->getType(), 0), "assert.cond")
+                : nullptr;
+        }
+        if (!condition) {
+            std::cerr << "Type error: assert() needs a Bool condition" << std::endl;
+            return nullptr;
+        }
+        const SourceLocation location = sourceLocationOf(line);
+        std::string where = location.file.empty() ? "<input>" : location.file;
+        const size_t slash = where.find_last_of("/\\");
+        if (slash != std::string::npos) where = where.substr(slash + 1);
+        where += ":" + std::to_string(location.line);
+        std::string text = verifierExpressionText(arguments[0].get());
+        llvm::Value* message = cg.builder.CreateGlobalString(text, "assert.text");
+        if (arguments.size() >= 2 && argValues[1]->getType()->isPointerTy()) {
+            message = cg.builder.CreateCall(
+                getOrCreateRuntimeFunction(cg, "csec_string_concat", i8PtrTy, {i8PtrTy, i8PtrTy}),
+                {cg.builder.CreateGlobalString(text + ": ", "assert.prefix"), argValues[1]}, "assert.message");
+        }
+        llvm::Function* function = cg.builder.GetInsertBlock()->getParent();
+        auto* failBB = llvm::BasicBlock::Create(cg.context, "assert.fail", function);
+        auto* okBB = llvm::BasicBlock::Create(cg.context, "assert.ok", function);
+        cg.builder.CreateCondBr(condition, okBB, failBB);
+        cg.builder.SetInsertPoint(failBB);
+        cg.builder.CreateCall(
+            getOrCreateRuntimeFunction(cg, "csec_assert_fail", llvm::Type::getVoidTy(cg.context), {i8PtrTy, i8PtrTy}),
+            {cg.builder.CreateGlobalString(where, "assert.where"), message});
+        cg.builder.CreateBr(okBB);
+        cg.builder.SetInsertPoint(okBB);
+        return nullptr;
+    }
     if (isNativeIOFunction(functionName)) {
         return codegenNativeIOCall(functionName, argValues, argTypes);
     }
@@ -2471,7 +2511,7 @@ std::unique_ptr<Type> FunctionCallNode::getType() {
     if (type) return type->clone();
 
     // free(x) is a statement-like builtin that releases a heap allocation; it yields no value.
-    if (functionName == "free") {
+    if (functionName == "free" || functionName == "assert") {
         return std::make_unique<BasicType>("Unit");
     }
     if (functionName == "__token_matches") {

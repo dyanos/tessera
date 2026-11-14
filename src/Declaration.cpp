@@ -135,6 +135,7 @@ std::unique_ptr<VariableDeclarationNode> Parser::parseVariableDeclaration(bool i
 }
 
 std::unique_ptr<FunctionDeclarationNode> Parser::parseFunctionDeclaration(bool isExternal) {
+    const int declarationLine = previous().line;
     std::string functionName;
     if (match(TokenType::KEYWORD, "operator")) {
         expect(TokenType::OPERATOR);
@@ -160,6 +161,10 @@ std::unique_ptr<FunctionDeclarationNode> Parser::parseFunctionDeclaration(bool i
 		returnType = std::make_unique<BasicType>("Unit");
 	}
 
+	// `requires` / `ensures` clauses sit between the signature and the body.
+	auto contractHolder = std::make_unique<BlockNode>();
+	parseContractClauses(*contractHolder, true);
+
 	std::unique_ptr<BlockNode> body = nullptr;
 	if (isExternal == false) {
 		if (match(TokenType::OPERATOR, "{")) {
@@ -182,7 +187,10 @@ std::unique_ptr<FunctionDeclarationNode> Parser::parseFunctionDeclaration(bool i
 		}
 	}
 
-	return std::make_unique<FunctionDeclarationNode>(functionName, parameters, std::move(returnType), std::move(body));
+	auto function = std::make_unique<FunctionDeclarationNode>(functionName, parameters, std::move(returnType), std::move(body));
+	function->line = declarationLine;
+	function->contracts = contractHolder->contracts;
+	return function;
 }
 
 std::unique_ptr<ASTNode> Parser::parseObjectDeclaration(bool isExternal) {

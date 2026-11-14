@@ -1,0 +1,7 @@
+﻿verified: clamp (6 checks)
+verified: safeDiv (3 checks)
+verified: midpoint (5 checks)
+verified: sumTo (9 checks)
+verified: countEven (13 checks)
+verified: main (5 checks)
+verify: 6 function(s), 41 check(s), 0 error(s), 0 warning(s)

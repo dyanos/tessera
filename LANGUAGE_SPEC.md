@@ -509,6 +509,122 @@ val h = (g ** 7 + g + 1).inverse();
 - The structures are values: there is no type-level parameter, so `GF(7)` and `GF(11)` elements
   share the type `Fp` and are told apart at run time.
 
+## 12. Contracts and static verification (`csec++ --verify`)
+
+Functions and loops may carry specifications that `csec++ --verify` proves with the Z3 SMT solver
+(an external library; see "Building with Z3" below). Specifications are never compiled: `requires`,
+`ensures`, `invariant`, and `decreases` only affect `--verify`. `assert` is both proved by `--verify`
+and checked at run time.
+
+```
+function   = ... 'def' fn-name '(' [ params ] ')' [ ':' type ] { contract } fn-body ;
+contract   = 'requires' expr | 'ensures' expr ;
+while-stmt = 'while' '(' expr ')' { loop-spec } block ;
+for-stmt   = 'for' '(' identifier '<-' iterable ')' { loop-spec } block ;
+loop-spec  = 'invariant' expr | 'decreases' expr ;
+assert     = 'assert' '(' expr [ ',' expr ] ')' ;
+```
+
+`requires`, `ensures`, `invariant`, `decreases`, and `result` are contextual words: they keep
+working as ordinary identifiers elsewhere. A clause expression ends where the body starts (`{`, or
+`=` for an expression body), so `def twice(x: Int): Int requires x < 1000 = x * 2` is valid.
+
+```csec
+def safeDiv(a: Int, b: Int): Int
+    requires b != 0 and !(a == -2147483648 and b == -1)
+    ensures result * b + a % b == a
+{
+    return a / b;
+}
+
+def sumTo(n: Int): Int
+    requires 0 <= n and n <= 10000
+    ensures result == n * (n + 1) / 2
+{
+    var s = 0;
+    var i = 0;
+    while (i < n)
+        invariant 0 <= i and i <= n
+        invariant s == i * (i + 1) / 2
+        decreases n - i
+    {
+        i = i + 1;
+        s = s + i;
+    }
+    return s;
+}
+```
+
+### 12.1 What is checked
+
+For every function defined in the input file (imported modules contribute only their contracts):
+
+- `requires` clauses must be satisfiable together (otherwise the function can never be called);
+  they are assumed in the body.
+- every `return` (and the end of a `Unit` function) satisfies each `ensures`; `result` is the
+  returned value;
+- every `assert(c)` holds where it is reached; afterwards `c` is assumed;
+- every call to a function with contracts satisfies the callee's `requires`; the result is known
+  only through the callee's `ensures` (calls are verified modularly, so recursion needs no
+  special handling); a callee without contracts returns an unknown value;
+- integer division and remainder: the divisor is not zero, and `MIN / -1` does not occur;
+- shifts: the amount is in `[0, width)`;
+- integer arithmetic does not overflow its type (`Int` is 32-bit, `Long` 64-bit, `Short` 16-bit,
+  `Byte`/`Char` 8-bit), and values are not narrowed to a type that cannot hold them;
+- loops: each `invariant` holds on entry and is preserved by an iteration that starts from an
+  arbitrary state satisfying the invariants and the loop condition; after the loop the invariants
+  hold and the condition is false. A `decreases` measure is non-negative at the start of an
+  iteration and strictly smaller at its end, so the loop terminates. A range loop
+  `for (i <- a to b)` also has the implicit invariant `i >= a`; a loop without invariants is still
+  checked, but nothing is known afterwards about the variables it assigns (reported as a note);
+- `if` conditions that are always true or always false at that point are reported as warnings.
+
+A failed check is reported with the file and line and, when the solver found one, a
+counterexample: the parameters' values and the local variables at that point:
+
+```
+02_contract_errors.csec:12: error: 'a + b' may overflow Int
+    counterexample: a = 2147483647, b = 1
+```
+
+`csec++ --verify` exits with status 1 when there is an error, 0 otherwise (warnings and notes do not
+fail). No code is generated in this mode.
+
+### 12.2 Integer semantics
+
+- **Default:** integers are mathematical integers constrained to their type's range, and every
+  operation must provably stay in range (an overflow is an error). As long as no overflow is
+  reported, this agrees with the compiled program. Contract expressions (`requires`, `ensures`,
+  `invariant`, `decreases`) are evaluated with mathematical integers without overflow checks,
+  so a specification such as `s == i * (i + 1) / 2` means the mathematical value.
+- **`--verify-wrap`:** integers are bit-vectors of their width and wrap around exactly as the
+  compiled program does (for code that relies on wrap-around, such as hashing); overflow is not an
+  error. `--verify-overflow` additionally reports where it may happen. Non-linear bit-vector
+  arithmetic (`*`, `/`, `%` on unknowns) can be much harder for the solver in this mode.
+- `--verify-timeout <ms>` sets the per-check solver time limit (default 10000). A check the solver
+  cannot decide in time is reported as an error with "could not decide"; nothing is assumed proven.
+
+### 12.3 Modelled fragment
+
+Modelled: `Int`, `Long`, `Short`, `Byte`, `Char`, `Bool` locals and parameters; literals;
+arithmetic, comparison, logical (`and`, `or`, `!`, `implies`, `iff`, `xor`), and bitwise operators;
+`val`/`var`, assignment (`=`, `op=`, `++`, `--`), `if`/`else` (also as an expression), `while`,
+range `for`, `return`, `assert`, calls to top-level functions. Everything else (other types,
+methods, fields, collections, globals) is an unknown value: the verifier may then report a check
+it cannot prove, but it never proves a false property. Such places are listed as notes. Methods of
+classes and structs are not verified yet.
+
+### 12.4 Building with Z3
+
+Z3 is an external C++ library. `scripts/fetch_z3.ps1` (Windows) or `scripts/fetch_z3.sh` (macOS,
+Linux) downloads the official release into `deps/z3` (the Windows script checks its SHA-256); CMake
+then finds it (`CSEC_WITH_Z3=AUTO`, or set `Z3_ROOT`; a system install is found too) and copies
+`libz3.dll` next to `csec++.exe`. Without Z3, `csec++` builds normally and `--verify` reports that it
+is unavailable.
+
+The self-hosted compiler accepts all of this syntax: it drops the specification clauses and
+compiles `assert` as a run-time check (§5).
+
 ## 5. Self-hosted compiler support
 
 The self-hosted compiler (`selfhost/`, whose emitter lives in `src/native_runtime/*.inc`) implements:
@@ -520,6 +636,8 @@ The self-hosted compiler (`selfhost/`, whose emitter lives in `src/native_runtim
 - `go`, `async`, and `await` (§3), including `async def` as a declaration modifier, with
   futures of `Int`, `Long`, `Boolean`, `Double`, and pointer-represented results;
 - `text[i]` on String locals and parameters, and escaped `Char` literals (`'\n'`, `'\t'`, ...);
+- the contract syntax of §12: `requires`/`ensures`/`invariant`/`decreases` clauses are accepted and
+  dropped (verification is `csec++ --verify`), and `assert(c[, message])` is a run-time check;
 - dictionaries (§10.2) with scalar keys and values (`Int`, `Long`, `Short`, `Byte`, `Double`,
   `Float`, `Boolean`, `Char`, `String`): literals, `val d: Dict<K, V> = {}`, `d[k]`,
   `d[k] = v`, `d[k] op= v`, `get`, `size`, `isEmpty`, `contains`, `remove`, `clear`, `Dict`

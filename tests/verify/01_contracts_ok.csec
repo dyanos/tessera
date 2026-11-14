@@ -1,0 +1,65 @@
+// Every obligation here is provable: `csec++ --verify` reports no error.
+def clamp(x: Int, lo: Int, hi: Int): Int
+    requires lo <= hi
+    ensures lo <= result and result <= hi
+    ensures (lo <= x and x <= hi) implies result == x
+{
+    if (x < lo) { return lo; }
+    if (x > hi) { return hi; }
+    return x;
+}
+
+def safeDiv(a: Int, b: Int): Int
+    requires b != 0 and !(a == -2147483648 and b == -1)
+    ensures result * b + a % b == a
+{
+    return a / b;
+}
+
+// Midpoint without computing lo + hi. (With a negative lo, `hi - lo` itself can overflow, which is
+// why the verifier needs 0 <= lo.)
+def midpoint(lo: Int, hi: Int): Int
+    requires 0 <= lo and lo <= hi
+    ensures lo <= result and result <= hi
+{
+    return lo + (hi - lo) / 2;
+}
+
+def sumTo(n: Int): Int
+    requires 0 <= n and n <= 10000
+    ensures result == n * (n + 1) / 2
+{
+    var s = 0;
+    var i = 0;
+    while (i < n)
+        invariant 0 <= i and i <= n
+        invariant s == i * (i + 1) / 2
+        decreases n - i
+    {
+        i = i + 1;
+        s = s + i;
+    }
+    return s;
+}
+
+def countEven(n: Int): Int
+    requires 0 <= n and n <= 1000
+    ensures 0 <= result and result <= n + 1
+{
+    var count = 0;
+    for (i <- 0 to n)
+        invariant 0 <= count and count <= i
+        invariant i <= n + 1
+    {
+        if (i % 2 == 0) { count = count + 1; }
+    }
+    return count;
+}
+
+def main(): Int {
+    val m = midpoint(10, 20);
+    assert(10 <= m and m <= 20);
+    assert(clamp(5, 0, 10) == 5);
+    val q = safeDiv(17, 5);
+    return 0;
+}

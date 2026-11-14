@@ -14,6 +14,43 @@ std::unique_ptr<ValueNode> doubleLiteral(double value) {
 }
 
 std::unique_ptr<ASTNode> Parser::parseStatement() {
+	const int startLine = isAtEnd() ? 0 : peek().line;
+	auto statement = parseStatementWithoutLine();
+	if (statement && statement->line == 0) {
+		statement->line = startLine;
+	}
+	return statement;
+}
+
+void Parser::parseContractClauses(ASTNode& node, bool functionClauses) {
+	while (true) {
+		std::string word;
+		if (functionClauses && (checkWord("requires") || checkWord("ensures"))) word = peek().value;
+		else if (!functionClauses && (checkWord("invariant") || checkWord("decreases"))) word = peek().value;
+		else break;
+		const int line = peek().line;
+		advance();
+		const size_t first = position;
+		ContractClause clause;
+		// Not parseExpression(): in `def f(): Int requires x > 0 = body` the '=' starts the body.
+		clause.expression = parsePipelineExpression();
+		clause.line = line;
+		for (size_t i = first; i < position && i < tokens.size(); ++i) {
+			const Token& t = tokens[i];
+			if (t.type == TokenType::COMMENT) continue;
+			if (!clause.text.empty()) clause.text += " ";
+			clause.text += t.type == TokenType::STRING_LITERAL ? "\"" + t.value + "\"" : t.value;
+		}
+		if (clause.expression) clause.expression->line = line;
+		if (!node.contracts) node.contracts = std::make_shared<ContractClauses>();
+		if (word == "requires") node.contracts->requiresClauses.push_back(std::move(clause));
+		else if (word == "ensures") node.contracts->ensuresClauses.push_back(std::move(clause));
+		else if (word == "invariant") node.contracts->invariants.push_back(std::move(clause));
+		else node.contracts->decreases.push_back(std::move(clause));
+	}
+}
+
+std::unique_ptr<ASTNode> Parser::parseStatementWithoutLine() {
 	bool isConstexpr = false;
 	if (check(TokenType::KEYWORD, "constexpr")) {
 		isConstexpr = true;
@@ -499,6 +536,7 @@ std::unique_ptr<ASTNode> Parser::parseForStatement() {
 	}
 
 	expect(TokenType::OPERATOR, ")");
+	parseContractClauses(*forNode, false);
 
 	if (match(TokenType::OPERATOR, "{")) {
 		forNode->body = parseBlock();
@@ -516,6 +554,7 @@ std::unique_ptr<ASTNode> Parser::parseWhileStatement() {
 	expect(TokenType::OPERATOR, "(");
 	whileNode->condition = parseExpression();
 	expect(TokenType::OPERATOR, ")");
+	parseContractClauses(*whileNode, false);
 
 	if (match(TokenType::OPERATOR, "{")) {
 		whileNode->body = parseBlock();

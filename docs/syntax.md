@@ -114,6 +114,42 @@ csec++ --mangle msvc "int add(int, int)"
 csec++ --mangle itanium "double Math::cos(double) const"
 ```
 
+## Contracts And Verification
+
+Functions can state what they need (`requires`) and promise (`ensures`, where `result` is the
+returned value); loops can state `invariant`s and a `decreases` measure. `csec++ --verify` proves
+them with the Z3 solver and reports every place they may fail, with a counterexample:
+
+```ts
+def average(a: Int, b: Int): Int
+    ensures a <= b implies (a <= result and result <= b)
+{
+    return (a + b) / 2;     // error: 'a + b' may overflow Int  (a = 2147483647, b = 1)
+}
+
+def countdown(n: Int): Int
+    requires n >= 0
+    ensures result == 0
+{
+    var i = n;
+    while (i > 0) invariant i >= 0 decreases i {
+        i = i - 1;
+    }
+    return i;
+}
+
+def main(): Int {
+    val m = average(2, 8);
+    assert(m >= 2, "average is in range");   // also checked when the program runs
+    return 0;
+}
+```
+
+It also reports division by zero, `if` conditions that are always true or false, calls that break
+a callee's `requires`, and contradictory `requires`. By default every integer operation must stay
+in its type's range; `--verify-wrap` uses wrap-around arithmetic instead. The clauses are not
+compiled. See LANGUAGE_SPEC.md §12 (building with Z3: `scripts/fetch_z3.ps1`).
+
 ## Primitive Types
 
 Common scalar types include:

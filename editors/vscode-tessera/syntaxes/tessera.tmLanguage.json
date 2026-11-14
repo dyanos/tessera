@@ -118,7 +118,7 @@
       "patterns": [
         {
           "name": "keyword.control.tessera",
-          "match": "(?<!\\.)\\b(?:case|class|def|else|extends|for|if|import|match|new|object|operator|override|return|struct|super|this|val|var|while|to|until|and|or|xor|map|pmap|reduce|preduce|filter|external|inline|constexpr|template|typename|mut|box|unsafe|unatomic|async|await|go|build|molecule|cfd|ode|protein|atom|bond|at|steps|dt|temperature|grid|viscosity|velocity|euler|from|step|lattice|spacing|chain|mcmc|cpu|simd|openmp|gpu)\\b"
+          "match": "(?<!\\.)\\b(?:case|class|def|else|extends|for|if|import|match|new|object|operator|override|return|struct|super|this|val|var|while|to|until|and|or|xor|map|pmap|reduce|preduce|filter|external|inline|constexpr|template|typename|mut|box|unsafe|unatomic|async|await|go|build|requires|ensures|invariant|decreases|molecule|cfd|ode|protein|atom|bond|at|steps|dt|temperature|grid|viscosity|velocity|euler|from|step|lattice|spacing|chain|mcmc|cpu|simd|openmp|gpu)\\b"
         }
       ]
     },

@@ -120,6 +120,8 @@ public:
 	void visit(FilterStatementNode& node) override;
 	void visit(ArrayLiteralNode& node) override;
 	void visit(DictLiteralNode& node) override;
+	void checkContractClause(ContractClause& clause, const std::string& kind, bool boolean);
+	void visitLoopContracts(ASTNode& loop);
 	void checkDictKey(const Type* dictType, ASTNode* keyExpr);
 	void checkDictValue(const Type* valueType, ASTNode* valueExpr, const std::string& context);
 	static std::string typeDisplayName(const Type* type);

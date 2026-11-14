@@ -3,7 +3,7 @@
 
 /// Free functions the compiler / runtime provide (from `src/FunctionCallNode.cpp`).
 pub const BUILTIN_FUNCTIONS: &[&str] = &[
-    "abs", "approxEq", "arccos", "arcsin", "arctan", "binom", "callNative0", "callNative1",
+    "abs", "approxEq", "arccos", "arcsin", "arctan", "assert", "binom", "callNative0", "callNative1",
     "callNative2", "callNative3", "callNativeDouble0", "callNativeDouble1", "callNativeDouble2",
     "ceil", "cfdSimulate", "clamp", "clone", "closeLibrary", "commandLineArg",
     "commandLineArgCount", "complement", "cos", "cosh", "cot", "coth", "csc", "disjoint",

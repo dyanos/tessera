@@ -1,0 +1,53 @@
+// Each function has one logical problem that `csec++ --verify` reports.
+def absValue(x: Int): Int
+    ensures result >= 0
+{
+    if (x < 0) { return -x; }        // -(-2147483648) overflows
+    return x;
+}
+
+def average(a: Int, b: Int): Int
+    ensures a <= b implies (a <= result and result <= b)
+{
+    return (a + b) / 2;              // a + b may overflow
+}
+
+def ratio(a: Int, b: Int): Int {
+    return a / b;                    // b may be 0
+}
+
+def needsPositive(n: Int): Int
+    requires n > 0
+    ensures result > 0
+{
+    return n;
+}
+
+def caller(k: Int): Int {
+    return needsPositive(k);         // k may be <= 0
+}
+
+def impossible(x: Int): Int
+    requires x > 10 and x < 5        // can never be called
+{
+    return x;
+}
+
+def wrongPost(x: Int): Int
+    requires 0 <= x and x < 100
+    ensures result > x
+{
+    return x * 1;                    // equal, not greater
+}
+
+def branches(x: Int): Int {
+    if (x > 5 and x < 3) { return 1; }  // never true
+    if (x >= 0 or x < 0) { return 2; }  // always true
+    return 3;
+}
+
+def main(): Int {
+    val v = needsPositive(3);
+    assert(v == 3);                  // needsPositive only promises result > 0
+    return 0;
+}

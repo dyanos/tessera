@@ -1,6 +1,8 @@
 // main.cpp
 #ifdef _WIN32
 #define _CRTDBG_MAP_ALLOC
+#include "source_map.h"
+#include "verifier.h"
 #include <stdlib.h>
 #include <crtdbg.h>
 #include <direct.h>
@@ -59,11 +61,24 @@
 #include <system_error>
 #include <vector>
 
+// Declared in source_map.h (outside the anonymous namespace: the verifier and codegen use them).
+std::vector<SourceLocation>& expandedLineMap() {
+    static std::vector<SourceLocation> map;
+    return map;
+}
+
+SourceLocation sourceLocationOf(int expandedLine) {
+    const auto& map = expandedLineMap();
+    if (expandedLine < 1 || static_cast<size_t>(expandedLine) > map.size()) return {};
+    return map[static_cast<size_t>(expandedLine - 1)];
+}
+
 namespace {
 enum class OutputMode {
     Run,
     RunIR,
     SyntaxOnly,
+    Verify,
     EmitIR,
     EmitObject,
     EmitExecutable
@@ -73,6 +88,10 @@ void printUsage(const char* programName) {
     std::cerr
         << "Usage: " << programName << " [options] <input.csec>\n"
         << "Options:\n"
+        << "  --verify            Prove requires/ensures/assert/invariant with Z3 (no code is generated)\n"
+        << "  --verify-wrap       --verify with wrap-around (bit-vector) integers; overflow is not an error\n"
+        << "  --verify-overflow   with --verify-wrap, still report possible integer overflow\n"
+        << "  --verify-timeout <ms>  --verify with a per-check solver time limit (default 10000)\n"
         << "  --syntax-only, --parse-only  Parse only, no code generation\n"
         << "  --run                        Generate and run with LLVM interpreter\n"
         << "  --run-ir <file.ll>            Run an existing LLVM IR module with the interpreter\n"
@@ -518,7 +537,10 @@ std::string expandImports(
 
     std::string output;
     size_t lineStart = 0;
+    int lineNumber = 0;
+    auto& lineMap = expandedLineMap();
     while (lineStart <= source.size()) {
+        ++lineNumber;
         size_t lineEnd = source.find('\n', lineStart);
         bool hasNewline = lineEnd != std::string::npos;
         if (!hasNewline) {
@@ -531,12 +553,19 @@ std::string expandImports(
             auto importPath = resolveImportPath(canonicalPath, target);
             std::error_code importEc;
             if (std::filesystem::exists(importPath, importEc) && std::filesystem::is_regular_file(importPath, importEc)) {
-                output += expandImports(importPath, includeStack, includedFiles);
+                const std::string imported = expandImports(importPath, includeStack, includedFiles);
+                output += imported;
+                // The "\n" closes the module's last line when it had no newline; otherwise it is an
+                // empty line standing for this import line.
+                if (imported.empty() || imported.back() == '\n') {
+                    lineMap.push_back({canonicalPath.string(), lineNumber});
+                }
                 output += "\n";
             }
             else {
                 // Unresolved imports stay in place (and are ignored); drop an alias the parser does not need.
                 output += csec_imports::splitImport(trimAscii(line).substr(6)).alias.empty() ? line : "import " + target;
+                lineMap.push_back({canonicalPath.string(), lineNumber});
                 if (hasNewline) {
                     output += "\n";
                 }
@@ -544,6 +573,7 @@ std::string expandImports(
         }
         else {
             output += line;
+            lineMap.push_back({canonicalPath.string(), lineNumber});
             if (hasNewline) {
                 output += "\n";
             }
@@ -1370,6 +1400,33 @@ int main(int argc, char** argv) {
             outputMode = OutputMode::SyntaxOnly;
             continue;
         }
+        if (arg == "--verify") {
+            // Type-check, then prove the contracts and assertions with Z3; no code is generated.
+            outputMode = OutputMode::Verify;
+            continue;
+        }
+        if (arg == "--verify-timeout") {
+            // Per-check solver time limit in milliseconds (default 10000).
+            if (i + 1 >= argc) {
+                std::cerr << "Missing milliseconds after --verify-timeout" << std::endl;
+                return 1;
+            }
+            outputMode = OutputMode::Verify;
+            verifierOptions().timeoutMilliseconds = static_cast<unsigned>(std::strtoul(argv[++i], nullptr, 10));
+            continue;
+        }
+        if (arg == "--verify-wrap") {
+            // Integers wrap around as in the compiled program (bit-vectors) instead of overflow being an error.
+            outputMode = OutputMode::Verify;
+            verifierOptions().wrapAround = true;
+            continue;
+        }
+        if (arg == "--verify-overflow") {
+            // With --verify-wrap: still report where arithmetic may overflow.
+            outputMode = OutputMode::Verify;
+            verifierOptions().reportOverflow = true;
+            continue;
+        }
         if (arg == "--strict-ownership") {
             // M2 strict ownership is on by default; kept for explicitness / forcing it back on.
             setStrictOwnership(true);
@@ -1529,6 +1586,11 @@ int main(int argc, char** argv) {
         std::cerr << "Type checking found " << typeChecker.getErrorCount()
                   << " error(s). Aborting code generation." << std::endl;
         return 1;
+    }
+    if (outputMode == OutputMode::Verify) {
+        std::error_code canonicalError;
+        auto mainFile = std::filesystem::weakly_canonical(std::filesystem::path(inputFile), canonicalError);
+        return verifyProgram(ast.get(), canonicalError ? inputFile : mainFile.string());
     }
     ast->codegen();
 
