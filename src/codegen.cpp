@@ -105,8 +105,19 @@ void CodeGenerator::enterCleanupScope() {
 
 void CodeGenerator::exitCleanupScope() {
     if (!cleanupScopes.empty()) {
+        for (const auto& entry : cleanupScopes.back()) {
+            if (entry.second == CleanupKind::FlaggedFree) dropFlags.erase(entry.first);
+        }
         cleanupScopes.pop_back();
     }
+}
+
+llvm::Value* CodeGenerator::dropFlagInCurrentFunction(llvm::Value* pointer) const {
+    auto it = dropFlags.find(pointer);
+    if (it == dropFlags.end() || !builder.GetInsertBlock()) return nullptr;
+    auto* flag = llvm::dyn_cast<llvm::Instruction>(it->second);
+    if (!flag || flag->getFunction() != builder.GetInsertBlock()->getParent()) return nullptr;
+    return flag;
 }
 
 void CodeGenerator::registerCleanup(llvm::Value* pointer) {
@@ -137,6 +148,25 @@ void CodeGenerator::registerSharedCleanup(llvm::Value* controlBlock) {
         return;
     }
     cleanupScopes.back().push_back({ controlBlock, CleanupKind::SharedRelease });
+}
+
+void CodeGenerator::registerFlaggedCleanup(llvm::Value* pointer) {
+    if (!pointer || cleanupScopes.empty() || !builder.GetInsertBlock()) {
+        return;
+    }
+    llvm::Function* fn = builder.GetInsertBlock()->getParent();
+    llvm::IRBuilder<> entry(&fn->getEntryBlock(), fn->getEntryBlock().begin());
+    llvm::Value* flag = entry.CreateAlloca(llvm::Type::getInt1Ty(context), nullptr, "drop.flag");
+    entry.CreateStore(llvm::ConstantInt::getFalse(context), flag);
+    builder.CreateStore(llvm::ConstantInt::getTrue(context), flag);
+    dropFlags[pointer] = flag;
+    cleanupScopes.back().push_back({ pointer, CleanupKind::FlaggedFree });
+}
+
+void CodeGenerator::noteMoved(llvm::Value* pointer) {
+    if (llvm::Value* flag = dropFlagInCurrentFunction(pointer)) {
+        builder.CreateStore(llvm::ConstantInt::getFalse(context), flag);
+    }
 }
 
 void CodeGenerator::registerWeakCleanup(llvm::Value* controlBlock) {
@@ -187,6 +217,19 @@ void CodeGenerator::emitCleanupEntry(llvm::Value* pointer, CleanupKind kind, llv
         auto* freeBB = llvm::BasicBlock::Create(context, "block.free", fn);
         auto* contBB = llvm::BasicBlock::Create(context, "block.cont", fn);
         builder.CreateCondBr(bothZero, freeBB, contBB);
+        builder.SetInsertPoint(freeBB);
+        builder.CreateCall(freeFunction, { raw });
+        builder.CreateBr(contBB);
+        builder.SetInsertPoint(contBB);
+    }
+    else if (kind == CleanupKind::FlaggedFree) {
+        llvm::Function* fn = builder.GetInsertBlock() ? builder.GetInsertBlock()->getParent() : nullptr;
+        llvm::Value* flag = dropFlagInCurrentFunction(pointer);
+        if (!flag || !fn) return;
+        llvm::Value* live = builder.CreateLoad(llvm::Type::getInt1Ty(context), flag, "drop.live");
+        auto* freeBB = llvm::BasicBlock::Create(context, "drop.free", fn);
+        auto* contBB = llvm::BasicBlock::Create(context, "drop.cont", fn);
+        builder.CreateCondBr(live, freeBB, contBB);
         builder.SetInsertPoint(freeBB);
         builder.CreateCall(freeFunction, { raw });
         builder.CreateBr(contBB);

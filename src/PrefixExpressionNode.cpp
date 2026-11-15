@@ -174,6 +174,7 @@ llvm::Value* PrefixExpressionNode::codegen() {
         return value;
     }
     else if (op == "<-") {
+        CodeGenerator::getInstance().noteMoved(value);
         return value;
     }
     else if (op == "await") {

@@ -233,6 +233,9 @@ llvm::Value* VariableDeclarationNode::codegen() {
         if (type->getKind() == Type::Kind::BOX) {
             cg.registerCleanup(initValue);
         }
+        else if (autoDrop && type->getKind() == Type::Kind::CLASS && !declaredStructClass) {
+            cg.registerFlaggedCleanup(initValue);
+        }
         else if (type->getName() == "Tensor") {
             if (tensorMoveInitializer) {
                 // The source and destination denote the same allocation. Transfer its one drop

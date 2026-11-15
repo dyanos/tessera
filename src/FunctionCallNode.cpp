@@ -2036,7 +2036,8 @@ llvm::Value* FunctionCallNode::codegen() {
     if (functionName == "free") {
         if (!argValues.empty() && argValues[0] && argValues[0]->getType()->isPointerTy()) {
             // Prevent the lexical owner cleanup from freeing the same allocation a second time.
-            cg.forgetCleanup(argValues[0]);
+            if (cg.hasDropFlag(argValues[0])) cg.noteMoved(argValues[0]);
+            else cg.forgetCleanup(argValues[0]);
             if (!argTypes.empty() && argTypes[0] && TensorRuntime::isTensorTypeName(argTypes[0]->getName())) {
                 auto* i8PtrTy = llvm::PointerType::getUnqual(cg.context);
                 llvm::Value* dims = TensorRuntime::loadDims(cg, argValues[0]);
@@ -2400,6 +2401,11 @@ llvm::Value* FunctionCallNode::codegen() {
                 auto* opaquePtr = llvm::PointerType::getUnqual(cg.context);
                 auto* closureType = llvm::StructType::get(cg.context, { opaquePtr, opaquePtr });
                 llvm::Value* closure = callableSymbol->value;
+                // A function-typed field is a slot holding the closure pointer.
+                if (callableSymbol->symbolType == SymbolType::FIELD ||
+                    llvm::isa<llvm::GetElementPtrInst>(closure)) {
+                    closure = cg.builder.CreateLoad(opaquePtr, closure, functionName + ".closure");
+                }
                 llvm::Value* code = cg.builder.CreateLoad(opaquePtr,
                     cg.builder.CreateStructGEP(closureType, closure, 0, "closure.code"), "closure.code.fn");
                 llvm::Value* environment = cg.builder.CreateLoad(opaquePtr,

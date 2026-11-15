@@ -1,0 +1,36 @@
+// Closures that outlive the function creating them: returned, returned through a local, and
+// stored in an object.
+class Op(name: String, f: (Int) => Int) {
+    def run(x: Int): Int = f(x)
+}
+
+def adder(n: Int): (Int) => Int {
+    return [=](x: Int) -> { return x + n; };
+}
+
+def multiplier(k: Int): (Int) => Int {
+    val f = [=](x: Int) -> { return x * k; };
+    return f;
+}
+
+def makeOp(k: Int): Op = new Op("mul", [=](x: Int) -> { return x * k; })
+
+def twice(f: (Int) => Int, x: Int): Int = f(f(x))
+
+// Reuses the stack where the closures above were made.
+def scribble(a: Int, b: Int): Int {
+    val q = [a, b, a, b, a, b];
+    return q[0] + q[5];
+}
+
+def main(): Int {
+    val add5 = adder(5);
+    val times3 = multiplier(3);
+    val op = makeOp(6);
+    val noise = scribble(100, 200);
+    if (twice(add5, 1) != 11) { return 1; }
+    if (times3(7) != 21) { return 2; }
+    if (op.run(7) != 42) { return 3; }
+    if (noise != 300) { return 4; }
+    return 0;
+}

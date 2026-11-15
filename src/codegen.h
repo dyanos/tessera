@@ -81,6 +81,13 @@ public:
     void registerSharedCleanup(llvm::Value* controlBlock);
     // A Weak<T> handle: decrements the weak count; frees the block when strong and weak are both zero.
     void registerWeakCleanup(llvm::Value* controlBlock);
+    // An owned class instance dropped at scope exit unless it was moved away first. Its drop flag is
+    // cleared by noteMoved (a `<-` move or `free`), so a value moved on some paths only is freed
+    // exactly once.
+    void registerFlaggedCleanup(llvm::Value* pointer);
+    void noteMoved(llvm::Value* pointer);
+    bool hasDropFlag(llvm::Value* pointer) const { return dropFlagInCurrentFunction(pointer) != nullptr; }
+    llvm::Value* dropFlagInCurrentFunction(llvm::Value* pointer) const;
     void emitCurrentScopeCleanups();
     void emitAllCleanups();
     void emitAllCleanupsExcept(llvm::Value* retainedPointer);
@@ -105,7 +112,8 @@ private:
     // Each cleanup is a (pointer, kind) pair: Free drops a single heap allocation, TensorFree also
     // frees the tensor's separate dims/data buffers, and SharedRelease/WeakRelease decrement a
     // Shared/Weak control block (freeing it only when both counts reach zero).
-    enum class CleanupKind { Free = 0, TensorFree = 1, SharedRelease = 2, WeakRelease = 3 };
+    enum class CleanupKind { Free = 0, TensorFree = 1, SharedRelease = 2, WeakRelease = 3, FlaggedFree = 4 };
+    std::unordered_map<llvm::Value*, llvm::Value*> dropFlags;  // owned pointer -> its i1 drop flag
     std::vector<std::vector<std::pair<llvm::Value*, CleanupKind>>> cleanupScopes;
     void emitCleanupEntry(llvm::Value* pointer, CleanupKind kind, llvm::Value* retainedPointer);
 };

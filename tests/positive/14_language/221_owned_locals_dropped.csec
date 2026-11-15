@@ -1,0 +1,36 @@
+// A `new` local that is never shared is freed when its scope ends; a moved or freed one is not
+// freed again, also when it is moved on some paths only.
+class Node(v: Int) {
+    def get(): Int = v
+}
+
+class Holder(n: Node) {
+    def value(): Int = n.get()
+}
+
+def consume(n: Node): Int = n.get()
+
+def make(v: Int): Node {
+    val n = new Node(v);
+    return n;
+}
+
+def main(): Int {
+    var total = 0;
+    for (i <- 0 until 200000) {
+        val a = new Node(i % 7);
+        total = total + a.get();      // `a` is freed at the end of every iteration
+        if (i % 1000 == 0) { break; }
+    }
+    for (i <- 0 until 200000) {
+        val a = new Node(1);
+        if (i % 2 == 0) {
+            total = total + consume(<- a);   // moved on this path only
+        }
+    }
+    val b = new Node(5);
+    free(b);
+    val c = make(4);                  // returned, not freed by make()
+    val h = new Holder(<- new Node(9));
+    return (total + c.get() + h.value()) % 256;
+}

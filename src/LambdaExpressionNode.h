@@ -8,6 +8,7 @@ public:
     }
     LambdaExpressionNode(const LambdaExpressionNode& other) {
         this->capturesByReference = other.capturesByReference;
+        this->escapes = other.escapes;
         for (const auto& v : other.captureVariables) {
             this->captureVariables.push_back(v);
         }
@@ -20,6 +21,7 @@ public:
     LambdaExpressionNode& operator=(const LambdaExpressionNode& other) {
         if (this != &other) {
             capturesByReference = other.capturesByReference;
+            escapes = other.escapes;
             captureVariables = other.captureVariables;
             arguments.clear();
             arguments.reserve(other.arguments.size());
@@ -33,6 +35,9 @@ public:
     }
 
     bool capturesByReference = false;
+    // The closure outlives the frame that creates it (it is returned or stored in a value), so its
+    // environment is allocated on the heap. Set by markEscapingLambdas.
+    bool escapes = false;
     std::vector<std::string> captureVariables;
     std::vector<std::unique_ptr<ASTNode>> arguments;
     std::unique_ptr<ASTNode> body;
@@ -69,3 +74,8 @@ public:
         return std::make_unique<LambdaExpressionNode>(*this);
     }
 };
+
+// Marks lambda literals that outlive their creating frame (returned, directly or through a local;
+// stored into an object, enum value, array or field). Reports a `[&]` lambda that escapes, whose
+// references would dangle. Returns false on such an error.
+bool markEscapingLambdas(ASTNode* program);

@@ -1,0 +1,6 @@
+def counter(start: Int): (Int) => Int {
+    var count = start;
+    return [&](step: Int) -> { return count + step; };   // count ends with counter()
+}
+
+def main(): Int { return counter(1)(2); }
