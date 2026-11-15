@@ -10,7 +10,9 @@ Program
   = TopStatement*
 
 TopStatement
-  = Attribute? TemplateDeclaration
+  = EnumDeclaration
+  / InterfaceDeclaration
+  / Attribute? TemplateDeclaration
   / Attribute? Modifier* ImportDeclaration
   / Attribute? Modifier* ClassDeclaration
   / Attribute? Modifier* ObjectDeclaration
@@ -35,17 +37,33 @@ ImportDeclaration
 
 TemplateDeclaration
   = "template" _ "<" _ TemplateParameter (_ "," _ TemplateParameter)* _ ">" _
-    ("def" __ FunctionRest / "class" __ ClassRest)
+    ("def" __ FunctionRest / "class" __ ClassRest / "struct" __ ClassRest)
 
 TemplateParameter
-  = ("typename" / "class") __ Identifier
+  = ("typename" / "class") __ Identifier (_ ":" _ Identifier (_ "+" _ Identifier)*)?   // interface bounds
   / IntegralType __ Identifier
+
+EnumDeclaration
+  = "enum" __ Identifier _ ("<" _ Identifier (_ "," _ Identifier)* _ ">" _)? Implements?
+    "{" _ EnumVariant (_ ("," / ";") _ EnumVariant)* _ (","/";")? _ FunctionDeclaration* _ "}"
+
+EnumVariant
+  = Identifier _ ParameterList?
+
+InterfaceDeclaration
+  = "interface" __ Identifier _ "{" _ (InterfaceMethod _)* "}"   // `interface` is contextual
+
+InterfaceMethod
+  = "def" __ MemberName _ "(" _ Parameters? _ ")" _ (":" _ Type)? _ (FunctionBody / StatementEnd)?
+
+Implements
+  = "implements" __ Identifier (_ "," _ Identifier)* _
 
 ClassDeclaration
   = "class" __ ClassRest
 
 ClassRest
-  = Identifier _ ParameterList? _ ("extends" __ Identifier _)? ClassBody?
+  = Identifier _ ParameterList? _ ("extends" __ Identifier _)? Implements? ClassBody?
 
 ClassBody
   = "{" _ (FunctionDeclaration / VariableDeclaration StatementEnd?)* _ "}"
@@ -70,7 +88,7 @@ Parameters
   = Parameter (_ "," _ Parameter)*
 
 Parameter
-  = Identifier _ ":" _ Type
+  = Identifier _ ":" _ Type (_ "=" _ Expression)?   // default value
 
 VariableDeclaration
   = ("val" / "var") __ Identifier _ (":" _ Type)? _ "=" _ Expression
@@ -85,6 +103,7 @@ Statement
   / WhileStatement
   / FunctionDeclaration
   / ReturnStatement
+  / LoopControl
   / MapStatement
   / PMapStatement
   / ReduceStatement
@@ -123,6 +142,9 @@ FilterStatement
 ReturnStatement
   = "return" (__ Expression)? StatementEnd?
 
+LoopControl
+  = ("break" / "continue") ![A-Za-z0-9_] StatementEnd?
+
 Block
   = "{" _ Statement* _ "}"
 
@@ -134,7 +156,12 @@ MatchExpression
   = PipelineExpression (_ "match" _ "{" _ MatchCase* _ "}")?
 
 MatchCase
-  = "case" __ PrimaryExpression _ "=>" _ Expression
+  = "case" __ Pattern (_ "|" _ Pattern)* (_ "if" __ Expression)? _ "=>" _ Expression
+
+Pattern
+  = "_"
+  / "-"? Literal
+  / (Identifier _ "." _)? Identifier (_ "(" _ Pattern (_ "," _ Pattern)* _ ")")?
 
 AssignmentExpression
   = PipelineExpression (_ ("=" / "<-" / "+=" / "-=" / "*=" / "/=" / "%=") _ Expression)?
@@ -179,7 +206,7 @@ PrefixExpression
   / PostfixExpression
 
 PostfixExpression
-  = PrimaryExpression (_ ("++" / "--" / IndexSuffix))*
+  = PrimaryExpression (_ ("++" / "--" / "?" / IndexSuffix))*   // `e?` unwraps an Option/Result
 
 IndexSuffix
   = "[" _ Expression (_ "," _ Expression)* _ "]"
@@ -232,7 +259,11 @@ SetLiteral
   / "{" _ Expression (_ "," _ Expression)+ _ "}"
 
 CallArguments
-  = "(" _ (Expression (_ "," _ Expression)*)? _ ")"
+  = "(" _ (CallArgument (_ "," _ CallArgument)*)? _ ")"
+
+CallArgument
+  = Identifier _ "=" !"=" _ Expression   // named argument
+  / Expression
 
 TemplateArguments
   = "<" _ TemplateArgument (_ "," _ TemplateArgument)* _ ">"
@@ -288,7 +319,7 @@ ReservedWord
      "if" / "import" / "match" / "mut" / "new" / "null" / "object" /
      "return" / "super" / "template" / "this" / "true" / "typename" /
      "unsafe" / "unatomic" / "val" / "var" / "while" / "preduce" /
-     "async" / "await" / "go") ![A-Za-z0-9_]
+     "async" / "await" / "go" / "break" / "continue" / "enum") ![A-Za-z0-9_]
 
 IntegralType
   = "Int" / "Long" / "Short" / "Byte" / "Boolean" / "Bool"

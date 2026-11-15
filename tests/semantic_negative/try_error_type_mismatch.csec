@@ -1,0 +1,8 @@
+def parse(): Result<Int, String> = Ok(1)
+
+def wrap(): Result<Int, Int> {
+    val v = parse()?;   // the error types differ
+    return Ok(v);
+}
+
+def main(): Int { return 0; }

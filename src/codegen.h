@@ -13,6 +13,16 @@
 
 // Generates a template class instance registered during type checking (ClassInstanceCreationNode.cpp).
 bool materializeTemplateClass(const std::string& mangledName);
+// Turns applied template types written in signatures and declarations (`Opt<Int>`) into their
+// instance class types (`Opt$Int`), instantiating them. Template bodies are left alone.
+void normalizeAppliedTemplateTypes(ASTNode* root);
+// The template and arguments an instance class (`Opt$Int`) was created from.
+bool templateInstanceArguments(const std::string& instanceName, std::string* templateName,
+                               std::vector<std::unique_ptr<Type>>* arguments);
+// Instantiates (registers, and generates once code generation runs) template class `templateName`.
+struct ClassSymbol;
+ClassSymbol* instantiateTemplateClass(const std::string& templateName, const std::vector<std::unique_ptr<Type>>& arguments);
+std::string templateInstanceName(const std::string& templateName, const std::vector<std::unique_ptr<Type>>& arguments);
 
 class CodeGenerator {
 public:
@@ -71,9 +81,28 @@ public:
     void registerSharedCleanup(llvm::Value* controlBlock);
     // A Weak<T> handle: decrements the weak count; frees the block when strong and weak are both zero.
     void registerWeakCleanup(llvm::Value* controlBlock);
+    // An owned class instance dropped at scope exit unless it was moved away first. Its drop flag is
+    // cleared by noteMoved (a `<-` move or `free`), so a value moved on some paths only is freed
+    // exactly once.
+    void registerFlaggedCleanup(llvm::Value* pointer);
+    void noteMoved(llvm::Value* pointer);
+    bool hasDropFlag(llvm::Value* pointer) const { return dropFlagInCurrentFunction(pointer) != nullptr; }
+    llvm::Value* dropFlagInCurrentFunction(llvm::Value* pointer) const;
     void emitCurrentScopeCleanups();
     void emitAllCleanups();
     void emitAllCleanupsExcept(llvm::Value* retainedPointer);
+    // Number of open cleanup scopes, and the drops of every scope opened at or above `depth`
+    // (innermost first, entries kept) -- used by break/continue to leave a loop body early.
+    size_t cleanupDepth() const { return cleanupScopes.size(); }
+    void emitCleanupsAbove(size_t depth);
+
+    // Enclosing loops of the code being generated: where `break` and `continue` jump.
+    struct LoopTarget {
+        llvm::BasicBlock* breakBB;
+        llvm::BasicBlock* continueBB;
+        size_t cleanupDepth;
+    };
+    std::vector<LoopTarget> loopTargets;
 
     llvm::Function* mallocFunction; // non-owning, owned by module
     llvm::Function* freeFunction;  // non-owning, owned by module
@@ -83,7 +112,8 @@ private:
     // Each cleanup is a (pointer, kind) pair: Free drops a single heap allocation, TensorFree also
     // frees the tensor's separate dims/data buffers, and SharedRelease/WeakRelease decrement a
     // Shared/Weak control block (freeing it only when both counts reach zero).
-    enum class CleanupKind { Free = 0, TensorFree = 1, SharedRelease = 2, WeakRelease = 3 };
+    enum class CleanupKind { Free = 0, TensorFree = 1, SharedRelease = 2, WeakRelease = 3, FlaggedFree = 4 };
+    std::unordered_map<llvm::Value*, llvm::Value*> dropFlags;  // owned pointer -> its i1 drop flag
     std::vector<std::vector<std::pair<llvm::Value*, CleanupKind>>> cleanupScopes;
     void emitCleanupEntry(llvm::Value* pointer, CleanupKind kind, llvm::Value* retainedPointer);
 };

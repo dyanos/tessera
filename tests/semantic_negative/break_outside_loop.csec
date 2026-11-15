@@ -1,0 +1,4 @@
+def main(): Int {
+    break;
+    return 0;
+}

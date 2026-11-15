@@ -1,0 +1,5 @@
+def f(a: Int, b: Int = 1): Int = a + b
+
+def main(): Int {
+    return f(b = 2);
+}

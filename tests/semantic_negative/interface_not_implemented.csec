@@ -1,0 +1,6 @@
+interface Sized { def size(): Int; }
+class Thing(v: Int) { def size(): Int = v }
+
+def measure(s: Sized): Int = s.size()
+
+def main(): Int { return measure(new Thing(1)); }   // Thing does not implement Sized

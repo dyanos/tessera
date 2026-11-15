@@ -3,7 +3,7 @@ def make(): Int = 4
 def main(): Int {
     var total: Int = 0;
 
-    for (x <- make()) {
+    for (x <- 0 until make()) {
         total = total + x;
     }
 

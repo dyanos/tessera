@@ -5,6 +5,7 @@
 #include "ast.h"
 
 #include "ASTVisitor.h"
+#include "enum_nodes.h"
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -67,6 +68,8 @@ public:
 
     // 이항 표현식 노드를 방문합니다.
     void visit(BinaryExpressionNode& node) override;
+    void narrowFloatOperands(BinaryExpressionNode& node);
+    void visitBinaryExpression(BinaryExpressionNode& node);
 
     // 할당 노드를 방문합니다.
     void visit(AssignmentNode& node) override;
@@ -130,6 +133,18 @@ public:
 	void visit(DestructuringAssignmentNode& node) override;
 	void visit(WhileStatementNode& node) override;
 	void visit(TemplateDeclarationNode& node) override;
+	void visit(LoopControlNode& node) override;
+	void visit(EnumDeclarationNode& node) override;
+	void visit(EnumConstructNode& node) override;
+	void visit(TryNode& node) override;
+	// Visits `node` with `expected` as the type its context wants (lets `None`, `Ok(1)` and other
+	// generic enum values take their type arguments from a declaration, parameter or return type).
+	void visitExpecting(ASTNode* node, const Type* expected);
+	std::unique_ptr<PatternNode> resolvePattern(ASTNode* raw, const Type* valueType);
+	// A class value used where an interface it implements is expected becomes an interface value.
+	void coerceToInterface(std::unique_ptr<ASTNode>& slot, const Type* target);
+	// Template arguments must implement the interfaces their parameter is bounded by.
+	void checkTemplateBounds(const std::string& templateName, const std::vector<const Type*>& arguments);
 
 private:
     struct OwnershipState {
@@ -141,6 +156,10 @@ private:
 
     int errorCount = 0;
     int unsafeContextDepth = 0;
+    int loopDepth = 0;
+    const Type* currentReturnType = nullptr;  // declared return type of the function being checked
+    const Type* expectedType = nullptr;       // see visitExpecting
+    const Type* blockResultExpected = nullptr;  // expected type of the next block's last statement  // enclosing while/for loops of the current function (break/continue targets)
     // True while checking the body of an `async def`. `await` is only valid here, and the M8
     // no-borrow-across-await rule is enforced at each await point.
     bool inAsyncFunction = false;

@@ -1,4 +1,5 @@
 #include "parser.h"
+#include "enum_nodes.h"
 
 #include "all_ast.h"
 #include "utils.h"
@@ -198,8 +199,25 @@ std::unique_ptr<ASTNode> Parser::parseSimpleExpression() {
 				while (match(TokenType::OPERATOR, ",")) {
 					typeArgs.push_back(parseTemplateArgumentAsType());
 				}
-				if (match(TokenType::OPERATOR, ">") && match(TokenType::OPERATOR, "(")) {
-					isTemplateCall = true;
+				if (match(TokenType::OPERATOR, ">")) {
+					if (match(TokenType::OPERATOR, "(")) {
+						isTemplateCall = true;
+					}
+					else if (check(TokenType::OPERATOR, ".") && peek(1).type == TokenType::IDENTIFIER) {
+						// `Option<Int>.None`, `Result<Int, String>.Ok(1)`: a variant of a generic enum.
+						advance();  // '.'
+						discardTokenPosition();
+						auto construct = std::make_unique<EnumConstructNode>();
+						construct->enumName = pathComponents[0];
+						construct->variantName = advance().value;
+						construct->typeArguments = std::move(typeArgs);
+						construct->qualified = true;
+						construct->line = previous().line;
+						if (match(TokenType::OPERATOR, "(")) {
+							construct->arguments = parseCallParameterList();
+						}
+						return construct;
+					}
 				}
 			}
 			if (isTemplateCall) {
@@ -352,11 +370,20 @@ std::unique_ptr<ASTNode> Parser::parseSimpleExpression() {
 		return parseBlock();
 	}
 	else if (check(TokenType::OPERATOR, "[")) {
-        bool looksLikeLambda =
-            peek(1).value == "&" ||
-            peek(1).value == "=" ||
-            peek(1).type == TokenType::IDENTIFIER ||
-            peek(1).value == "]";
+        // A lambda starts with a capture list -- identifiers, `&`, `=` and commas -- closed by `]` and
+        // followed by `(`. Anything else (`[f(x), 1]`, `[a + b]`) is an array literal.
+        bool looksLikeLambda = false;
+        for (int k = 1; position + k < tokens.size(); ++k) {
+            const Token& t = peek(k);
+            if (t.type == TokenType::OPERATOR && t.value == "]") {
+                looksLikeLambda = peek(k + 1).type == TokenType::OPERATOR && peek(k + 1).value == "(";
+                break;
+            }
+            const bool captureToken = t.type == TokenType::IDENTIFIER ||
+                (t.type == TokenType::KEYWORD && t.value == "mut") ||
+                (t.type == TokenType::OPERATOR && (t.value == "&" || t.value == "=" || t.value == ","));
+            if (!captureToken) break;
+        }
 
         if (looksLikeLambda) {
 		    saveTokenPosition();
@@ -689,6 +716,13 @@ std::unique_ptr<ASTNode> Parser::parsePostfixExpression() {
 			std::string op = previous().value;
 			expr = std::make_unique<PostfixExpressionNode>(op, std::move(expr));
 		}
+		else if (match(TokenType::OPERATOR, "?")) {
+			// `expr?`: unwrap an Option/Result or return its None/Err from the enclosing function.
+			auto tryNode = std::make_unique<TryNode>();
+			tryNode->line = previous().line;
+			tryNode->expression = std::move(expr);
+			expr = std::move(tryNode);
+		}
 		else if (match(TokenType::OPERATOR, "[")) {
             if (check(TokenType::OPERATOR, "]") || check(TokenType::OPERATOR, ",")) {
                 error("Expected index expression");
@@ -906,13 +940,23 @@ std::unique_ptr<ASTNode> Parser::parseExpression() {
 
 			expect(TokenType::KEYWORD, "case");
 
-			auto casePattern = parseSimpleExpression();
+			auto casePattern = parsePattern();
+			std::vector<std::unique_ptr<ASTNode>> alternatives;
+			while (match(TokenType::OPERATOR, "|")) {
+				alternatives.push_back(parsePattern());
+			}
+			std::unique_ptr<ASTNode> guard;
+			if (match(TokenType::KEYWORD, "if")) {
+				guard = parsePipelineExpression();
+			}
 
 			expect(TokenType::OPERATOR, "=>");
 
 			auto caseResult = parseExpression();
 
 			matchNode->cases.emplace_back(std::move(casePattern), std::move(caseResult));
+			matchNode->alternatives.push_back(std::move(alternatives));
+			matchNode->guards.push_back(std::move(guard));
 		}
 
 		expect(TokenType::OPERATOR, "}");
@@ -923,6 +967,20 @@ std::unique_ptr<ASTNode> Parser::parseExpression() {
 		match(TokenType::OPERATOR, ";");
 	}
 	return expr;
+}
+
+// A `case` pattern: `_`, a literal (`-1` included), a name, or a variant with sub-patterns
+// (`Circle(r)`, `Shape.Rect(w, _)`, `Some(Ok(x))`). Parsed as an expression and resolved against
+// the matched value's type by the type checker.
+std::unique_ptr<ASTNode> Parser::parsePattern() {
+	if (check(TokenType::OPERATOR, "-") &&
+		(peek(1).type == TokenType::INTEGER_LITERAL || peek(1).type == TokenType::EXPONENTIAL_LITERAL ||
+		 peek(1).type == TokenType::FLOAT_LITERAL)) {
+		advance();
+		const Token& number = advance();
+		return std::make_unique<ValueNode>("-" + number.value, number.type);
+	}
+	return parseSimpleExpression();
 }
 
 std::unique_ptr<ASTNode> Parser::parseLambdaExpression() {

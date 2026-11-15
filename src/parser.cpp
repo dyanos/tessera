@@ -5,6 +5,8 @@
 #include <iostream>
 
 #include "all_ast.h"
+#include "enum_nodes.h"
+#include "interfaces.h"
 #include "intrinsics.h"
 
 
@@ -159,6 +161,106 @@ std::unique_ptr<Type> Parser::parseTemplateArgumentAsType() {
     return std::make_unique<UnknownType>();
 }
 
+// enum Name[<T, ...>] { Variant[(field: Type, ...)], ...  [def method(...) ...] }
+std::unique_ptr<ASTNode> Parser::parseEnumDeclaration() {
+	auto node = std::make_unique<EnumDeclarationNode>();
+	node->line = previous().line;
+	if (!matchIdentifierName()) {
+		error("Expected enum name after 'enum'");
+		return nullptr;
+	}
+	node->name = previous().value;
+	if (match(TokenType::OPERATOR, "<")) {
+		do {
+			match(TokenType::KEYWORD, "typename");
+			expect(TokenType::IDENTIFIER);
+			node->typeParameters.push_back(previous().value);
+		} while (match(TokenType::OPERATOR, ","));
+		expectClosingAngle();
+	}
+	if (matchWord("implements")) {
+		do {
+			expect(TokenType::IDENTIFIER);
+			node->interfaces.push_back(previous().value);
+		} while (match(TokenType::OPERATOR, ","));
+	}
+	const auto savedTemplateTypeParams = templateTypeParams;
+	templateTypeParams = node->typeParameters;
+	expect(TokenType::OPERATOR, "{");
+	while (!check(TokenType::OPERATOR, "}") && !check(TokenType::KEYWORD, "def") &&
+		   !check(TokenType::KEYWORD, "override")) {
+		if (isAtEnd()) {
+			error("Unterminated enum declaration");
+			return nullptr;
+		}
+		if (match(TokenType::OPERATOR, ",") || match(TokenType::OPERATOR, ";")) continue;
+		if (!matchIdentifierName()) {
+			error("Expected a variant name in enum '" + node->name + "'");
+			return nullptr;
+		}
+		EnumDeclarationNode::Variant variant;
+		variant.name = previous().value;
+		variant.line = previous().line;
+		if (match(TokenType::OPERATOR, "(")) {
+			variant.fields = parseParameterList();
+			expect(TokenType::OPERATOR, ")");
+		}
+		node->variants.push_back(std::move(variant));
+	}
+	while (!check(TokenType::OPERATOR, "}")) {
+		if (isAtEnd()) {
+			error("Unterminated enum declaration");
+			return nullptr;
+		}
+		if (match(TokenType::OPERATOR, ";")) continue;
+		const bool isOverride = match(TokenType::KEYWORD, "override");
+		expect(TokenType::KEYWORD, "def");
+		auto method = parseFunctionDeclaration();
+		if (method) method->isOverride = isOverride;
+		node->methods.push_back(std::move(method));
+	}
+	expect(TokenType::OPERATOR, "}");
+	templateTypeParams = savedTemplateTypeParams;
+	return node;
+}
+
+// interface Name { def m(params): T; def n(): T = default; ... }
+std::unique_ptr<ASTNode> Parser::parseInterfaceDeclaration() {
+	auto node = std::make_unique<InterfaceDeclarationNode>();
+	node->line = previous().line;
+	expect(TokenType::IDENTIFIER);
+	node->name = previous().value;
+	expect(TokenType::OPERATOR, "{");
+	while (!check(TokenType::OPERATOR, "}")) {
+		if (isAtEnd()) {
+			error("Unterminated interface declaration");
+			return nullptr;
+		}
+		if (match(TokenType::OPERATOR, ";")) continue;
+		expect(TokenType::KEYWORD, "def");
+		auto method = parseFunctionDeclaration(true);  // the signature; the body is optional
+		if (match(TokenType::OPERATOR, "{")) {
+			method->body = parseBlock();
+		}
+		else if (match(TokenType::OPERATOR, "=")) {
+			auto expr = parseExpression();
+			auto body = std::make_unique<BlockNode>();
+			if (method->returnType && !method->returnType->isVoidTy() && method->returnType->getName() != "Unit") {
+				auto ret = std::make_unique<ReturnStatementNode>();
+				ret->expression = std::move(expr);
+				body->statements.push_back(std::move(ret));
+			}
+			else {
+				body->statements.push_back(std::move(expr));
+			}
+			method->body = std::move(body);
+		}
+		node->methods.push_back(std::move(method));
+	}
+	expect(TokenType::OPERATOR, "}");
+	return node;
+}
+
 std::vector<std::string> Parser::parseTemplateParameters() {
 	std::vector<std::string> params;
 	currentTemplateParams.clear();
@@ -168,7 +270,14 @@ std::vector<std::string> Parser::parseTemplateParameters() {
 			expect(TokenType::IDENTIFIER);
 			std::string name = previous().value;
 			params.push_back(name);
-			currentTemplateParams.push_back(TemplateParam(name));
+			TemplateParam param(name);
+			if (match(TokenType::OPERATOR, ":")) {  // `T: Shape + Show`
+				do {
+					expect(TokenType::IDENTIFIER);
+					param.bounds.push_back(previous().value);
+				} while (match(TokenType::OPERATOR, "+"));
+			}
+			currentTemplateParams.push_back(param);
 		}
 		else if (check(TokenType::IDENTIFIER)) {
 			// Non-type template parameter: e.g. "Int N"
@@ -235,6 +344,16 @@ std::unique_ptr<ASTNode> Parser::parseTopStatement() {
 		// Clear active template type params
 		templateTypeParams.clear();
 		return templateNode;
+	}
+
+	if (match(TokenType::KEYWORD, "enum")) {
+		return parseEnumDeclaration();
+	}
+	// `interface` is a word only here (before a name and a `{`), so it stays usable as an identifier.
+	if (checkWord("interface") && peek(1).type == TokenType::IDENTIFIER &&
+		peek(2).type == TokenType::OPERATOR && peek(2).value == "{") {
+		advance();
+		return parseInterfaceDeclaration();
 	}
 
 	// Handle constexpr modifier
@@ -423,6 +542,23 @@ std::unique_ptr<ClassBodyNode> Parser::parseClassBody() {
 	return classBody;
 }
 
+// One call argument. `name = value` is a named argument, matched to a parameter by name before
+// type checking (default_arguments.cpp).
+std::unique_ptr<ASTNode> Parser::parseCallArgument() {
+	if (check(TokenType::IDENTIFIER) && position + 1 < tokens.size() &&
+		tokens[position + 1].type == TokenType::OPERATOR && tokens[position + 1].value == "=") {
+		const int argLine = peek().line;
+		auto named = std::make_unique<AssignmentExpressionNode>();
+		named->left = std::make_unique<IdentifierNode>(advance().value);
+		advance();  // '='
+		named->right = parseExpression();
+		named->isNamedArgument = true;
+		named->line = argLine;
+		return named;
+	}
+	return parseExpression();
+}
+
 std::vector<std::unique_ptr<ASTNode>> Parser::parseCallParameterList()
 {
 	std::vector<std::unique_ptr<ASTNode>> arguments;
@@ -432,7 +568,7 @@ std::vector<std::unique_ptr<ASTNode>> Parser::parseCallParameterList()
 			return std::vector<std::unique_ptr<ASTNode>>();
 		}
 
-		arguments.push_back(parseExpression());
+		arguments.push_back(parseCallArgument());
 		if (!match(TokenType::OPERATOR, ",")) {
 			break;
 		}
@@ -451,10 +587,16 @@ std::vector<std::unique_ptr<ParameterNode>> Parser::parseParameterList() {
 			expect(TokenType::IDENTIFIER);
 			std::string paramName = previous().value;
 
+			const int paramLine = previous().line;
 			expect(TokenType::OPERATOR, ":");
 			std::unique_ptr<Type> paramType = parseType();
 
-			parameters.push_back(std::make_unique<ParameterNode>(paramName, paramType->clone()));
+			auto parameter = std::make_unique<ParameterNode>(paramName, paramType->clone());
+			parameter->line = paramLine;
+			if (match(TokenType::OPERATOR, "=")) {
+				parameter->defaultValue = parseExpression();
+			}
+			parameters.push_back(std::move(parameter));
 		} while (match(TokenType::OPERATOR, ","));
 	}
 
@@ -481,7 +623,7 @@ std::vector<std::unique_ptr<ASTNode>> Parser::parseArgumentList() {
 	std::vector<std::unique_ptr<ASTNode>> arguments;
 	if (!check(TokenType::OPERATOR, ")")) {
 		do {
-			arguments.push_back(parseExpression());
+			arguments.push_back(parseCallArgument());
 		} while (match(TokenType::OPERATOR, ","));
 	}
 	expect(TokenType::OPERATOR, ")");

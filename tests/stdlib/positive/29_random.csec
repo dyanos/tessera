@@ -1,0 +1,40 @@
+import std.random
+
+def main(): Int {
+    // Reproducible: equal seeds give equal sequences.
+    val a = newRng(123);
+    val b = newRng(123);
+    for (i <- 0 until 5) {
+        if (a.uniform() != b.uniform()) { return 1; }
+    }
+    // Ranges and moments.
+    val rng = newRng(7);
+    var sum = 0.0;
+    var squares = 0.0;
+    var low = 0;
+    for (i <- 0 until 20000) {
+        val x = rng.normal(5.0, 2.0);
+        sum = sum + x;
+        squares = squares + x * x;
+        val k = rng.int(0, 10);
+        if (k < 0 || k >= 10) { return 2; }
+        if (k == 0) { low = low + 1; }
+        val u = rng.uniform(-1.0, 1.0);
+        if (u < -1.0 || u >= 1.0) { return 3; }
+    }
+    val average = sum / 20000.0;
+    val variance = squares / 20000.0 - average * average;
+    if (average < 4.9 || average > 5.1) { return 4; }
+    if (variance < 3.7 || variance > 4.3) { return 5; }
+    if (low < 1700 || low > 2300) { return 6; }
+    setRandomSeed(1);
+    val first = random();
+    setRandomSeed(1);
+    if (random() != first) { return 7; }
+    val die = randomInt(1, 7);
+    if (die < 1 || die > 6) { return 8; }
+    val t = new Tensor<Double, 4000>();
+    fillNormal(t, 0.0, 1.0, rng.handle);
+    if (mean(t) < -0.1 || mean(t) > 0.1) { return 9; }
+    return 0;
+}

@@ -41,6 +41,10 @@ private:
     bool matchIdentifierName();
     // A member or method name: an identifier, or a keyword after '.' / 'def' (`frame.filter(...)`).
     bool matchMemberName();
+    std::unique_ptr<ASTNode> parseCallArgument();
+    std::unique_ptr<ASTNode> parsePattern();
+    std::unique_ptr<ASTNode> parseEnumDeclaration();
+    std::unique_ptr<ASTNode> parseInterfaceDeclaration();
     // 현재 Token position 저장/복원
     bool saveTokenPosition();
     void restoreTokenPosition();

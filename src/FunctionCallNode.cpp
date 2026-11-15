@@ -18,6 +18,7 @@
 #include "VariableDeclarationNode.h"
 #include "TensorRuntime.h"
 #include "type_utils.h"
+#include "tensor_builtins.h"
 
 #include <iostream>
 #include <llvm/IR/Function.h>
@@ -1989,6 +1990,11 @@ static llvm::Value* createTypedCallWithAdjustedArgs(
 
 llvm::Value* FunctionCallNode::codegen() {
     auto& cg = CodeGenerator::getInstance();
+    {
+        bool handled = false;
+        llvm::Value* tensorResult = codegenTensorBuiltin(*this, &handled);
+        if (handled) return tensorResult;
+    }
 
     // Evaluate arguments first
     std::vector<llvm::Value*> argValues;
@@ -2036,7 +2042,8 @@ llvm::Value* FunctionCallNode::codegen() {
     if (functionName == "free") {
         if (!argValues.empty() && argValues[0] && argValues[0]->getType()->isPointerTy()) {
             // Prevent the lexical owner cleanup from freeing the same allocation a second time.
-            cg.forgetCleanup(argValues[0]);
+            if (cg.hasDropFlag(argValues[0])) cg.noteMoved(argValues[0]);
+            else cg.forgetCleanup(argValues[0]);
             if (!argTypes.empty() && argTypes[0] && TensorRuntime::isTensorTypeName(argTypes[0]->getName())) {
                 auto* i8PtrTy = llvm::PointerType::getUnqual(cg.context);
                 llvm::Value* dims = TensorRuntime::loadDims(cg, argValues[0]);
@@ -2238,7 +2245,7 @@ llvm::Value* FunctionCallNode::codegen() {
         // Build mangled name
         std::string mangledName = functionName;
         for (auto& ct : concreteTypes) {
-            mangledName += "$" + (ct ? ct->getName() : "Unknown");
+            mangledName += "$" + templateArgumentName(ct.get());
         }
 
         // Check instantiation cache
@@ -2261,6 +2268,9 @@ llvm::Value* FunctionCallNode::codegen() {
                 cg.symbolTable.lookupFunction(mangledName, concreteTypes)->type.get() : nullptr);
             if (funcType && funcType->returnType) {
                 type = funcType->returnType->clone();
+            }
+            else if (auto declared = getType(); declared && declared->getKind() != Type::Kind::UNKNOWN) {
+                type = std::move(declared);
             }
             return result;
         }
@@ -2327,6 +2337,11 @@ llvm::Value* FunctionCallNode::codegen() {
         }
         llvm::Value* result = createCallWithAdjustedArgs(function, adjustedArgs);
 
+        // The declared return type when the template states it (a String, or a type parameter).
+        if (auto declared = getType(); declared && declared->getKind() != Type::Kind::UNKNOWN) {
+            type = std::move(declared);
+            return result;
+        }
         // Infer return type
         if (function->getReturnType()->isIntegerTy(32)) {
             type = std::make_unique<BasicType>("Int");
@@ -2400,6 +2415,11 @@ llvm::Value* FunctionCallNode::codegen() {
                 auto* opaquePtr = llvm::PointerType::getUnqual(cg.context);
                 auto* closureType = llvm::StructType::get(cg.context, { opaquePtr, opaquePtr });
                 llvm::Value* closure = callableSymbol->value;
+                // A function-typed field is a slot holding the closure pointer.
+                if (callableSymbol->symbolType == SymbolType::FIELD ||
+                    llvm::isa<llvm::GetElementPtrInst>(closure)) {
+                    closure = cg.builder.CreateLoad(opaquePtr, closure, functionName + ".closure");
+                }
                 llvm::Value* code = cg.builder.CreateLoad(opaquePtr,
                     cg.builder.CreateStructGEP(closureType, closure, 0, "closure.code"), "closure.code.fn");
                 llvm::Value* environment = cg.builder.CreateLoad(opaquePtr,
@@ -2509,6 +2529,29 @@ llvm::Value* FunctionCallNode::codegen() {
 
 std::unique_ptr<Type> FunctionCallNode::getType() {
     if (type) return type->clone();
+    if (auto tensorType = tensorBuiltinType(*this)) return tensorType;
+
+    // A template function: its declared return type, with a bare type parameter replaced by the
+    // explicit type argument or the type of the argument passed for a parameter of that type.
+    if (auto* tmpl = dynamic_cast<TemplateSymbol*>(CodeGenerator::getInstance().symbolTable.lookup(functionName))) {
+        auto* decl = dynamic_cast<FunctionDeclarationNode*>(tmpl->declaration.get());
+        if (decl && decl->returnType) {
+            const std::string returned = decl->returnType->getName();
+            for (size_t t = 0; t < tmpl->typeParameters.size(); ++t) {
+                if (returned != tmpl->typeParameters[t]) continue;
+                if (t < explicitTypeArgs.size() && explicitTypeArgs[t]) return explicitTypeArgs[t]->clone();
+                for (size_t p = 0; p < decl->parameters.size() && p < arguments.size(); ++p) {
+                    auto* param = dynamic_cast<ParameterNode*>(decl->parameters[p].get());
+                    if (param && param->type && param->type->getName() == returned && arguments[p]) {
+                        return arguments[p]->getType();
+                    }
+                }
+                return std::make_unique<UnknownType>();
+            }
+            const auto kind = decl->returnType->getKind();
+            if (kind == Type::Kind::BASIC) return decl->returnType->clone();
+        }
+    }
 
     // free(x) is a statement-like builtin that releases a heap allocation; it yields no value.
     if (functionName == "free" || functionName == "assert") {

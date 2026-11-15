@@ -294,6 +294,41 @@ pub fn parse_output(
             continue;
         }
 
+        // `Error (file:line): message` (default/named arguments, enums, interfaces, closures) and
+        // `Error (line N): message` (a line of the import-expanded program).
+        if let Some(rest) = line.strip_prefix("Error (") {
+            if let Some(close) = rest.find("): ") {
+                let place = &rest[..close];
+                let msg = &rest[close + 3..];
+                let located = if let Some(n) = place.strip_prefix("line ") {
+                    n.trim().parse::<u32>().ok().map(|l| {
+                        map.locate(l).map(|(f, l)| (f.to_path_buf(), l)).unwrap_or((main.clone(), l.saturating_sub(1)))
+                    })
+                } else {
+                    place.rfind(':').and_then(|colon| {
+                        let file = PathBuf::from(&place[..colon]);
+                        place[colon + 1..].trim().parse::<u32>().ok().map(|l| (file, l.saturating_sub(1)))
+                    })
+                };
+                if let Some((file, line0)) = located {
+                    let range = files
+                        .get(&file)
+                        .map(|f| {
+                            let lr = f.index.line_range(&f.text, line0 as usize);
+                            f.index.range(&f.text, lr)
+                        })
+                        .unwrap_or_default();
+                    result.entry(file).or_default().push(diag(range, DiagnosticSeverity::ERROR, "semantic", msg.to_string()));
+                    continue;
+                }
+            }
+        }
+        if let Some(msg) = line.strip_prefix("Error: ") {
+            let (file, range) = anchor_type_error(msg, &main, map, &mut files).unwrap_or_else(|| (main.clone(), first_line(&mut files, &main)));
+            result.entry(file).or_default().push(diag(range, DiagnosticSeverity::ERROR, "semantic", msg.to_string()));
+            continue;
+        }
+
         if let Some(path) = line.strip_prefix("Unable to read import: ").or_else(|| line.strip_prefix("Import cycle detected at ")) {
             let stem = Path::new(path.trim()).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
             let range = files
@@ -395,6 +430,29 @@ mod tests {
             Some(("Expected ')', but found 'return'", 4, 9))
         );
         assert_eq!(quoted_names("Variable 'x' declared as 'Int' but initialized with 'String'"), vec!["x", "Int", "String"]);
+    }
+
+    #[test]
+    fn maps_located_errors() {
+        let dir = std::env::temp_dir().join("tessera-lsp-located");
+        std::fs::create_dir_all(&dir).unwrap();
+        let main = dir.join("m.csec");
+        std::fs::write(&main, "def f(a: Int, b: Int = 1): Int = a + b
+def main(): Int { return f(b = 2); }
+").unwrap();
+        let out = Output {
+            text: format!("Error ({}:2): call to 'f': f is missing a value for parameter 'a'
+", main.display()),
+            code: Some(1),
+            timed_out: false,
+        };
+        let map = LineMap::default();
+        let read = |p: &Path| std::fs::read_to_string(p).ok();
+        let d = parse_output(&out, &main, &map, &read, "csec++");
+        let list = d.get(&main).expect("diagnostics for the main file");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].range.start.line, 1);
+        assert!(list[0].message.contains("missing a value"));
     }
 
     #[test]

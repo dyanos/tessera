@@ -22,9 +22,9 @@ syn match   tesseraTypeName     /\<\u\w*\>/ display
 
 " ---- keywords (lexer KEYWORDS) ----
 syn keyword tesseraConditional  if else match case
-syn keyword tesseraRepeat       for while
+syn keyword tesseraRepeat       for while break continue
 syn keyword tesseraStatement    return import build
-syn keyword tesseraDeclaration  def val var class struct object extends override operator
+syn keyword tesseraDeclaration  def val var class struct object enum interface implements extends override operator
 syn keyword tesseraDeclaration  template typename external inline constexpr
 syn keyword tesseraModifier     mut box unsafe unatomic
 syn keyword tesseraConcurrency  async await go
@@ -51,7 +51,8 @@ syn keyword tesseraResult       result contained containedin=tesseraContract
 " ---- types ----
 syn keyword tesseraType         Int Long Short Byte Float Double Real Bool Boolean Char String
 syn keyword tesseraType         Nat Integer Natural Unit Void Tensor Vector Matrix Array Dict Set
-syn keyword tesseraType         Shared Weak Regex Future
+syn keyword tesseraType         Shared Weak Regex Future Option Result Dual Rng
+syn keyword tesseraConstant     Some None Ok Err
 syn keyword tesseraBuiltin      System Console Math IO File
 
 " ---- declarations ----

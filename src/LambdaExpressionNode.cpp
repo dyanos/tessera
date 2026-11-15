@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "debug_info.h"
 #include "LambdaExpressionNode.h"
 #include "ASTVisitor.h"
 #include "ParameterNode.h"
@@ -30,6 +31,8 @@
 #include "RangeExpressionNode.h"
 #include "DestructuringAssignmentNode.h"
 #include "type_utils.h"
+#include "ast_walk.h"
+#include "source_map.h"
 
 #include <iostream>
 #include <set>
@@ -48,90 +51,22 @@ std::unique_ptr<Type> usableLambdaType(std::unique_ptr<Type> type) {
 // variables (captures). Handles the expression and statement nodes that appear in lambda bodies;
 // an unrecognized node contributes nothing, which can only under-report a capture.
 void collectReferencedIdentifiers(ASTNode* node, std::set<std::string>& names) {
-    if (!node) return;
-    if (auto* ident = dynamic_cast<IdentifierNode*>(node)) {
-        names.insert(ident->value);
-    } else if (auto* binary = dynamic_cast<BinaryExpressionNode*>(node)) {
-        collectReferencedIdentifiers(binary->left.get(), names);
-        collectReferencedIdentifiers(binary->right.get(), names);
-    } else if (auto* unary = dynamic_cast<UnaryExpressionNode*>(node)) {
-        collectReferencedIdentifiers(unary->expression.get(), names);
-    } else if (auto* ret = dynamic_cast<ReturnStatementNode*>(node)) {
-        collectReferencedIdentifiers(ret->expression.get(), names);
-    } else if (auto* block = dynamic_cast<BlockNode*>(node)) {
-        for (auto& stmt : block->statements) collectReferencedIdentifiers(stmt.get(), names);
-    } else if (auto* ifStmt = dynamic_cast<IfStatementNode*>(node)) {
-        collectReferencedIdentifiers(ifStmt->condition.get(), names);
-        collectReferencedIdentifiers(ifStmt->thenBlock.get(), names);
-        collectReferencedIdentifiers(ifStmt->elseBlock.get(), names);
-    } else if (auto* whileStmt = dynamic_cast<WhileStatementNode*>(node)) {
-        collectReferencedIdentifiers(whileStmt->condition.get(), names);
-        collectReferencedIdentifiers(whileStmt->body.get(), names);
-    } else if (auto* call = dynamic_cast<CallExpressionNode*>(node)) {
-        collectReferencedIdentifiers(call->callee.get(), names);
-        for (auto& arg : call->arguments) collectReferencedIdentifiers(arg.get(), names);
-    } else if (auto* fcall = dynamic_cast<FunctionCallNode*>(node)) {
-        for (auto& arg : fcall->arguments) collectReferencedIdentifiers(arg.get(), names);
-    } else if (auto* assign = dynamic_cast<AssignmentExpressionNode*>(node)) {
-        collectReferencedIdentifiers(assign->left.get(), names);
-        collectReferencedIdentifiers(assign->right.get(), names);
-    } else if (auto* access = dynamic_cast<AccessFieldNode*>(node)) {
-        collectReferencedIdentifiers(access->base.get(), names);
-    } else if (auto* arr = dynamic_cast<ArrayAccessNode*>(node)) {
-        collectReferencedIdentifiers(arr->array.get(), names);
-        collectReferencedIdentifiers(arr->index.get(), names);
-        for (auto& spec : arr->indices) {
-            if (!spec) continue;
-            collectReferencedIdentifiers(spec->index.get(), names);
-            collectReferencedIdentifiers(spec->start.get(), names);
-            collectReferencedIdentifiers(spec->end.get(), names);
-            collectReferencedIdentifiers(spec->step.get(), names);
+    ast_walk::walk(node, nullptr, [&](ASTNode* n, std::unique_ptr<ASTNode>*) {
+        if (auto* ident = dynamic_cast<IdentifierNode*>(n)) {
+            names.insert(ident->value);
+            const auto dot = ident->value.find('.');
+            if (dot != std::string::npos) names.insert(ident->value.substr(0, dot));
         }
-    // Every other node with sub-expressions must be walked too: a variable used only inside, e.g., a
-    // `val x: T = <expr>` initializer or a method-call argument was otherwise never captured, and the
-    // lambda body then referenced the enclosing function's stack slot directly (invalid IR).
-    } else if (auto* decl = dynamic_cast<VariableDeclarationNode*>(node)) {
-        collectReferencedIdentifiers(decl->initializer.get(), names);
-    } else if (auto* prefix = dynamic_cast<PrefixExpressionNode*>(node)) {
-        collectReferencedIdentifiers(prefix->expression.get(), names);
-    } else if (auto* postfix = dynamic_cast<PostfixExpressionNode*>(node)) {
-        collectReferencedIdentifiers(postfix->expression.get(), names);
-    } else if (auto* method = dynamic_cast<MethodCallNode*>(node)) {
-        collectReferencedIdentifiers(method->object.get(), names);
-        for (auto& arg : method->arguments) collectReferencedIdentifiers(arg.get(), names);
-    } else if (auto* assignment = dynamic_cast<AssignmentNode*>(node)) {
-        names.insert(assignment->name);
-        collectReferencedIdentifiers(assignment->expression.get(), names);
-    } else if (auto* forStmt = dynamic_cast<ForStatementNode*>(node)) {
-        collectReferencedIdentifiers(forStmt->iterableExpr.get(), names);
-        collectReferencedIdentifiers(forStmt->body.get(), names);
-    } else if (auto* creation = dynamic_cast<ClassInstanceCreationNode*>(node)) {
-        for (auto& arg : creation->arguments) collectReferencedIdentifiers(arg.get(), names);
-    } else if (auto* literal = dynamic_cast<ArrayLiteralNode*>(node)) {
-        for (auto& element : literal->elements) collectReferencedIdentifiers(element.get(), names);
-    } else if (auto* dict = dynamic_cast<DictLiteralNode*>(node)) {
-        for (auto& key : dict->keys) collectReferencedIdentifiers(key.get(), names);
-        for (auto& value : dict->values) collectReferencedIdentifiers(value.get(), names);
-    } else if (auto* arrayCreation = dynamic_cast<ArrayCreationExpressionNode*>(node)) {
-        for (auto& size : arrayCreation->sizes) collectReferencedIdentifiers(size.get(), names);
-    } else if (auto* cast = dynamic_cast<CastingExpressionNode*>(node)) {
-        collectReferencedIdentifiers(cast->expression.get(), names);
-    } else if (auto* tuple = dynamic_cast<TupleExpressionNode*>(node)) {
-        for (auto& element : tuple->elements) collectReferencedIdentifiers(element.get(), names);
-    } else if (auto* match = dynamic_cast<MatchExpressionNode*>(node)) {
-        collectReferencedIdentifiers(match->expression.get(), names);
-        for (auto& matchCase : match->cases) {
-            collectReferencedIdentifiers(matchCase.first.get(), names);
-            collectReferencedIdentifiers(matchCase.second.get(), names);
+        else if (auto* assignment = dynamic_cast<AssignmentNode*>(n)) {
+            names.insert(assignment->name);
         }
-    } else if (auto* range = dynamic_cast<RangeExpressionNode*>(node)) {
-        collectReferencedIdentifiers(range->startExpr.get(), names);
-        collectReferencedIdentifiers(range->endExpr.get(), names);
-    } else if (auto* destructuring = dynamic_cast<DestructuringAssignmentNode*>(node)) {
-        collectReferencedIdentifiers(destructuring->value.get(), names);
-    } else if (auto* nested = dynamic_cast<LambdaExpressionNode*>(node)) {
-        collectReferencedIdentifiers(nested->body.get(), names);
-    }
+        else if (auto* access = dynamic_cast<AccessFieldNode*>(n)) {
+            // The field name is not a reference to a variable.
+            collectReferencedIdentifiers(access->base.get(), names);
+            return false;
+        }
+        return true;
+    });
 }
 
 llvm::Value* defaultReturnValue(llvm::Type* type) {
@@ -150,6 +85,106 @@ llvm::Value* defaultReturnValue(llvm::Type* type) {
     }
     return llvm::Constant::getNullValue(type);
 }
+}
+
+namespace {
+// Names a function body returns (`return x`, or `x` as its last statement).
+void collectReturnedNames(ASTNode* body, std::set<std::string>& names) {
+    ast_walk::walk(body, nullptr, [&](ASTNode* node, std::unique_ptr<ASTNode>*) {
+        if (dynamic_cast<LambdaExpressionNode*>(node) && node != body) return false;
+        if (auto* ret = dynamic_cast<ReturnStatementNode*>(node)) {
+            if (auto* id = dynamic_cast<IdentifierNode*>(ret->expression.get())) names.insert(id->value);
+        }
+        return true;
+    });
+    if (auto* block = dynamic_cast<BlockNode*>(body)) {
+        if (!block->statements.empty()) {
+            if (auto* id = dynamic_cast<IdentifierNode*>(block->statements.back().get())) names.insert(id->value);
+        }
+    }
+}
+
+struct EscapeMarker {
+    int errors = 0;
+
+    void mark(ASTNode* candidate, int line) {
+        auto* lambda = dynamic_cast<LambdaExpressionNode*>(candidate);
+        if (!lambda || lambda->escapes) return;
+        lambda->escapes = true;
+        if (lambda->capturesByReference) {
+            const SourceLocation location = sourceLocationOf(line);
+            std::cerr << "Error" << (location.file.empty() ? std::string() : " (" + location.file + ":" + std::to_string(location.line) + ")")
+                      << ": a lambda that captures by reference ([&]) cannot be returned or stored: the variables "
+                         "it refers to end with the function; capture by value with [=]" << std::endl;
+            ++errors;
+        }
+    }
+
+    // One function (or lambda) body.
+    void visitBody(ASTNode* body) {
+        if (!body) return;
+        std::set<std::string> returned;
+        collectReturnedNames(body, returned);
+        if (auto* block = dynamic_cast<BlockNode*>(body)) {
+            if (!block->statements.empty()) mark(block->statements.back().get(), block->statements.back()->line);
+        }
+        else {
+            mark(body, body->line);
+        }
+        int line = 0;
+        ast_walk::walk(body, nullptr, [&](ASTNode* node, std::unique_ptr<ASTNode>*) {
+            if (node->line > 0) line = node->line;
+            if (auto* lambda = dynamic_cast<LambdaExpressionNode*>(node)) {
+                if (node != body) {
+                    visitBody(lambda->body.get());
+                    return false;
+                }
+            }
+            if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(node)) {
+                visitBody(fn->body.get());
+                return false;
+            }
+            if (auto* ret = dynamic_cast<ReturnStatementNode*>(node)) mark(ret->expression.get(), line);
+            else if (auto* decl = dynamic_cast<VariableDeclarationNode*>(node)) {
+                if (returned.count(decl->name)) mark(decl->initializer.get(), line);
+            }
+            else if (auto* assign = dynamic_cast<AssignmentExpressionNode*>(node)) {
+                auto* target = dynamic_cast<IdentifierNode*>(assign->left.get());
+                if (!target || returned.count(target->value) || target->value.find('.') != std::string::npos) {
+                    mark(assign->right.get(), line);  // a field, an element, or a returned variable
+                }
+            }
+            else if (auto* creation = dynamic_cast<ClassInstanceCreationNode*>(node)) {
+                for (auto& a : creation->arguments) mark(a.get(), line);
+            }
+            else if (auto* literal = dynamic_cast<ArrayLiteralNode*>(node)) {
+                for (auto& e : literal->elements) mark(e.get(), line);
+            }
+            else if (auto* dict = dynamic_cast<DictLiteralNode*>(node)) {
+                for (auto& v : dict->values) mark(v.get(), line);
+            }
+            else if (auto* tuple = dynamic_cast<TupleExpressionNode*>(node)) {
+                for (auto& e : tuple->elements) mark(e.get(), line);
+            }
+            else if (auto* construct = dynamic_cast<EnumConstructNode*>(node)) {
+                for (auto& a : construct->arguments) mark(a.get(), line);
+            }
+            return true;
+        });
+    }
+};
+}  // namespace
+
+bool markEscapingLambdas(ASTNode* program) {
+    EscapeMarker marker;
+    ast_walk::walk(program, nullptr, [&](ASTNode* node, std::unique_ptr<ASTNode>*) {
+        if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(node)) {
+            marker.visitBody(fn->body.get());
+            return false;
+        }
+        return true;
+    });
+    return marker.errors == 0;
 }
 
 void LambdaExpressionNode::accept(ASTVisitor& visitor) {
@@ -240,6 +275,7 @@ llvm::Value* LambdaExpressionNode::codegen() {
     auto savedPoint = cg.builder.GetInsertPoint();
     llvm::BasicBlock* entry = llvm::BasicBlock::Create(cg.context, "entry", lambdaFunc);
     cg.builder.SetInsertPoint(entry);
+    debuginfo::beginFunction(lambdaFunc, "lambda", line);
     cg.symbolTable.enterScope();
 
     // Bind captured variables from the environment argument.
@@ -285,7 +321,16 @@ llvm::Value* LambdaExpressionNode::codegen() {
     // Build the { code, env } closure. Fill the environment with the captured values (by value)
     // or the outer variables' addresses (by reference); an empty environment for a lambda that
     // captures nothing.
-    llvm::Value* environment = cg.builder.CreateAlloca(envType, nullptr, "lambda.env");
+    // A closure that outlives this frame lives on the heap; any other one on the stack.
+    auto heapAllocate = [&](llvm::Type* type, const char* name) -> llvm::Value* {
+        auto* size = llvm::ConstantExpr::getSizeOf(type);
+        llvm::Value* bytes = size->getType() == llvm::Type::getInt64Ty(cg.context)
+            ? static_cast<llvm::Value*>(size)
+            : cg.builder.CreateZExtOrTrunc(size, llvm::Type::getInt64Ty(cg.context));
+        return cg.builder.CreateCall(cg.mallocFunction, bytes, name);
+    };
+    llvm::Value* environment = escapes ? heapAllocate(envType, "lambda.env.heap")
+                                       : cg.builder.CreateAlloca(envType, nullptr, "lambda.env");
     for (size_t i = 0; i < captured.size(); ++i) {
         llvm::Value* slot = cg.builder.CreateStructGEP(envType, environment, static_cast<unsigned>(i), captured[i].name + ".store");
         // A function parameter is bound to its SSA llvm::Argument rather than to storage: capture
@@ -306,7 +351,8 @@ llvm::Value* LambdaExpressionNode::codegen() {
         }
     }
     llvm::StructType* closureType = llvm::StructType::get(cg.context, { opaquePtr, opaquePtr });
-    llvm::Value* closure = cg.builder.CreateAlloca(closureType, nullptr, "lambda.closure");
+    llvm::Value* closure = escapes ? heapAllocate(closureType, "lambda.closure.heap")
+                                   : cg.builder.CreateAlloca(closureType, nullptr, "lambda.closure");
     cg.builder.CreateStore(lambdaFunc, cg.builder.CreateStructGEP(closureType, closure, 0, "closure.code"));
     cg.builder.CreateStore(environment, cg.builder.CreateStructGEP(closureType, closure, 1, "closure.env"));
     return closure;

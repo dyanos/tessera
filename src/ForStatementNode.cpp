@@ -8,6 +8,7 @@
 #include <llvm/IR/DerivedTypes.h>
 
 #include "RangeExpressionNode.h"
+#include "ArrayLiteralNode.h"
 #include "dict_support.h"
 #include "symbol.h"
 
@@ -89,6 +90,7 @@ llvm::Value* ForStatementNode::codegenDictLoop() {
 
     llvm::BasicBlock* condBB = llvm::BasicBlock::Create(cg.context, "dict.iter.cond", function);
     llvm::BasicBlock* bodyBB = llvm::BasicBlock::Create(cg.context, "dict.iter.body", function);
+    llvm::BasicBlock* incBB = llvm::BasicBlock::Create(cg.context, "dict.iter.inc", function);
     llvm::BasicBlock* afterBB = llvm::BasicBlock::Create(cg.context, "dict.iter.end", function);
     cg.builder.CreateBr(condBB);
 
@@ -116,17 +118,114 @@ llvm::Value* ForStatementNode::codegenDictLoop() {
         }
         bindLoopVariable(variable, valueType, value);
     }
+    cg.loopTargets.push_back({afterBB, incBB, cg.cleanupDepth()});
     body->codegen();
+    cg.loopTargets.pop_back();
     if (!csec_llvm::terminatorOrNull(cg.builder.GetInsertBlock())) {
-        llvm::Value* current = cg.builder.CreateLoad(i64Ty, indexSlot, "dict.iter.i");
-        cg.builder.CreateStore(cg.builder.CreateAdd(current, llvm::ConstantInt::get(i64Ty, 1), "dict.iter.next"), indexSlot);
-        cg.builder.CreateBr(condBB);
+        cg.builder.CreateBr(incBB);
     }
+    cg.builder.SetInsertPoint(incBB);
+    llvm::Value* current = cg.builder.CreateLoad(i64Ty, indexSlot, "dict.iter.i");
+    cg.builder.CreateStore(cg.builder.CreateAdd(current, llvm::ConstantInt::get(i64Ty, 1), "dict.iter.next"), indexSlot);
+    cg.builder.CreateBr(condBB);
     cg.symbolTable.exitScope();
     cg.builder.SetInsertPoint(afterBB);
     return nullptr;
 }
 
+
+// `for (x <- xs) { ... }` over an array: a literal, a statically sized array, or a `map`/`filter`
+// result whose element count was recorded at runtime.
+llvm::Value* ForStatementNode::codegenArrayLoop() {
+    auto& cg = CodeGenerator::getInstance();
+    auto iterType = iterableExpr->getType();
+    llvm::Value* arrayPtr = iterableExpr->codegen();
+    if (!arrayPtr || !iterType) return nullptr;
+    llvm::Value* srcPtr = arrayPtr;
+
+    std::unique_ptr<Type> elementSourceType;
+    llvm::Type* elementType = nullptr;
+    int arraySize = 0;
+    bool sizeKnown = false;
+    if (auto* arrType = dynamic_cast<ArrayType*>(iterType.get())) {
+        if (arrType->elementType) elementSourceType = arrType->elementType->clone();
+        arraySize = arrType->size;
+        sizeKnown = arraySize > 0;
+    }
+    else if (auto* genType = dynamic_cast<GenericType*>(iterType.get())) {
+        const std::string base = genType->baseType ? genType->baseType->getName() : "";
+        if ((base == "Array" || base == "Vector") && !genType->typeArguments.empty() && genType->typeArguments[0]) {
+            elementSourceType = genType->typeArguments[0]->clone();
+        }
+    }
+    if (auto* literal = dynamic_cast<ArrayLiteralNode*>(iterableExpr.get())) {
+        arraySize = static_cast<int>(literal->elements.size());
+        sizeKnown = true;
+    }
+    if (elementSourceType) elementType = cg.getLLVMType(elementSourceType.get());
+
+    if (auto* llvmArrayTy = llvm::dyn_cast<llvm::ArrayType>(arrayPtr->getType())) {
+        if (!elementType) elementType = llvmArrayTy->getElementType();
+        if (!sizeKnown) {
+            arraySize = static_cast<int>(llvmArrayTy->getNumElements());
+            sizeKnown = true;
+        }
+        llvm::Value* tmpArray = cg.builder.CreateAlloca(llvmArrayTy, nullptr, "for.arr.tmp");
+        cg.builder.CreateStore(arrayPtr, tmpArray);
+        llvm::Value* zero = cg.builder.getInt32(0);
+        arrayPtr = cg.builder.CreateInBoundsGEP(llvmArrayTy, tmpArray, { zero, zero }, "for.arr.decay");
+    }
+
+    llvm::Value* runtimeLen = nullptr;
+    auto lenIt = cg.arrayRuntimeLength.find(srcPtr);
+    if (lenIt != cg.arrayRuntimeLength.end()) runtimeLen = lenIt->second;
+
+    if (!elementType || !elementSourceType || !arrayPtr->getType()->isPointerTy() || (!sizeKnown && !runtimeLen)) {
+        std::cerr << "Error: for (" << variable << " <- ...) needs an array whose length is known here "
+                  << "(a literal, a fixed-size array, or a map/filter result); iterate an index range instead"
+                  << std::endl;
+        return nullptr;
+    }
+
+    auto* i32Ty = cg.builder.getInt32Ty();
+    llvm::Value* bound = runtimeLen ? runtimeLen : llvm::ConstantInt::get(i32Ty, arraySize);
+    if (bound->getType() != i32Ty) bound = cg.builder.CreateIntCast(bound, i32Ty, true, "for.len");
+
+    llvm::Function* function = cg.builder.GetInsertBlock()->getParent();
+    llvm::Value* indexSlot = cg.builder.CreateAlloca(i32Ty, nullptr, "for.index");
+    cg.builder.CreateStore(llvm::ConstantInt::get(i32Ty, 0), indexSlot);
+
+    llvm::BasicBlock* condBB = llvm::BasicBlock::Create(cg.context, "for.each.cond", function);
+    llvm::BasicBlock* bodyBB = llvm::BasicBlock::Create(cg.context, "for.each.body", function);
+    llvm::BasicBlock* incBB = llvm::BasicBlock::Create(cg.context, "for.each.inc", function);
+    llvm::BasicBlock* afterBB = llvm::BasicBlock::Create(cg.context, "for.each.end", function);
+    cg.builder.CreateBr(condBB);
+
+    cg.builder.SetInsertPoint(condBB);
+    llvm::Value* index = cg.builder.CreateLoad(i32Ty, indexSlot, "for.i");
+    cg.builder.CreateCondBr(cg.builder.CreateICmpSLT(index, bound, "for.more"), bodyBB, afterBB);
+
+    cg.builder.SetInsertPoint(bodyBB);
+    cg.symbolTable.enterScope();
+    llvm::Value* elementPtr = cg.builder.CreateInBoundsGEP(elementType, arrayPtr, index, "for.elem.ptr");
+    llvm::Value* element = cg.builder.CreateLoad(elementType, elementPtr, variable);
+    bindLoopVariable(variable, elementSourceType.get(), element);
+    cg.loopTargets.push_back({afterBB, incBB, cg.cleanupDepth()});
+    body->codegen();
+    cg.loopTargets.pop_back();
+    if (!csec_llvm::terminatorOrNull(cg.builder.GetInsertBlock())) {
+        cg.builder.CreateBr(incBB);
+    }
+    cg.symbolTable.exitScope();
+
+    cg.builder.SetInsertPoint(incBB);
+    llvm::Value* current = cg.builder.CreateLoad(i32Ty, indexSlot, "for.i");
+    cg.builder.CreateStore(cg.builder.CreateAdd(current, llvm::ConstantInt::get(i32Ty, 1), "for.next"), indexSlot);
+    cg.builder.CreateBr(condBB);
+
+    cg.builder.SetInsertPoint(afterBB);
+    return nullptr;
+}
 
 // ForStatementNode
 void ForStatementNode::accept(ASTVisitor& visitor) {
@@ -141,6 +240,7 @@ llvm::Value* ForStatementNode::codegen() {
         if (isDictType(iterableType.get()) || isSetType(iterableType.get())) {
             return codegenDictLoop();
         }
+        return codegenArrayLoop();
     }
 
     llvm::Function* function = cg.builder.GetInsertBlock()->getParent();
@@ -198,7 +298,7 @@ llvm::Value* ForStatementNode::codegen() {
     llvm::BasicBlock* condBB = llvm::BasicBlock::Create(cg.context, "forcond", function);
     llvm::BasicBlock* loopBB = llvm::BasicBlock::Create(cg.context, "loop", function);
     llvm::BasicBlock* loopBodyBB = tokenStream ? llvm::BasicBlock::Create(cg.context, "token.body", function) : loopBB;
-    llvm::BasicBlock* incrementBB = tokenStream ? llvm::BasicBlock::Create(cg.context, "token.next", function) : loopBB;
+    llvm::BasicBlock* incrementBB = llvm::BasicBlock::Create(cg.context, tokenStream ? "token.next" : "for.inc", function);
     llvm::BasicBlock* afterBB = llvm::BasicBlock::Create(cg.context, "afterloop", function);
 
     if (beforeLoopBB && !csec_llvm::terminatorOrNull(beforeLoopBB)) {
@@ -245,24 +345,16 @@ llvm::Value* ForStatementNode::codegen() {
         cg.builder.CreateStore(text, textSlot);
         cg.symbolTable.addSymbol(tokenValue, std::make_unique<Symbol>(tokenValue, std::make_unique<BasicType>("String"), textSlot, false, SymbolType::VARIABLE));
     }
+    cg.loopTargets.push_back({afterBB, incrementBB, cg.cleanupDepth()});
     this->body->codegen();
+    cg.loopTargets.pop_back();
 
-    // Increment and branch back to condition
+    // Increment and branch back to condition (`continue` jumps to the increment too).
     if (!csec_llvm::terminatorOrNull(cg.builder.GetInsertBlock())) {
-        if (tokenStream) {
-            cg.builder.CreateBr(incrementBB);
-        }
-        else {
-            auto* value = cg.builder.CreateLoad(startValue->getType(), value_ptr, this->variable.c_str());
-            auto* one = llvm::ConstantInt::get(startValue->getType(), 1, true);
-            auto* next_value = cg.builder.CreateAdd(value, one, "next_i");
-            cg.builder.CreateStore(next_value, value_ptr);
-            cg.builder.CreateBr(condBB);
-        }
+        cg.builder.CreateBr(incrementBB);
     }
-
-    if (tokenStream) {
-        cg.builder.SetInsertPoint(incrementBB);
+    cg.builder.SetInsertPoint(incrementBB);
+    {
         auto* value = cg.builder.CreateLoad(startValue->getType(), value_ptr, this->variable.c_str());
         auto* one = llvm::ConstantInt::get(startValue->getType(), 1, true);
         cg.builder.CreateStore(cg.builder.CreateAdd(value, one, "next_i"), value_ptr);

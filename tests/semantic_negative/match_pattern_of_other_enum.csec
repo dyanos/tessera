@@ -1,0 +1,9 @@
+enum A { One, Two }
+enum B { Three, Four }
+
+def f(a: A): Int = a match {
+    case Three => 3;
+    case _ => 0;
+}
+
+def main(): Int { return 0; }

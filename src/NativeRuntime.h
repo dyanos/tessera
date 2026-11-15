@@ -167,6 +167,17 @@ CSEC_NATIVE_API void*  csec_tensor_mul(void* a, void* b);
 CSEC_NATIVE_API void*  csec_tensor_scale(void* t, double s);
 CSEC_NATIVE_API void*  csec_tensor_div_scalar(void* t, double s);
 CSEC_NATIVE_API double csec_tensor_inner(void* a, void* b);
+CSEC_NATIVE_API double csec_tensor_reduce_all(void* t, int op);
+CSEC_NATIVE_API void*  csec_tensor_reduce_axis(void* t, long long axis, int op);
+CSEC_NATIVE_API long long csec_tensor_argext(void* t, int wantMax);
+CSEC_NATIVE_API void*  csec_tensor_full_like(void* t, double value);
+CSEC_NATIVE_API void   csec_tensor_fill_random(void* t, long long rng, int dist, double a, double b);
+// Random numbers (xoshiro256**); handle 0 is the shared generator.
+CSEC_NATIVE_API long long csec_rng_new(long long seed);
+CSEC_NATIVE_API void   csec_rng_seed(long long rng, long long seed);
+CSEC_NATIVE_API double csec_rng_uniform(long long rng);
+CSEC_NATIVE_API long long csec_rng_int(long long rng, long long low, long long high);
+CSEC_NATIVE_API double csec_rng_normal(long long rng, double mean, double sd);
 CSEC_NATIVE_API char* csec_to_string_bool(int value);
 CSEC_NATIVE_API char* csec_to_string_char(char value);
 CSEC_NATIVE_API char* csec_replace_dots_with_slash(const char* value);

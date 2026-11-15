@@ -65,6 +65,13 @@ std::unique_ptr<ASTNode> Parser::parseClassDeclaration(bool isExternal) {
 				error("Expected superclass name after 'extends'");
 			}
 		}
+		std::vector<std::string> interfaces;
+		if (matchWord("implements")) {
+			do {
+				expect(TokenType::IDENTIFIER);
+				interfaces.push_back(previous().value);
+			} while (match(TokenType::OPERATOR, ","));
+		}
 
 		std::unique_ptr<ClassBodyNode> classBody = nullptr;
 		if (isExternal == false) {
@@ -77,7 +84,9 @@ std::unique_ptr<ASTNode> Parser::parseClassDeclaration(bool isExternal) {
 			}
 		}
 
-		return std::make_unique<ClassDeclarationNode>(className, constructorParams, superClassName, std::move(classBody));
+		auto classNode = std::make_unique<ClassDeclarationNode>(className, constructorParams, superClassName, std::move(classBody));
+		classNode->interfaces = std::move(interfaces);
+		return classNode;
 	}
 	else {
 		error("Expected class name after 'class'");

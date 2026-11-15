@@ -1,0 +1,45 @@
+// The built-in Option<T> and Result<T, E>, and `?` to pass a None or an Err on.
+def find(limit: Int, key: Int): Option<Int> {
+    if (key > limit) { return None; }
+    return Some(key * 2);
+}
+
+def parse(s: String): Result<Int, String> {
+    if (s == "one") { return Ok(1); }
+    if (s == "two") { return Ok(2); }
+    return Err("bad number: " + s);
+}
+
+def sum(a: String, b: String): Result<Int, String> {
+    val x = parse(a)?;
+    val y = parse(b)?;
+    return Ok(x + y);
+}
+
+def firstTwice(limit: Int, key: Int): Option<Int> {
+    val v = find(limit, key)?;
+    return Some(v * 2);
+}
+
+def main(): Int {
+    val a = find(10, 3);
+    val b = find(10, 30);
+    if (!a.isSome() || !b.isNone()) { return 1; }
+    if (a.unwrap() != 6 || b.unwrapOr(7) != 7) { return 2; }
+    val c = a match { case Some(v) => v; case None => -1; };
+    if (c != 6) { return 3; }
+
+    val good = sum("one", "two");
+    val bad = sum("one", "six");
+    if (!good.isOk() || good.unwrap() != 3) { return 4; }
+    if (!bad.isErr() || bad.unwrapErr() != "bad number: six") { return 5; }
+    val code = bad match { case Ok(v) => v; case Err(e) => e.length; };
+    if (code != 15) { return 6; }
+
+    if (firstTwice(10, 2).unwrapOr(0) != 8 || firstTwice(10, 20).isSome()) { return 7; }
+    val explicit = Option<Int>.None;
+    val text: Result<String, Int> = Ok("fine");
+    if (explicit.isSome() || text.unwrap() != "fine") { return 8; }
+    if ("" + Some(4) != "Some(4)" || "" + parse("x") != "Err(bad number: x)") { return 9; }
+    return 0;
+}

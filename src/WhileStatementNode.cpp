@@ -50,7 +50,9 @@ llvm::Value* WhileStatementNode::codegen() {
 
 	// Loop body
 	cg.builder.SetInsertPoint(loopBB);
+	cg.loopTargets.push_back({afterBB, condBB, cg.cleanupDepth()});
 	this->body->codegen();
+	cg.loopTargets.pop_back();
 
 	// Branch back to condition if no terminator
 	if (!csec_llvm::terminatorOrNull(cg.builder.GetInsertBlock())) {

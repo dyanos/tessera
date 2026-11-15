@@ -1,0 +1,31 @@
+// Default parameter values and named arguments for functions, methods, constructors and objects.
+def scale(x: Int, factor: Int = 2, offset: Int = 0): Int {
+    return x * factor + offset;
+}
+
+def greet(name: String, greeting: String = "hello"): String = greeting + ", " + name
+
+class Box(width: Int, height: Int = 1) {
+    def area(pad: Int = 0): Int = (width + pad) * (height + pad)
+}
+
+object Geometry {
+    def perimeter(w: Int, h: Int = 1): Int = 2 * (w + h)
+}
+
+def main(): Int {
+    if (scale(5) != 10) { return 1; }
+    if (scale(5, 3) != 15) { return 2; }
+    if (scale(5, offset = 1) != 11) { return 3; }
+    if (scale(x = 2, offset = 4, factor = 10) != 24) { return 4; }
+    val b = new Box(3);
+    if (b.area() != 3) { return 5; }
+    if (b.area(pad = 1) != 8) { return 6; }
+    if (new Box(width = 2, height = 5).area() != 10) { return 7; }
+    if (Geometry.perimeter(3) != 8) { return 8; }
+    if (greet("kim") != "hello, kim") { return 9; }
+    if (greet(greeting = "hi", name = "lee") != "hi, lee") { return 10; }
+    // nested: an argument that is itself a call with defaults
+    if (scale(scale(1), offset = scale(1, 1)) != 5) { return 11; }
+    return 0;
+}

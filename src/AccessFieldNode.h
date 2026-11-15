@@ -1,5 +1,7 @@
 #pragma once
 #include "ast.h"
+
+#include <functional>
 #include "symbol.h"
 
 class AccessFieldNode : public ASTNode {
@@ -34,6 +36,8 @@ public:
 
     // Address of the field (an lvalue), used as an assignment target. codegen() reads through it.
     llvm::Value* codegenFieldPointer();
+    // Field access on a base that is not a named value: binds the base to a hidden local first.
+    llvm::Value* codegenThroughTemporary(const std::function<llvm::Value*()>& access);
     std::unique_ptr<Type> getType() override;
     std::unique_ptr<ASTNode> clone() override {
         return std::make_unique<AccessFieldNode>(*this);

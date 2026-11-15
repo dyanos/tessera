@@ -45,6 +45,13 @@ class ArrayCreationNode;
 class ArrayAccessNode;
 class AccessFieldNode;
 class TemplateDeclarationNode;
+class LoopControlNode;
+class EnumDeclarationNode;
+class EnumConstructNode;
+class PatternNode;
+class TryNode;
+class InterfaceDeclarationNode;
+class InterfaceWrapNode;
 
 class ASTVisitor {
 public:
@@ -98,4 +105,11 @@ public:
     virtual void visit(ArrayAccessNode& node) = 0;
     virtual void visit(AccessFieldNode& node) = 0;
     virtual void visit(TemplateDeclarationNode& node) = 0;
+    virtual void visit(LoopControlNode&) {}
+    virtual void visit(EnumDeclarationNode&) {}
+    virtual void visit(EnumConstructNode&) {}
+    virtual void visit(PatternNode&) {}
+    virtual void visit(TryNode&) {}
+    virtual void visit(InterfaceDeclarationNode&) {}
+    virtual void visit(InterfaceWrapNode&) {}
 };

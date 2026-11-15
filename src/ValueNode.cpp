@@ -36,6 +36,11 @@ llvm::Value* ValueNode::codegen() {
 			return llvm::ConstantFP::get(llvm::Type::getFloatTy(cg.context), std::stof(value));
 		}
 		else if (valueType == TokenType::EXPONENTIAL_LITERAL) {
+			// A decimal literal is a Double unless the type checker narrowed it to Float (`x * 0.5`
+			// with a Float `x`, `val f: Float = 0.5`).
+			if (type && type->isFloatTy()) {
+				return llvm::ConstantFP::get(llvm::Type::getFloatTy(cg.context), std::stof(value));
+			}
 			return llvm::ConstantFP::get(llvm::Type::getDoubleTy(cg.context), std::stod(value));
 		}
 		else if (valueType == TokenType::BINARY_LITERAL) {

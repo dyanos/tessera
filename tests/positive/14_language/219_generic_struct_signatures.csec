@@ -1,0 +1,29 @@
+// Template structs in signatures, and fields and methods of call results.
+template<typename T>
+struct Holder(tag: Int, value: T) {
+    def orElse(d: T): T {
+        if (tag == 0) { return value; }
+        return d;
+    }
+}
+
+struct Point(x: Int, y: Int) {
+    def sum(): Int = x + y
+}
+
+def find(n: Int): Holder<Int> {
+    if (n > 3) { return new Holder<Int>(0, n * 2); }
+    return new Holder<Int>(1, 0);
+}
+
+def point(a: Int): Point = new Point(a, a + 1)
+
+def main(): Int {
+    val a = find(5);
+    val b: Holder<Int> = find(1);
+    if (a.orElse(0) != 10 || b.orElse(7) != 7) { return 1; }
+    if (find(5).value != 10 || point(3).y != 4 || point(2).sum() != 5) { return 2; }
+    if (new Holder<String>(0, "hey").orElse("").length != 3) { return 3; }
+    if ("abc".length != 3) { return 4; }
+    return 0;
+}

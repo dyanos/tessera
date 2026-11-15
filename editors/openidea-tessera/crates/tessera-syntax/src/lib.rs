@@ -66,6 +66,8 @@ impl Analysis {
                     | DeclKind::External
                     | DeclKind::Class
                     | DeclKind::Struct
+                    | DeclKind::Enum
+                    | DeclKind::Interface
                     | DeclKind::Object
                     | DeclKind::Dsl
                     | DeclKind::Global

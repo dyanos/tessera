@@ -1,0 +1,6 @@
+enum Shape { Circle(r: Double), Empty }
+
+def main(): Int {
+    if (Circle(1.0) == Empty) { return 1; }
+    return 0;
+}

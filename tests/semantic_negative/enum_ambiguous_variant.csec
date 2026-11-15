@@ -1,0 +1,7 @@
+enum A { Start, Stop }
+enum B { Start, Pause }
+
+def main(): Int {
+    val s = Start;   // A.Start or B.Start?
+    return 0;
+}

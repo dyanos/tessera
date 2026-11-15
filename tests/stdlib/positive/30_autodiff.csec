@@ -1,0 +1,26 @@
+import std.autodiff
+
+def cubic(x: Dual): Dual = x * x * x - x * 2.0 - constant(5.0)   // x^3 - 2x - 5
+
+def close(a: Double, b: Double): Boolean = abs(a - b) < 1.0e-9
+
+def main(): Int {
+    // d/dx (x^3 - 2x - 5) = 3x^2 - 2
+    if (!close(derivative(cubic, 2.0), 10.0)) { return 1; }
+    // chain rule through sin, exp, log, sqrt, pow, tanh
+    val s = derivative([=](x: Dual) -> { return dsin(x * x); }, 1.5);
+    if (!close(s, 2.0 * 1.5 * cos(2.25))) { return 2; }
+    val e = derivative([=](x: Dual) -> { return dexp(x) * dlog(x); }, 2.0);
+    if (!close(e, exp(2.0) * log(2.0) + exp(2.0) / 2.0)) { return 3; }
+    val q = derivative([=](x: Dual) -> { return dsqrt(x) + dpow(x, 3.0) / x; }, 4.0);
+    if (!close(q, 0.25 + 2.0 * 4.0)) { return 4; }
+    val t = derivative([=](x: Dual) -> { return dtanh(x) - dsigmoid(x); }, 0.0);
+    if (!close(t, 1.0 - 0.25)) { return 5; }
+    // gradient of x*y + y^2 at (3, 4) = (4, 3 + 8)
+    gx, gy = gradient2([=](x: Dual, y: Dual) -> { return x * y + y * y; }, 3.0, 4.0);
+    if (!close(gx, 4.0) || !close(gy, 11.0)) { return 6; }
+    // the real root of x^3 - 2x - 5
+    val root = newton(cubic, 2.0, 50);
+    if (!close(root, 2.0945514815423265e0)) { return 7; }
+    return 0;
+}

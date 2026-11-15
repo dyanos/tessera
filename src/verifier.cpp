@@ -183,6 +183,8 @@ struct State {
     z3::expr pc;
     std::map<std::string, Val> env;
     std::vector<Frame> frames;
+    // A path that ran `break` (1) or `continue` (2): it skips the rest of the loop body.
+    int jump = 0;
     explicit State(z3::context& ctx) : pc(ctx.bool_val(true)) {}
 };
 
@@ -840,6 +842,10 @@ private:
         for (auto& statement : block->statements) {
             std::vector<State> next;
             for (auto& s : states) {
+                if (s.jump) {  // left the loop body by break/continue: the statement is skipped
+                    next.push_back(std::move(s));
+                    continue;
+                }
                 auto produced = execStatement(statement.get(), s);
                 for (auto& p : produced) next.push_back(std::move(p));
             }
@@ -975,6 +981,10 @@ private:
         if (dynamic_cast<FunctionDeclarationNode*>(statement)) {
             return {s};  // nested functions are verified on their own
         }
+        if (auto* control = dynamic_cast<LoopControlNode*>(statement)) {
+            s.jump = control->isBreak ? 1 : 2;
+            return {s};
+        }
         // Other statements: evaluate for their checks when they are expressions, and forget every
         // variable they may assign.
         std::set<std::string> modified;
@@ -1103,9 +1113,16 @@ private:
                 note(clause.line, "'decreases " + clause.text + "' uses values the verifier does not model");
             }
         }
+        std::vector<State> broken;
         if (satisfiable(bodyState.pc)) {
             auto ends = execBlock(body, {bodyState});
             for (auto& end : ends) {
+                if (end.jump == 1) {
+                    end.jump = 0;
+                    broken.push_back(end);
+                    continue;
+                }
+                end.jump = 0;
                 std::vector<Invariant> after;
                 evalInvariants(end, after);
                 for (auto& inv : after) {
@@ -1121,11 +1138,13 @@ private:
             }
         }
 
-        // 3. After the loop: the invariants hold and the condition is false.
+        // 3. After the loop: the invariants hold and the condition is false -- or a `break` left it.
         State exit = head;
         exit.pc = head.pc && !*c.e;
-        if (!satisfiable(exit.pc)) return {};
-        return {exit};
+        std::vector<State> exits;
+        if (satisfiable(exit.pc)) exits.push_back(exit);
+        for (auto& b : broken) exits.push_back(std::move(b));
+        return exits;
     }
 
     std::vector<State> execRangeFor(ForStatementNode& loop, State& s) {
@@ -1223,9 +1242,16 @@ private:
                       "'decreases " + contracts->decreases.front().text + "' may be negative at the start of an iteration");
             }
         }
+        std::vector<State> broken;
         if (satisfiable(bodyState.pc)) {
             auto ends = execBlock(loop.body.get(), {bodyState});
             for (auto& end : ends) {
+                if (end.jump == 1) {
+                    end.jump = 0;
+                    broken.push_back(end);
+                    continue;
+                }
+                end.jump = 0;
                 stepFn(end);
                 std::vector<Invariant> after;
                 invariantsOf(end, after);
@@ -1246,8 +1272,10 @@ private:
         }
         State exit = head;
         exit.pc = head.pc && !*c.e;
-        if (!satisfiable(exit.pc)) return {};
-        return {exit};
+        std::vector<State> exits;
+        if (satisfiable(exit.pc)) exits.push_back(exit);
+        for (auto& b : broken) exits.push_back(std::move(b));
+        return exits;
     }
 };
 

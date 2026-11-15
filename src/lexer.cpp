@@ -91,7 +91,7 @@ void Lexer::initializeKeywords() {
         "this", "true", "val", "var",
 		"while", "to", "until", "and", "or", "xor", "map", "pmap", "reduce", "preduce", "filter", "external", "inline", "constexpr",
 		"template", "typename", "mut", "box", "unsafe", "unatomic", "struct",
-        "async", "await", "go", "build",
+        "async", "await", "go", "build", "break", "continue", "enum",
         // Physics-DSL entry keywords (dispatch a simulation block from statement position). The body
         // words that appear only inside these blocks -- atom/bond/at/steps/dt/temperature/grid/
         // viscosity/velocity/euler/from/step/lattice/spacing/chain/mcmc -- are NOT reserved; the DSL
@@ -108,7 +108,7 @@ void Lexer::initializeOperators() {
     std::string ops[] = {
 		"=", "==", "!=", "+", "-", "*", "/", "%", "$", "$$", "\\", "<", ">", "<=", ">=", "<<", ">>", "<<|", ">>|",
 		"!", "&", "|", "^", "~", ":", ".", ",", ";", "(", ")", "{", "}", "[", "]", "[@", "<-", "->",
-		"++", "--", "+=", "-=", "*=", "/=", "%=", "**", "_", "=>", "<:", "<%", ">:", "#", "@", "'"
+		"++", "--", "+=", "-=", "*=", "/=", "%=", "**", "_", "=>", "<:", "<%", ">:", "#", "@", "'", "?"
     };
     operators.insert(ops, ops + sizeof(ops) / sizeof(ops[0]));
 }
@@ -361,6 +361,11 @@ bool Lexer::matchNumberLiteral(std::vector<Token>& tokens) {
 			}
 
             if (hasExponentDigits) {
+                if (peek() == 'f' || peek() == 'F') {  // `1e3f`: a Float literal
+                    advance();
+                    tokens.push_back(Token{ TokenType::FLOAT_LITERAL, source.substr(start, position - start), line, column });
+                    return true;
+                }
                 std::string value = source.substr(start, position - start);
 			    tokens.push_back(Token{ TokenType::EXPONENTIAL_LITERAL, value, line, column });
             }
@@ -384,12 +389,24 @@ bool Lexer::matchNumberLiteral(std::vector<Token>& tokens) {
                 while (std::isdigit(static_cast<unsigned char>(peek()))) {
                     advance();
                 }
+                if (peek() == 'f' || peek() == 'F') {  // `1.5e3f`: a Float literal
+                    advance();
+                    tokens.push_back(Token{ TokenType::FLOAT_LITERAL, source.substr(start, position - start), line, column });
+                    return true;
+                }
                 std::string expLiteral = source.substr(start, position - start);
                 tokens.push_back(Token{ TokenType::EXPONENTIAL_LITERAL, expLiteral, line, column });
             }
             else {
-                std::string floatLiteral = source.substr(start, position - start);
-                tokens.push_back(Token{ TokenType::FLOAT_LITERAL, floatLiteral, line, column });
+                // A plain decimal literal is a Double; the `f` suffix (`1.5f`) makes it a Float.
+                if (peek() == 'f' || peek() == 'F') {
+                    advance();
+                    tokens.push_back(Token{ TokenType::FLOAT_LITERAL, source.substr(start, position - start), line, column });
+                }
+                else {
+                    std::string doubleLiteral = source.substr(start, position - start);
+                    tokens.push_back(Token{ TokenType::EXPONENTIAL_LITERAL, doubleLiteral, line, column });
+                }
             }
         }
         else {
@@ -456,6 +473,13 @@ bool Lexer::matchIdentifierOrKeyword(std::vector<Token>& tokens) {
 
 bool Lexer::matchOperator(std::vector<Token>& tokens) {
     // ?좎룞?쇿뜝?숈삕 ?좎룞?쇿뜝?숈삕 ?좎룞?쇿뜝?숈삕?좎룞??泥섇뜝?숈삕
+    // `&&` and `||` are spellings of the `and` / `or` keywords.
+    const std::string pair = source.substr(position, 2);
+    if (pair == "&&" || pair == "||") {
+        tokens.push_back(Token{ TokenType::KEYWORD, pair == "&&" ? "and" : "or", line, column });
+        advance(2);
+        return true;
+    }
     std::string op = "";
     size_t maxOpLength = 3;  // ?좎뙇?먯삕 ?좎룞?쇿뜝?숈삕?좎룞???좎룞?쇿뜝?숈삕 ?좎룞?쇿뜝?숈삕
     for (size_t len = maxOpLength; len > 0; --len) {

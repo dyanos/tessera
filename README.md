@@ -29,10 +29,18 @@ grammar see [docs/grammar.md](docs/grammar.md).
   move and `&`/`&mut` borrows, use-after-move / borrow / alias checking, `clone`,
   `free`, `box T`, and `Shared`/`Weak` reference counting. Scope-exit
   destruction currently drops `box`, tensors, and `Shared`/`Weak` automatically;
-  heap classes and arrays/vectors are released with explicit `free` until
-  ownership-aware drop glue lands. `--no-strict-ownership` opts out.
+  a class instance made by `new` is freed with its only owning local (drop flags handle
+  values moved on some paths); arrays/vectors are released with explicit `free`.
+  `--no-strict-ownership` opts out.
 - **Multiple return values** with tuple return types and destructuring
   (`a, b = f()`, `_` to ignore), and value `struct`s.
+- **Enums and pattern matching**: algebraic data types (generic and recursive), `match` with
+  nested patterns, guards and `|`, and an exhaustiveness check; built-in `Option<T>` /
+  `Result<T, E>` with the `?` operator.
+- **Interfaces** with dynamic dispatch and default methods, and interface-bounded templates
+  (`template<typename T: Shape>`).
+- Default and named arguments, `break`/`continue`, `for (x <- array)`, closures that outlive
+  their frame, `&&`/`||`, and decimal literals that are `Double`.
 - **Concurrency**: Erlang-style microthreads (`spawn`/`send`/`receive`, mailboxes,
   monitors, share-nothing captures), `go f(x)` and `async f(x)` / `await` with
   `Future<T>`, OS threads with mutexes/atomics/channels, and inter-task
@@ -58,6 +66,11 @@ grammar see [docs/grammar.md](docs/grammar.md).
   [examples/openai_chat.csec](examples/openai_chat.csec), and
   [examples/openai_web_agent.csec](examples/openai_web_agent.csec) (an LLM that browses
   through tool calls; works with OpenAI, Ollama, LM Studio, vLLM, ...).
+- Tensor reductions along an axis, argmax/argmin and random fills; `std.random`
+  (xoshiro256** generators) and `std.autodiff` (forward-mode automatic differentiation).
+- `-g` emits debug information (functions and source lines; CodeView/PDB on Windows, DWARF
+  elsewhere). The language server in `editors/openidea-tessera/crates/tessera-lsp` reports
+  compiler diagnostics and offers hover, completion, go-to-definition, references and rename.
 - Native runtime support for printing, input, math functions, sockets, POSIX-like
   file/process helpers, parallel helpers, and dynamic library interop.
 - `[@DllImport("library", "symbol")] external def ...` for native symbol imports.

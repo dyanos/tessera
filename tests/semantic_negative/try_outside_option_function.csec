@@ -1,0 +1,6 @@
+def get(): Option<Int> = Some(1)
+
+def main(): Int {
+    val v = get()?;   // main does not return an Option
+    return v;
+}

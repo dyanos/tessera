@@ -1,0 +1,30 @@
+// Enums without data: construction, comparison, match, and printing.
+enum Color { Red, Green, Blue }
+
+def code(c: Color): Int = c match {
+    case Red => 1;
+    case Green => 2;
+    case Blue => 3;
+}
+
+def warm(c: Color): Boolean = c match {
+    case Red => true;
+    case Green | Blue => false;
+}
+
+def main(): Int {
+    val c = Color.Green;
+    val d: Color = Blue;          // a bare variant name works where it is unambiguous
+    if (c == d) { return 1; }
+    if (c != Color.Green) { return 2; }
+    if (code(c) * 10 + code(d) != 23) { return 3; }
+    if (!warm(Red) || warm(c)) { return 4; }
+    if (c.toString() != "Green") { return 5; }
+    if ("color: " + d != "color: Blue") { return 6; }
+    var count = 0;
+    for (x <- [Color.Red, Green, Blue, Red]) {
+        if (x == Red) { count = count + 1; }
+    }
+    if (count != 2) { return 7; }
+    return 0;
+}

@@ -152,6 +152,12 @@ set(_
     "type_utils.cpp"
     "utils.cpp"
     "verifier.cpp"
+    "default_arguments.cpp"
+    "enums.cpp"
+    "enum_nodes.cpp"
+    "interfaces.cpp"
+    "tensor_builtins.cpp"
+    "debug_info.cpp"
 )
 source_group("?뚯뒪 ?뚯씪" FILES ${_})
 
@@ -198,6 +204,7 @@ set(___AST
     "ValueNode.cpp"
     "VariableDeclarationNode.cpp"
     "WhileStatementNode.cpp"
+    "LoopControlNode.cpp"
 )
 source_group("?뚯뒪 ?뚯씪\\AST" FILES ${___AST})
 

@@ -1,6 +1,7 @@
 #include "codegen.h"
 #include "ArrayLiteralNode.h"
 #include "ASTVisitor.h"
+#include "type_utils.h"
 
 #include <iostream>
 #include <llvm/IR/Constants.h>
@@ -19,6 +20,16 @@ llvm::Value* ArrayLiteralNode::codegen() {
 	if (!firstElem) return nullptr;
 
 	llvm::Type* elementType = firstElem->getType();
+	// Store each element in its type's storage form: a struct value (an enum, a `struct`) is copied into
+	// the array, not referenced through the temporary that built it.
+	if (auto declared = getType()) {
+		if (auto* arrayType = dynamic_cast<ArrayType*>(declared.get())) {
+			if (llvm::Type* storage = arrayType->elementType ? getABIStorageType(arrayType->elementType.get()) : nullptr) {
+				if (storage->isStructTy()) elementType = storage;
+			}
+		}
+	}
+	firstElem = coerceValueToLLVMType(firstElem, elementType);
 
 	// Allocate array on stack
 	llvm::Value* arraySize = cg.builder.getInt32(elements.size());
@@ -33,6 +44,7 @@ llvm::Value* ArrayLiteralNode::codegen() {
 	for (size_t i = 1; i < elements.size(); ++i) {
 		llvm::Value* elemValue = elements[i]->codegen();
 		if (!elemValue) return nullptr;
+		if (elementType->isStructTy()) elemValue = coerceValueToLLVMType(elemValue, elementType);
 		if (elemValue->getType() != elementType) {
 			std::cerr << "Type error: Array literal elements must have the same type" << std::endl;
 			return nullptr;
@@ -42,6 +54,8 @@ llvm::Value* ArrayLiteralNode::codegen() {
 		cg.builder.CreateStore(elemValue, elemPtr);
 	}
 
+	// The element count, for loops over the literal once it is bound to a name.
+	cg.arrayRuntimeLength[arrayPtr] = cg.builder.getInt32(static_cast<uint32_t>(elements.size()));
 	return arrayPtr;
 }
 

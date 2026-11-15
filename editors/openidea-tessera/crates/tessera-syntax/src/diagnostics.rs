@@ -139,7 +139,7 @@ mod tests {
 
     #[test]
     fn finds_problems() {
-        assert_eq!(codes("val x = a ? b : c;"), vec![("unknown-token", "?".into())]);
+        assert_eq!(codes("val x = a ` b;"), vec![("unknown-token", "`".into())]);
         assert_eq!(codes("def f() { (1 + 2 }"), vec![("unbalanced", "(".into())]);
         assert_eq!(codes("x)"), vec![("unbalanced", ")".into())]);
         assert_eq!(codes("val s = \"abc"), vec![("unterminated-string", "\"".into())]);

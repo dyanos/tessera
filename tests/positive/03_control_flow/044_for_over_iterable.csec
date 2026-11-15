@@ -1,9 +1,9 @@
-def getArray(): Int = 5
+def getValue(): Int = 5
 
 def main(): Int {
     var total: Int = 0;
 
-    for (x <- getArray()) {
+    for (x <- [getValue(), 1]) {
         total = total + x;
     }
 

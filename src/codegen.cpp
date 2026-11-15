@@ -2,6 +2,7 @@
 #include "codegen.h"
 #include "TensorRuntime.h"
 #include "type_utils.h"
+#include "interfaces.h"
 #include <llvm/IR/Verifier.h>
 #include <llvm/IR/Type.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -105,8 +106,19 @@ void CodeGenerator::enterCleanupScope() {
 
 void CodeGenerator::exitCleanupScope() {
     if (!cleanupScopes.empty()) {
+        for (const auto& entry : cleanupScopes.back()) {
+            if (entry.second == CleanupKind::FlaggedFree) dropFlags.erase(entry.first);
+        }
         cleanupScopes.pop_back();
     }
+}
+
+llvm::Value* CodeGenerator::dropFlagInCurrentFunction(llvm::Value* pointer) const {
+    auto it = dropFlags.find(pointer);
+    if (it == dropFlags.end() || !builder.GetInsertBlock()) return nullptr;
+    auto* flag = llvm::dyn_cast<llvm::Instruction>(it->second);
+    if (!flag || flag->getFunction() != builder.GetInsertBlock()->getParent()) return nullptr;
+    return flag;
 }
 
 void CodeGenerator::registerCleanup(llvm::Value* pointer) {
@@ -137,6 +149,25 @@ void CodeGenerator::registerSharedCleanup(llvm::Value* controlBlock) {
         return;
     }
     cleanupScopes.back().push_back({ controlBlock, CleanupKind::SharedRelease });
+}
+
+void CodeGenerator::registerFlaggedCleanup(llvm::Value* pointer) {
+    if (!pointer || cleanupScopes.empty() || !builder.GetInsertBlock()) {
+        return;
+    }
+    llvm::Function* fn = builder.GetInsertBlock()->getParent();
+    llvm::IRBuilder<> entry(&fn->getEntryBlock(), fn->getEntryBlock().begin());
+    llvm::Value* flag = entry.CreateAlloca(llvm::Type::getInt1Ty(context), nullptr, "drop.flag");
+    entry.CreateStore(llvm::ConstantInt::getFalse(context), flag);
+    builder.CreateStore(llvm::ConstantInt::getTrue(context), flag);
+    dropFlags[pointer] = flag;
+    cleanupScopes.back().push_back({ pointer, CleanupKind::FlaggedFree });
+}
+
+void CodeGenerator::noteMoved(llvm::Value* pointer) {
+    if (llvm::Value* flag = dropFlagInCurrentFunction(pointer)) {
+        builder.CreateStore(llvm::ConstantInt::getFalse(context), flag);
+    }
 }
 
 void CodeGenerator::registerWeakCleanup(llvm::Value* controlBlock) {
@@ -192,6 +223,19 @@ void CodeGenerator::emitCleanupEntry(llvm::Value* pointer, CleanupKind kind, llv
         builder.CreateBr(contBB);
         builder.SetInsertPoint(contBB);
     }
+    else if (kind == CleanupKind::FlaggedFree) {
+        llvm::Function* fn = builder.GetInsertBlock() ? builder.GetInsertBlock()->getParent() : nullptr;
+        llvm::Value* flag = dropFlagInCurrentFunction(pointer);
+        if (!flag || !fn) return;
+        llvm::Value* live = builder.CreateLoad(llvm::Type::getInt1Ty(context), flag, "drop.live");
+        auto* freeBB = llvm::BasicBlock::Create(context, "drop.free", fn);
+        auto* contBB = llvm::BasicBlock::Create(context, "drop.cont", fn);
+        builder.CreateCondBr(live, freeBB, contBB);
+        builder.SetInsertPoint(freeBB);
+        builder.CreateCall(freeFunction, { raw });
+        builder.CreateBr(contBB);
+        builder.SetInsertPoint(contBB);
+    }
     else {
         builder.CreateCall(freeFunction, { raw });
     }
@@ -224,6 +268,15 @@ void CodeGenerator::emitAllCleanupsExcept(llvm::Value* retainedPointer) {
         auto& cleanups = *scopeIt;
         for (auto it = cleanups.rbegin(); it != cleanups.rend(); ++it) {
             emitCleanupEntry(it->first, it->second, retainedPointer);
+        }
+    }
+}
+
+void CodeGenerator::emitCleanupsAbove(size_t depth) {
+    for (size_t i = cleanupScopes.size(); i > depth; --i) {
+        auto& cleanups = cleanupScopes[i - 1];
+        for (auto it = cleanups.rbegin(); it != cleanups.rend(); ++it) {
+            emitCleanupEntry(it->first, it->second, nullptr);
         }
     }
 }
@@ -286,8 +339,17 @@ llvm::Type* CodeGenerator::getLLVMType(const Type* type) {
         if (TensorRuntime::isTensorTypeName(type->getName())) {
             return TensorRuntime::getTensorPointerType(*this);
         }
+        if (isInterfaceType(type)) {
+            return llvm::PointerType::getUnqual(context);  // { object, vtable } on the heap
+        }
         auto* classSymbol = symbolTable.lookupClass(type->getName());
         if (classSymbol && !classSymbol->classType && materializeTemplateClass(type->getName())) {
+            classSymbol = symbolTable.lookupClass(type->getName());
+        }
+        // A template instance registered while type checking has an opaque struct until it is generated.
+        if (classSymbol && classSymbol->classType && llvm::isa<llvm::StructType>(classSymbol->classType) &&
+            llvm::cast<llvm::StructType>(classSymbol->classType)->isOpaque() && generatingCode &&
+            materializeTemplateClass(type->getName())) {
             classSymbol = symbolTable.lookupClass(type->getName());
         }
 
@@ -332,7 +394,7 @@ llvm::Type* CodeGenerator::getLLVMType(const Type* type) {
             // Build mangled name
             std::string mangledName = baseName;
             for (auto& ta : genericType->typeArguments) {
-                mangledName += "$" + (ta ? ta->getName() : "Unknown");
+                mangledName += "$" + templateArgumentName(ta.get());
             }
             // Look up the instantiated class (generating one registered during type checking).
             auto* classSymbol = symbolTable.lookupClass(mangledName);

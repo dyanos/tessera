@@ -45,3 +45,4 @@
 #include "ArrayAccessNode.h"
 #include "AccessFieldNode.h"
 #include "TemplateDeclarationNode.h"
+#include "LoopControlNode.h"

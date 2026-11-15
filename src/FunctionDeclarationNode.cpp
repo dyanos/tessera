@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "debug_info.h"
 
 #include "FunctionDeclarationNode.h"
 #include "ASTVisitor.h"
@@ -209,6 +210,7 @@ llvm::Value* FunctionDeclarationNode::codegen() {
 
     llvm::BasicBlock* bb = llvm::BasicBlock::Create(cg.context, "entry", function);
     cg.builder.SetInsertPoint(bb);
+    debuginfo::beginFunction(function, this->name, this->line);
 
     int cnt = 0;
     for (auto& arg : this->parameters) {

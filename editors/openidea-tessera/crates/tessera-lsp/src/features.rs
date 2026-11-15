@@ -77,7 +77,7 @@ fn is_top_level_export(d: &Decl) -> bool {
     d.parent.is_none()
         && matches!(
             d.kind,
-            DeclKind::Function | DeclKind::External | DeclKind::Class | DeclKind::Struct | DeclKind::Object | DeclKind::Dsl | DeclKind::Global
+            DeclKind::Function | DeclKind::External | DeclKind::Class | DeclKind::Struct | DeclKind::Enum | DeclKind::Interface | DeclKind::Object | DeclKind::Dsl | DeclKind::Global
         )
 }
 
@@ -126,6 +126,8 @@ fn symbol_kind(d: &Decl) -> SymbolKind {
         DeclKind::Operator => SymbolKind::OPERATOR,
         DeclKind::Class => SymbolKind::CLASS,
         DeclKind::Struct => SymbolKind::STRUCT,
+        DeclKind::Enum => SymbolKind::ENUM,
+        DeclKind::Interface => SymbolKind::INTERFACE,
         DeclKind::Object => SymbolKind::OBJECT,
         DeclKind::Dsl => SymbolKind::MODULE,
         DeclKind::Field => SymbolKind::FIELD,
@@ -307,7 +309,7 @@ fn decl_token(d: &Decl, at_decl: bool) -> (u32, u32) {
         DeclKind::Function | DeclKind::External => (8, decl),
         DeclKind::Method | DeclKind::Operator => (9, decl),
         DeclKind::Class | DeclKind::Object | DeclKind::Dsl => (2, decl),
-        DeclKind::Struct => (3, decl),
+        DeclKind::Struct | DeclKind::Enum | DeclKind::Interface => (3, decl),
         DeclKind::TypeParameter => (4, decl),
     }
 }
@@ -560,6 +562,8 @@ fn completion_kind(d: &Decl) -> CompletionItemKind {
         DeclKind::Method | DeclKind::Operator => CompletionItemKind::METHOD,
         DeclKind::Class | DeclKind::Object | DeclKind::Dsl => CompletionItemKind::CLASS,
         DeclKind::Struct => CompletionItemKind::STRUCT,
+        DeclKind::Enum => CompletionItemKind::ENUM,
+        DeclKind::Interface => CompletionItemKind::INTERFACE,
         DeclKind::Field => CompletionItemKind::FIELD,
         DeclKind::Global if !d.mutable => CompletionItemKind::CONSTANT,
         DeclKind::TypeParameter => CompletionItemKind::TYPE_PARAMETER,
@@ -779,7 +783,7 @@ pub fn signature_help(cur: &Source, imports: &[Arc<Source>], pos: Position) -> O
     let member = cur.is_member_access(ci);
     let targets: Vec<Target> = lookup(cur, imports, name, callee.range.start, member)
         .into_iter()
-        .filter(|t| t.decl.kind.is_callable() || matches!(t.decl.kind, DeclKind::Class | DeclKind::Struct))
+        .filter(|t| t.decl.kind.is_callable() || matches!(t.decl.kind, DeclKind::Class | DeclKind::Struct | DeclKind::Enum))
         .collect();
     if targets.is_empty() {
         return None;

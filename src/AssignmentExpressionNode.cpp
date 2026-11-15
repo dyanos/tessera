@@ -116,6 +116,14 @@ llvm::Value* AssignmentExpressionNode::codegen() {
     }
 
     llvm::Type* targetType = CodeGenerator::getInstance().getLLVMType(left->getType().get());
+    // Tensor elements are stored as doubles whatever the declared element type.
+    if (auto* access = dynamic_cast<ArrayAccessNode*>(left.get())) {
+        auto container = access->array ? access->array->getType() : nullptr;
+        if (container && container->getName() == "Tensor" && targetType && !targetType->isDoubleTy() &&
+            (targetType->isIntegerTy() || targetType->isFloatTy())) {
+            targetType = llvm::Type::getDoubleTy(CodeGenerator::getInstance().context);
+        }
+    }
     rightValue = coerceValueToLLVMType(rightValue, targetType);
     if (!rightValue || !targetType || rightValue->getType() != targetType) {
         std::cerr << "Type error: Assignment value does not match its target type" << std::endl;

@@ -115,6 +115,11 @@ std::unique_ptr<ASTNode> Parser::parseStatementWithoutLine() {
 		returnNode->expression = std::move(expr);
 		return returnNode;
 	}
+	else if (match(TokenType::KEYWORD, "break") || match(TokenType::KEYWORD, "continue")) {
+		auto node = std::make_unique<LoopControlNode>(previous().value == "break");
+		match(TokenType::OPERATOR, ";");
+		return node;
+	}
 	else if (match(TokenType::KEYWORD, "while")) {
 		return parseWhileStatement();
 	}

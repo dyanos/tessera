@@ -1,6 +1,11 @@
 // main.cpp
 #include "source_map.h"
 #include "verifier.h"
+#include "default_arguments.h"
+#include "enums.h"
+#include "LambdaExpressionNode.h"
+#include "interfaces.h"
+#include "debug_info.h"
 #ifdef _WIN32
 #define _CRTDBG_MAP_ALLOC
 #include <stdlib.h>
@@ -101,6 +106,7 @@ void printUsage(const char* programName) {
         << "  --static                     Link the runtime into the .exe (no System.Native.dll needed)\n"
         << "  -o <path>                    Output path for --emit-ir/--emit-obj/--emit-exe\n"
         << "  -O0 / -O1 / -O2 / -O3 / -O   Optimization level (-O = -O2; default: mem2reg only)\n"
+        << "  -g                           Emit debug information (source lines, function names)\n"
         << "  -march=native                Generate code for this machine's CPU (e.g. AVX2/AVX-512)\n"
         << "  --link-lib <name-or-path>    Link an additional native library/import library\n"
         << "  --lib-path <dir>             Add a standard-library root searched by import\n"
@@ -836,6 +842,15 @@ std::vector<std::filesystem::path> systemLibrarySearchDirectories(
         addDirectory(linkPath);
     }
     addDirectory(std::filesystem::path(outputPath).parent_path());
+    // The runtime is built next to csec++ itself, so search there too: otherwise invoking
+    // csec++ from another directory (without --link-path) cannot find it.
+    {
+        static int executableAnchor = 0;
+        std::filesystem::path executable = llvm::sys::fs::getMainExecutable("", &executableAnchor);
+        if (!executable.empty()) {
+            addDirectory(executable.parent_path());
+        }
+    }
     addDirectory(std::filesystem::current_path());
     addDirectory(std::filesystem::current_path() / "Debug");
     addDirectory(std::filesystem::current_path() / "Release");
@@ -975,7 +990,12 @@ std::string resolvedNativeLinkLibraryArg(
     }
 
 #ifdef __APPLE__
-    return "-l:" + systemLinkLibraryFileName(library);
+    // Apple ld has no `-l:<file>` form; libSystem.Native.dylib is found via -lSystem.Native.
+    {
+        std::string stem = std::filesystem::path(systemLinkLibraryFileName(library)).stem().string();
+        if (stem.rfind("lib", 0) == 0 && stem.size() > 3) stem = stem.substr(3);
+        return "-l" + stem;
+    }
 #else
     return "-l:" + systemLinkLibraryFileName(library);
 #endif
@@ -1182,8 +1202,20 @@ bool writeExecutableToFile(
         }
     }
     linkCommand += " -pthread";
-#ifndef __APPLE__
-    if (!runtimeLibrariesToCopy.empty()) {
+    bool linksSharedSystemLibrary = false;
+    for (const auto& library : linkLibraries) {
+        if (!staticRuntime && startsWithSystemLibraryPrefix(library)) {
+            linksSharedSystemLibrary = true;
+        }
+    }
+#ifdef __APPLE__
+    // libSystem.Native.dylib's install name is @rpath/..., and it is copied next to the
+    // executable, so the executable needs an LC_RPATH of @executable_path to load it.
+    if (linksSharedSystemLibrary || !runtimeLibrariesToCopy.empty()) {
+        linkCommand += " -Wl,-rpath,@executable_path";
+    }
+#else
+    if (linksSharedSystemLibrary || !runtimeLibrariesToCopy.empty()) {
         linkCommand += " -Wl,-rpath,\\$ORIGIN";
     }
 #endif
@@ -1250,6 +1282,7 @@ bool writeExecutableToFile(
             linkArgs.push_back("/LIBPATH:" + quoteCommandArg(linkPathArg));
         }
     }
+    if (debuginfo::enabled()) linkArgs.push_back("/DEBUG");
     linkArgs.push_back("libcmt.lib");
     linkArgs.push_back("libvcruntime.lib");
     linkArgs.push_back("libucrt.lib");
@@ -1391,6 +1424,7 @@ int main(int argc, char** argv) {
     // 1/2/3 = -O1/-O2/-O3 (LLVM per-module default pipeline).
     int optLevel = -1;
     bool marchNative = false;
+    bool debugInfo = false;
     // --static: link the native runtime directly into the emitted executable (no System.Native.dll
     // dependency at run time). Only affects --emit-exe.
     bool staticRuntime = false;
@@ -1475,6 +1509,7 @@ int main(int argc, char** argv) {
             outputMode = OutputMode::EmitExecutable;
             continue;
         }
+        if (arg == "-g") { debugInfo = true; continue; }
         if (arg == "--static") {
             staticRuntime = true;
             continue;
@@ -1582,6 +1617,10 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "Parsing completed successfully." << std::endl;
+    if (!expandDefaultAndNamedArguments(ast.get()) || !lowerEnums(ast.get()) || !lowerInterfaces(ast.get()) ||
+        !markEscapingLambdas(ast.get())) {
+        return 1;
+    }
     if (outputMode == OutputMode::SyntaxOnly) {
         ast.reset();
         return 0;
@@ -1609,6 +1648,14 @@ int main(int argc, char** argv) {
         auto mainFile = std::filesystem::weakly_canonical(std::filesystem::path(inputFile), canonicalError);
         return verifyProgram(ast.get(), canonicalError ? inputFile : mainFile.string());
     }
+    if (debugInfo) {
+        // CodeView for the MSVC toolchain (Visual Studio, WinDbg), DWARF elsewhere.
+#ifdef _WIN32
+        debuginfo::enable(inputFile, true);
+#else
+        debuginfo::enable(inputFile, false);
+#endif
+    }
     CodeGenerator::getInstance().generatingCode = true;
     ast->codegen();
 
@@ -1631,6 +1678,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    debuginfo::finalize();
     if (llvm::verifyModule(*codeGen.module, &llvm::errs())) {
         std::cerr << "Generated LLVM IR is invalid. Aborting execution." << std::endl;
         // Debug aid: CSEC_DUMP_INVALID_IR=<path> writes the rejected module for inspection.

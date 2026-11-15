@@ -1,0 +1,7 @@
+interface Sized { def size(): Int; }
+
+class Thing(v: Int) implements Sized {
+    def size(): String = "big"
+}
+
+def main(): Int { return 0; }

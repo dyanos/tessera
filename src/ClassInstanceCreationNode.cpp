@@ -25,13 +25,14 @@
 #include <llvm/IR/Function.h>
 
 #include "utils.h"
+#include "ast_walk.h"
 
 namespace {
 std::string mangleTemplateClassName(const std::string& className,
                                     const std::vector<std::unique_ptr<Type>>& templateArgs) {
     std::string mangledName = className;
     for (const auto& arg : templateArgs) {
-        mangledName += "$" + (arg ? arg->getName() : "Unknown");
+        mangledName += "$" + templateArgumentName(arg.get());
     }
     return mangledName;
 }
@@ -69,6 +70,12 @@ void substituteTypeVariables(std::unique_ptr<Type>& type,
 
 ClassSymbol* ensureTemplateClassInstantiation(const std::string& className,
                                               const std::vector<std::unique_ptr<Type>>& templateArgs);
+
+// Instance class name -> (template name, template arguments), for every instance created.
+std::unordered_map<std::string, std::pair<std::string, std::vector<std::unique_ptr<Type>>>>& templateInstanceTable() {
+    static std::unordered_map<std::string, std::pair<std::string, std::vector<std::unique_ptr<Type>>>> table;
+    return table;
+}
 
 std::unordered_set<std::string>& templateInstantiationsInProgress();
 
@@ -387,6 +394,15 @@ ClassSymbol* ensureTemplateClassInstantiation(const std::string& className,
     }
 
     std::string mangledName = mangleTemplateClassName(className, templateArgs);
+    {
+        auto& info = templateInstanceTable()[mangledName];
+        if (info.first.empty()) {
+            info.first = className;
+            for (const auto& argument : templateArgs) {
+                info.second.push_back(argument ? argument->clone() : std::make_unique<UnknownType>());
+            }
+        }
+    }
     auto& pending = pendingTemplateClasses();
     if (auto* existingClass = cg.symbolTable.lookupClass(mangledName)) {
         // Registered while type checking: generate it now that code generation has started.
@@ -449,8 +465,9 @@ void ClassInstanceCreationNode::accept(ASTVisitor& visitor) {
 llvm::Value* ClassInstanceCreationNode::codegen() {
     auto& cg = CodeGenerator::getInstance();
 
-    // Primitive allocation: return typed pointer from malloc.
-    if (isPrimitiveType(className)) {
+    // Primitive allocation: return typed pointer from malloc. A class the program declares under a
+    // primitive's name (`class Word`) is a class.
+    if (isPrimitiveType(className) && !cg.symbolTable.lookupClass(className)) {
         BasicType basicType(className);
         llvm::Type* type = cg.getLLVMType(&basicType);
         if (!type) {
@@ -606,13 +623,19 @@ llvm::Value* ClassInstanceCreationNode::codegen() {
                 clonedCtorParams.push_back(param ? param->clone() : nullptr);
             }
 
+            // Evaluate every argument before binding any constructor parameter: a later argument must
+            // not see an earlier parameter in place of the caller's variable of the same name.
+            std::vector<llvm::Value*> evaluatedArgs;
+            for (size_t i = 0; i < clonedCtorParams.size(); ++i) {
+                evaluatedArgs.push_back(i < arguments.size() ? arguments[i]->codegen() : nullptr);
+            }
             for (size_t i = 0; i < clonedCtorParams.size(); ++i) {
                 auto* param = dynamic_cast<ParameterNode*>(clonedCtorParams[i].get());
                 if (!param) {
                     continue;
                 }
                 resolveTemplateType(param->type, constructionBinding);
-                llvm::Value* argValue = i < arguments.size() ? arguments[i]->codegen() : nullptr;
+                llvm::Value* argValue = evaluatedArgs[i];
                 if (!initializeField(param->name, param->type, argValue)) {
                     return failTemplateInitialization();
                 }
@@ -660,6 +683,9 @@ llvm::Value* ClassInstanceCreationNode::codegen() {
         return nullptr;
     };
 
+    // Evaluate every argument before binding any constructor parameter (see above).
+    std::vector<llvm::Value*> evaluatedArgs;
+    for (auto& argument : arguments) evaluatedArgs.push_back(argument->codegen());
     for (size_t i = 0; i < classSymbol->constructorParamOrder.size(); ++i) {
         const std::string& paramName = classSymbol->constructorParamOrder[i];
         auto paramIt = classSymbol->constructorParams.find(paramName);
@@ -668,7 +694,7 @@ llvm::Value* ClassInstanceCreationNode::codegen() {
             return failInitialization();
         }
 
-        llvm::Value* argValue = arguments[i]->codegen();
+        llvm::Value* argValue = evaluatedArgs[i];
         if (!initializeField(paramName, paramIt->second->type, argValue)) {
             return failInitialization();
         }
@@ -730,6 +756,80 @@ llvm::Value* ClassInstanceCreationNode::codegen() {
 }
 
 // The LLVM type of a template instance first needed by a signature: generate a pending instance.
+// True when `type` names no template parameter, so an applied template type in it can be instantiated.
+static bool isConcreteType(const Type* type) {
+    if (!type) return false;
+    switch (type->getKind()) {
+        case Type::Kind::VARIABLE:
+        case Type::Kind::UNKNOWN:
+            return false;
+        case Type::Kind::GENERIC: {
+            auto* generic = dynamic_cast<const GenericType*>(type);
+            if (!generic) return false;
+            for (const auto& argument : generic->typeArguments) {
+                if (!isConcreteType(argument.get())) return false;
+            }
+            return true;
+        }
+        case Type::Kind::ARRAY: {
+            auto* array = dynamic_cast<const ArrayType*>(type);
+            return array && isConcreteType(array->elementType.get());
+        }
+        case Type::Kind::FUNCTION: {
+            auto* function = dynamic_cast<const FunctionType*>(type);
+            if (!function) return false;
+            for (const auto& p : function->parameterTypes) if (!isConcreteType(p.get())) return false;
+            return !function->returnType || isConcreteType(function->returnType.get()) ||
+                   function->returnType->getKind() == Type::Kind::UNKNOWN;
+        }
+        case Type::Kind::TUPLE: {
+            auto* tuple = dynamic_cast<const TupleType*>(type);
+            if (!tuple) return false;
+            for (const auto& e : tuple->elementTypes) if (!isConcreteType(e.get())) return false;
+            return true;
+        }
+        default:
+            return true;
+    }
+}
+
+static void normalizeType(std::unique_ptr<Type>& type) {
+    static const TemplateBinding none;
+    if (type && isConcreteType(type.get())) resolveTemplateType(type, none);
+}
+
+void normalizeAppliedTemplateTypes(ASTNode* root) {
+    ast_walk::walk(root, nullptr, [](ASTNode* node, std::unique_ptr<ASTNode>*) {
+        // A template's own body is resolved when it is instantiated.
+        if (dynamic_cast<TemplateDeclarationNode*>(node)) return false;
+        if (auto* param = dynamic_cast<ParameterNode*>(node)) normalizeType(param->type);
+        else if (auto* decl = dynamic_cast<VariableDeclarationNode*>(node)) normalizeType(decl->type);
+        else if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(node)) normalizeType(fn->returnType);
+        return true;
+    });
+}
+
+bool templateInstanceArguments(const std::string& instanceName, std::string* templateName,
+                               std::vector<std::unique_ptr<Type>>* arguments) {
+    auto& table = templateInstanceTable();
+    auto it = table.find(instanceName);
+    if (it == table.end()) return false;
+    if (templateName) *templateName = it->second.first;
+    if (arguments) {
+        arguments->clear();
+        for (const auto& argument : it->second.second) arguments->push_back(argument->clone());
+    }
+    return true;
+}
+
+ClassSymbol* instantiateTemplateClass(const std::string& templateName, const std::vector<std::unique_ptr<Type>>& arguments) {
+    return ensureTemplateClassInstantiation(templateName, arguments);
+}
+
+std::string templateInstanceName(const std::string& templateName, const std::vector<std::unique_ptr<Type>>& arguments) {
+    return mangleTemplateClassName(templateName, arguments);
+}
+
 bool materializeTemplateClass(const std::string& mangledName) {
     auto& cg = CodeGenerator::getInstance();
     auto& pending = pendingTemplateClasses();
