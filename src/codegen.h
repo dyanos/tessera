@@ -13,6 +13,16 @@
 
 // Generates a template class instance registered during type checking (ClassInstanceCreationNode.cpp).
 bool materializeTemplateClass(const std::string& mangledName);
+// Turns applied template types written in signatures and declarations (`Opt<Int>`) into their
+// instance class types (`Opt$Int`), instantiating them. Template bodies are left alone.
+void normalizeAppliedTemplateTypes(ASTNode* root);
+// The template and arguments an instance class (`Opt$Int`) was created from.
+bool templateInstanceArguments(const std::string& instanceName, std::string* templateName,
+                               std::vector<std::unique_ptr<Type>>* arguments);
+// Instantiates (registers, and generates once code generation runs) template class `templateName`.
+struct ClassSymbol;
+ClassSymbol* instantiateTemplateClass(const std::string& templateName, const std::vector<std::unique_ptr<Type>>& arguments);
+std::string templateInstanceName(const std::string& templateName, const std::vector<std::unique_ptr<Type>>& arguments);
 
 class CodeGenerator {
 public:

@@ -153,6 +153,8 @@ set(_
     "utils.cpp"
     "verifier.cpp"
     "default_arguments.cpp"
+    "enums.cpp"
+    "enum_nodes.cpp"
 )
 source_group("?뚯뒪 ?뚯씪" FILES ${_})
 

@@ -1,0 +1,8 @@
+enum Pair { Both(a: Option<Int>, b: Option<Int>) }
+
+def score(p: Pair): Int = p match {
+    case Both(Some(x), Some(y)) => x + y;
+    case Both(None, _) => 0;
+}   // Both(Some(_), None) is not handled
+
+def main(): Int { return 0; }

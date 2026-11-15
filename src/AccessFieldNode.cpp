@@ -7,6 +7,7 @@
 #include "TensorRuntime.h"
 
 #include "IdentifierNode.h"
+#include "VariableDeclarationNode.h"
 
 #include <iostream>
 
@@ -27,6 +28,23 @@ int tensorComponentIndex(const std::string& name) {
     if (name == "w") return 3;
     return -1;
 }
+}
+
+llvm::Value* AccessFieldNode::codegenThroughTemporary(const std::function<llvm::Value*()>& access) {
+    static int counter = 0;
+    auto baseType = this->base->getType();
+    if (!baseType || baseType->getKind() == Type::Kind::UNKNOWN) {
+        std::cerr << "Error: cannot determine the type of the value whose field is read" << std::endl;
+        return nullptr;
+    }
+    const std::string name = "__field_base_" + std::to_string(counter++);
+    VariableDeclarationNode temporary(name, baseType->clone(), std::move(this->base), false);
+    temporary.hasExplicitType = true;
+    temporary.codegen();
+    this->base = std::make_unique<IdentifierNode>(name);
+    llvm::Value* result = access();
+    this->base = std::move(temporary.initializer);
+    return result;
 }
 
 void AccessFieldNode::accept(ASTVisitor& visitor) {
@@ -67,8 +85,9 @@ llvm::Value* AccessFieldNode::codegen() {
 
     auto* baseIdentifier = dynamic_cast<IdentifierNode*>(this->base.get());
     if (!baseIdentifier) {
-        std::cerr << "Error: Base must be an identifier" << std::endl;
-        return nullptr;
+        // `f().x`, `(a + b).y`, `o.m().field`: evaluate the base once into a hidden local and read
+        // the field through it, exactly as for a named value.
+        return codegenThroughTemporary([this]() { return codegen(); });
     }
 
     auto* fieldIdentifier = dynamic_cast<IdentifierNode*>(this->field.get());
@@ -188,8 +207,7 @@ llvm::Value* AccessFieldNode::codegenFieldPointer() {
 
     auto* baseIdentifier = dynamic_cast<IdentifierNode*>(this->base.get());
     if (!baseIdentifier) {
-        std::cerr << "Error: Base must be an identifier" << std::endl;
-        return nullptr;
+        return codegenThroughTemporary([this]() { return codegenFieldPointer(); });
     }
     auto baseType = stripBorrow(baseIdentifier->getType());
 

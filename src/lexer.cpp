@@ -91,7 +91,7 @@ void Lexer::initializeKeywords() {
         "this", "true", "val", "var",
 		"while", "to", "until", "and", "or", "xor", "map", "pmap", "reduce", "preduce", "filter", "external", "inline", "constexpr",
 		"template", "typename", "mut", "box", "unsafe", "unatomic", "struct",
-        "async", "await", "go", "build", "break", "continue",
+        "async", "await", "go", "build", "break", "continue", "enum",
         // Physics-DSL entry keywords (dispatch a simulation block from statement position). The body
         // words that appear only inside these blocks -- atom/bond/at/steps/dt/temperature/grid/
         // viscosity/velocity/euler/from/step/lattice/spacing/chain/mcmc -- are NOT reserved; the DSL
@@ -108,7 +108,7 @@ void Lexer::initializeOperators() {
     std::string ops[] = {
 		"=", "==", "!=", "+", "-", "*", "/", "%", "$", "$$", "\\", "<", ">", "<=", ">=", "<<", ">>", "<<|", ">>|",
 		"!", "&", "|", "^", "~", ":", ".", ",", ";", "(", ")", "{", "}", "[", "]", "[@", "<-", "->",
-		"++", "--", "+=", "-=", "*=", "/=", "%=", "**", "_", "=>", "<:", "<%", ">:", "#", "@", "'"
+		"++", "--", "+=", "-=", "*=", "/=", "%=", "**", "_", "=>", "<:", "<%", ">:", "#", "@", "'", "?"
     };
     operators.insert(ops, ops + sizeof(ops) / sizeof(ops[0]));
 }

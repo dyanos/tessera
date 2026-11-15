@@ -1,0 +1,6 @@
+enum S { A(x: Int), B }
+
+def main(): Int {
+    val s = S.A(1, 2);
+    return 0;
+}

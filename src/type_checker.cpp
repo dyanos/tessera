@@ -7,9 +7,11 @@
 #include "dict_support.h"
 
 #include <iostream>
+#include <set>
 
 #include "all_ast.h"
 #include "ast_walk.h"
+#include "enums.h"
 
 namespace {
 bool isResolvedType(const std::unique_ptr<Type>& type) {
@@ -179,7 +181,8 @@ bool isCopyType(const Type* type) {
             // class symbol's `isStruct` flag. Nat is an immutable arbitrary-precision number whose
             // handle is a shared value (like String), so it is Copy too -- `b = a` needs no `<-`.
             // The built-in number structs Complex/Rational/Quaternion are plain value aggregates too.
-            return isStructClassType(type) || type->getName() == "Nat" || type->getName() == "Complex" ||
+            // Enum values are immutable, so sharing one (even a heap-allocated recursive enum) is a copy.
+            return isStructClassType(type) || enumOfType(type) != nullptr || type->getName() == "Nat" || type->getName() == "Complex" ||
                    type->getName() == "Rational" || type->getName() == "Quaternion";
         case Type::Kind::ARRAY:
         case Type::Kind::BOX:
@@ -368,6 +371,26 @@ static bool narrowDoubleLiteralsToFloat(ASTNode* node, bool apply) {
         return true;
     }
     return false;
+}
+
+static std::vector<std::vector<const Type*>> methodParameterLists(const std::string& className,
+                                                                   const std::string& name, size_t arity);
+static std::vector<std::vector<const Type*>> constructorParameterLists(const std::string& className, size_t arity);
+
+// A value of a class with a `toString()` method, shown as text (printed, or joined to a String):
+// replaced by the call of that method.
+static bool wrapInToString(std::unique_ptr<ASTNode>& slot, TypeChecker& checker) {
+    if (!slot) return false;
+    auto valueType = stripBorrow(slot->getType());
+    if (!valueType || valueType->getKind() != Type::Kind::CLASS) return false;
+    if (methodParameterLists(valueType->getName(), "toString", 0).empty()) return false;
+    auto call = std::make_unique<MethodCallNode>();
+    call->line = slot->line;
+    call->object = std::move(slot);
+    call->methodName = "toString";
+    slot = std::move(call);
+    slot->accept(checker);
+    return true;
 }
 
 // When `expr` has type Double and `target` is Float, narrows its literals (see above).
@@ -581,7 +604,7 @@ void TypeChecker::visit(VariableDeclarationNode& node) {
                 dictLiteral->type = node.type->clone();
             }
         }
-        node.initializer->accept(*this);
+        visitExpecting(node.initializer.get(), node.hasExplicitType ? node.type.get() : nullptr);
         auto initType = node.initializer->getType();
         if (!isResolvedType(initType)) {
             if (auto* ifNode = dynamic_cast<IfStatementNode*>(node.initializer.get())) {
@@ -722,7 +745,9 @@ void TypeChecker::visit(FunctionDeclarationNode& node) {
     currentReturnType = node.returnType.get();
 
     if (node.body) {
+        blockResultExpected = node.returnType.get();
         node.body->accept(*this);
+        blockResultExpected = nullptr;
         // An expression-bodied `def f(): Float = 0.5` returns its last expression.
         if (node.returnType && !node.body->statements.empty()) {
             narrowToFloatTarget(node.returnType.get(), node.body->statements.back().get());
@@ -824,9 +849,37 @@ void TypeChecker::narrowFloatOperands(BinaryExpressionNode& node) {
     const std::string& op = node.op;
     const bool numeric = op == "+" || op == "-" || op == "*" || op == "/" || op == "%" || op == "**" ||
         op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=";
+    if (op == "+" && node.left && node.right) {
+        auto l = node.left->getType();
+        auto r = node.right->getType();
+        if (l && r && (l->isStringTy() || r->isStringTy())) {
+            if (!l->isStringTy() && wrapInToString(node.left, *this)) node.type.reset();
+            if (!r->isStringTy() && wrapInToString(node.right, *this)) node.type.reset();
+        }
+    }
     if (!numeric || !node.left || !node.right) return;
     auto leftType = node.left->getType();
     auto rightType = node.right->getType();
+    if ((op == "==" || op == "!=")) {
+        const EnumInfo* leftEnum = enumOfType(leftType.get());
+        const EnumInfo* rightEnum = enumOfType(rightType.get());
+        if (leftEnum || rightEnum) {
+            if (leftEnum != rightEnum || leftType->getName() != rightType->getName()) {
+                reportError("Type error: cannot compare '" + typeDisplayName(leftType.get()) + "' with '" +
+                            typeDisplayName(rightType.get()) + "'");
+                return;
+            }
+            if (leftEnum->hasPayload) {
+                reportError("Type error: values of enum '" + leftEnum->name + "' carry data and cannot be compared "
+                            "with " + op + "; use match");
+                return;
+            }
+            node.left = std::make_unique<AccessFieldNode>(std::move(node.left), std::make_unique<IdentifierNode>(enumTagField()));
+            node.right = std::make_unique<AccessFieldNode>(std::move(node.right), std::make_unique<IdentifierNode>(enumTagField()));
+            node.type.reset();
+            return;
+        }
+    }
     if (leftType && leftType->isFloatTy()) narrowToFloatTarget(leftType.get(), node.right.get());
     if (rightType && rightType->isFloatTy()) narrowToFloatTarget(rightType.get(), node.left.get());
     node.type.reset();
@@ -865,6 +918,17 @@ void TypeChecker::visitBinaryExpression(BinaryExpressionNode& node) {
 
 void TypeChecker::visit(ProgramNode& node) {
     enterOwnershipScope();
+    // Templates and class names first, so that applied template types in signatures (`Opt<Int>`) can
+    // be resolved to their instance classes before function signatures are registered.
+    for (auto& stmt : node.statements) {
+        if (auto* templateNode = dynamic_cast<TemplateDeclarationNode*>(stmt.get())) {
+            ensureTemplateSymbol(*templateNode);
+        }
+        else if (auto* classNode = dynamic_cast<ClassDeclarationNode*>(stmt.get())) {
+            ensureClassSymbol(*classNode);
+        }
+    }
+    normalizeAppliedTemplateTypes(&node);
     for (auto& stmt : node.statements) {
         if (!stmt) {
             continue;
@@ -1104,7 +1168,7 @@ void TypeChecker::visit(ForStatementNode& node) {
 
 void TypeChecker::visit(ReturnStatementNode& node) {
     if (node.expression) {
-        node.expression->accept(*this);
+        visitExpecting(node.expression.get(), currentReturnType);
         narrowToFloatTarget(currentReturnType, node.expression.get());
         // Borrow escape (memory model §6): a borrow of a local dangles once the function returns.
         // The MVP forbids returning references outright rather than introducing lifetime
@@ -1128,9 +1192,12 @@ void TypeChecker::visit(BlockNode& node) {
         ++unsafeContextDepth;
     }
     std::unique_ptr<Type> lastType = std::make_unique<UnknownType>();
+    const Type* resultExpected = blockResultExpected;
+    blockResultExpected = nullptr;
     for (auto& stmt : node.statements) {
         if (stmt) {
-            stmt->accept(*this);
+            if (resultExpected && &stmt == &node.statements.back()) visitExpecting(stmt.get(), resultExpected);
+            else stmt->accept(*this);
             auto stmtType = stmt->getType();
             if (stmtType) {
                 lastType = stmtType->clone();
@@ -1168,34 +1235,459 @@ void TypeChecker::visit(ParameterNode& node) {
     checkTypeResolved(node.getType(), "parameter");
 }
 
+// Whether a value of type `source` may be stored where `target` is expected (numeric conversions
+// are applied by code generation).
+static bool isAssignableType(const Type* target, const Type* source) {
+    if (!target || !source || target->getKind() == Type::Kind::UNKNOWN || source->getKind() == Type::Kind::UNKNOWN) return true;
+    if (target->getKind() == Type::Kind::VARIABLE || source->getKind() == Type::Kind::VARIABLE) return true;
+    if (target->equals(*source) || source->isSubtypeOf(*target)) return true;
+    auto numeric = [](const Type* t) { return t->isIntegerTy() || t->isFloatTy() || t->isDoubleTy() || t->getName() == "Real" || t->getName() == "Long"; };
+    if (numeric(target) && numeric(source)) return true;
+    auto boolean = [](const Type* t) { return t->getName() == "Bool" || t->getName() == "Boolean"; };
+    if (boolean(target) && boolean(source)) return true;
+    if (target->getName() == source->getName()) return true;
+    return false;
+}
+
+// Binds the enum's type parameters by matching a declared field type against an argument type.
+static void unifyEnumType(const Type* declared, const Type* actual, const EnumInfo& info,
+                          std::vector<std::unique_ptr<Type>>& bound) {
+    if (!declared || !actual || actual->getKind() == Type::Kind::UNKNOWN) return;
+    for (size_t i = 0; i < info.typeParameters.size(); ++i) {
+        if (declared->getName() == info.typeParameters[i] &&
+            (declared->getKind() == Type::Kind::VARIABLE || declared->getKind() == Type::Kind::CLASS ||
+             declared->getKind() == Type::Kind::BASIC)) {
+            if (!bound[i]) bound[i] = const_cast<Type*>(actual)->clone();
+            return;
+        }
+    }
+    if (auto* generic = dynamic_cast<const GenericType*>(declared)) {
+        std::string templateName;
+        std::vector<std::unique_ptr<Type>> actualArgs;
+        if (actual->getKind() == Type::Kind::CLASS &&
+            templateInstanceArguments(actual->getName(), &templateName, &actualArgs) &&
+            generic->baseType && templateName == generic->baseType->getName()) {
+            for (size_t i = 0; i < generic->typeArguments.size() && i < actualArgs.size(); ++i) {
+                unifyEnumType(generic->typeArguments[i].get(), actualArgs[i].get(), info, bound);
+            }
+        }
+        return;
+    }
+    if (auto* array = dynamic_cast<const ArrayType*>(declared)) {
+        if (auto* actualArray = dynamic_cast<const ArrayType*>(actual)) {
+            unifyEnumType(array->elementType.get(), actualArray->elementType.get(), info, bound);
+        }
+    }
+}
+
+void TypeChecker::visitExpecting(ASTNode* node, const Type* expected) {
+    if (!node) return;
+    const Type* saved = expectedType;
+    expectedType = expected;
+    node->accept(*this);
+    expectedType = saved;
+}
+
+void TypeChecker::visit(EnumDeclarationNode& node) {
+    reportError("Type error: enum '" + node.name + "' must be declared at the top level");
+}
+
+void TypeChecker::visit(EnumConstructNode& node) {
+    const Type* expected = expectedType;
+    expectedType = nullptr;
+    const EnumInfo* info = findEnum(node.enumName);
+    const EnumVariantInfo* variant = info ? info->variant(node.variantName) : nullptr;
+    if (!info || !variant) {
+        reportError("Type error: '" + node.enumName + "' has no variant '" + node.variantName + "'");
+        return;
+    }
+    const std::string display = info->name + "." + variant->name;
+    if (node.arguments.size() != variant->fieldTypes.size()) {
+        reportError("Type error: " + display + " takes " + std::to_string(variant->fieldTypes.size()) +
+                    " value(s), got " + std::to_string(node.arguments.size()));
+        for (auto& a : node.arguments) if (a) a->accept(*this);
+        return;
+    }
+    const bool generic = !info->typeParameters.empty();
+    if (generic && !node.typeArguments.empty() && node.typeArguments.size() != info->typeParameters.size()) {
+        reportError("Type error: enum '" + info->name + "' takes " + std::to_string(info->typeParameters.size()) +
+                    " type argument(s)");
+        return;
+    }
+    if (generic && node.typeArguments.empty() && expected) {
+        std::vector<std::unique_ptr<Type>> expectedArgs;
+        if (enumOfType(expected, &expectedArgs) == info) node.typeArguments = std::move(expectedArgs);
+    }
+    // A generic variant built without type arguments (`Nil` in `Cons(1, Nil)`) takes them from this
+    // node's field types, so it is checked after the other arguments have fixed them.
+    auto isDeferred = [&](ASTNode* argument) {
+        auto* inner = dynamic_cast<EnumConstructNode*>(argument);
+        const EnumInfo* innerInfo = inner ? findEnum(inner->enumName) : nullptr;
+        return generic && node.typeArguments.empty() && inner && inner->typeArguments.empty() && !inner->type &&
+               innerInfo && !innerInfo->typeParameters.empty();
+    };
+    std::vector<bool> deferred(node.arguments.size(), false);
+    auto visitArgument = [&](size_t i) {
+        std::unique_ptr<Type> fieldType;
+        if (!generic || !node.typeArguments.empty()) {
+            fieldType = substituteEnumTypeParameters(variant->fieldTypes[i].get(), *info, node.typeArguments);
+        }
+        visitExpecting(node.arguments[i].get(), fieldType.get());
+        if (fieldType) narrowToFloatTarget(fieldType.get(), node.arguments[i].get());
+    };
+    for (size_t i = 0; i < node.arguments.size(); ++i) {
+        deferred[i] = isDeferred(node.arguments[i].get());
+        if (!deferred[i]) visitArgument(i);
+    }
+    if (generic && node.typeArguments.empty()) {
+        std::vector<std::unique_ptr<Type>> bound(info->typeParameters.size());
+        for (size_t i = 0; i < node.arguments.size(); ++i) {
+            if (deferred[i]) continue;
+            auto argType = node.arguments[i] ? node.arguments[i]->getType() : nullptr;
+            unifyEnumType(variant->fieldTypes[i].get(), argType.get(), *info, bound);
+        }
+        bool allBound = true;
+        for (const auto& b : bound) if (!b || !isResolvedType(b)) allBound = false;
+        if (allBound) {
+            node.typeArguments = std::move(bound);
+            for (size_t i = 0; i < node.arguments.size(); ++i) if (deferred[i]) visitArgument(i);
+            deferred.assign(deferred.size(), false);
+        }
+        else {
+            // The deferred arguments must then fix the type arguments themselves.
+            for (size_t i = 0; i < node.arguments.size(); ++i) {
+                if (!deferred[i]) continue;
+                visitArgument(i);
+                auto argType = node.arguments[i] ? node.arguments[i]->getType() : nullptr;
+                unifyEnumType(variant->fieldTypes[i].get(), argType.get(), *info, bound);
+            }
+        }
+        if (!allBound) {
+            for (size_t i = 0; i < bound.size(); ++i) {
+                if (!bound[i] || !isResolvedType(bound[i])) {
+                    reportError("Type error: cannot infer type argument '" + info->typeParameters[i] + "' of " +
+                                display + " here; declare the type (val x: " + info->name + "<...> = ...) or write " +
+                                info->name + "<...>." + variant->name);
+                    return;
+                }
+            }
+            node.typeArguments = std::move(bound);
+        }
+    }
+    for (size_t i = 0; i < node.arguments.size(); ++i) {
+        auto fieldType = substituteEnumTypeParameters(variant->fieldTypes[i].get(), *info, node.typeArguments);
+        auto argType = node.arguments[i] ? node.arguments[i]->getType() : nullptr;
+        if (!isAssignableType(fieldType.get(), argType.get())) {
+            reportError("Type error: " + display + " field '" + variant->fieldNames[i] + "' is '" +
+                        typeDisplayName(fieldType.get()) + "', got '" + typeDisplayName(argType.get()) + "'");
+        }
+    }
+    node.type = std::make_unique<ClassType>(enumInstanceClass(*info, node.typeArguments));
+}
+
+void TypeChecker::visit(TryNode& node) {
+    if (node.expression) node.expression->accept(*this);
+    auto valueType = node.expression ? node.expression->getType() : nullptr;
+    std::vector<std::unique_ptr<Type>> args;
+    const EnumInfo* info = enumOfType(valueType.get(), &args);
+    if (!info || (info->name != "Option" && info->name != "Result")) {
+        reportError("Type error: '?' needs an Option or Result value, got '" + typeDisplayName(valueType.get()) + "'");
+        return;
+    }
+    std::vector<std::unique_ptr<Type>> returnArgs;
+    const EnumInfo* returnInfo = enumOfType(currentReturnType, &returnArgs);
+    if (returnInfo != info) {
+        reportError("Type error: '?' on " + typeDisplayName(valueType.get()) + " needs a function that returns " +
+                    (info->name == "Option" ? std::string("an Option") : std::string("a Result")) + ", not '" +
+                    typeDisplayName(currentReturnType) + "'");
+        return;
+    }
+    if (info->name == "Result" && args.size() == 2 && returnArgs.size() == 2 && !args[1]->equals(*returnArgs[1])) {
+        reportError("Type error: '?' passes on the error of " + typeDisplayName(valueType.get()) +
+                    ", but the function returns " + typeDisplayName(currentReturnType) + " (a different error type)");
+        return;
+    }
+    node.functionReturnType = const_cast<Type*>(currentReturnType)->clone();
+    node.type = args.empty() ? std::make_unique<UnknownType>() : args[0]->clone();
+}
+
+std::unique_ptr<PatternNode> TypeChecker::resolvePattern(ASTNode* raw, const Type* valueType) {
+    auto pattern = std::make_unique<PatternNode>();
+    pattern->line = raw ? raw->line : 0;
+    pattern->valueType = valueType ? const_cast<Type*>(valueType)->clone() : std::make_unique<UnknownType>();
+    if (!raw || dynamic_cast<UnitNode*>(raw)) return pattern;  // `_`
+    if (auto* resolved = dynamic_cast<PatternNode*>(raw)) return std::make_unique<PatternNode>(*resolved);
+
+    std::vector<std::unique_ptr<Type>> enumArgs;
+    const EnumInfo* info = enumOfType(valueType, &enumArgs);
+
+    // The variant a pattern names, and its sub-patterns.
+    std::string enumName, variantName;
+    std::vector<ASTNode*> subpatterns;
+    bool hasArguments = false;
+    if (auto* id = dynamic_cast<IdentifierNode*>(raw)) {
+        const auto dot = id->value.find('.');
+        if (dot != std::string::npos) { enumName = id->value.substr(0, dot); variantName = id->value.substr(dot + 1); }
+        else if (info && info->variant(id->value)) variantName = id->value;
+        else if (info) {
+            // A variant of some other enum is a mistake, not a new variable.
+            std::string owner;
+            if (const EnumInfo* otherEnum = enumDeclaringVariant(id->value)) owner = otherEnum->name;
+            if (!owner.empty()) {
+                reportError("Type error: pattern '" + id->value + "' is a variant of enum '" + owner +
+                            "', but the matched value is '" + typeDisplayName(valueType) + "'");
+                return pattern;
+            }
+            pattern->kind = PatternNode::Kind::Binding;
+            pattern->name = id->value;
+            return pattern;
+        }
+        else {
+            // Not an enum: an existing name compares with its value, a new name binds the value.
+            if (CodeGenerator::getInstance().symbolTable.lookup(id->value)) {
+                pattern->kind = PatternNode::Kind::Literal;
+                pattern->literal = raw->clone();
+                pattern->literal->accept(*this);
+            }
+            else {
+                pattern->kind = PatternNode::Kind::Binding;
+                pattern->name = id->value;
+            }
+            return pattern;
+        }
+    }
+    else if (auto* access = dynamic_cast<AccessFieldNode*>(raw)) {
+        auto* base = dynamic_cast<IdentifierNode*>(access->base.get());
+        auto* field = dynamic_cast<IdentifierNode*>(access->field.get());
+        if (base && field) { enumName = base->value; variantName = field->value; }
+    }
+    else if (auto* call = dynamic_cast<FunctionCallNode*>(raw)) {
+        variantName = call->functionName;
+        hasArguments = true;
+        for (auto& a : call->arguments) subpatterns.push_back(a.get());
+    }
+    else if (auto* method = dynamic_cast<MethodCallNode*>(raw)) {
+        if (auto* object = dynamic_cast<IdentifierNode*>(method->object.get())) enumName = object->value;
+        variantName = method->methodName;
+        hasArguments = true;
+        for (auto& a : method->arguments) subpatterns.push_back(a.get());
+    }
+    else if (auto* construct = dynamic_cast<EnumConstructNode*>(raw)) {
+        enumName = construct->enumName;
+        variantName = construct->variantName;
+        hasArguments = !construct->arguments.empty();
+        for (auto& a : construct->arguments) subpatterns.push_back(a.get());
+    }
+    else if (auto* value = dynamic_cast<ValueNode*>(raw)) {
+        pattern->kind = PatternNode::Kind::Literal;
+        pattern->literal = raw->clone();
+        auto literalType = value->getType();
+        const bool isRegex = value->valueType == TokenType::REGEX_LITERAL;
+        if (info) {
+            reportError("Type error: a literal pattern cannot match a value of enum '" + info->name + "'");
+        }
+        else if (!(isRegex && valueType && valueType->isStringTy()) && !isAssignableType(valueType, literalType.get()) &&
+                 !isAssignableType(literalType.get(), valueType)) {
+            reportError("Type error: match case pattern type mismatch: '" + typeDisplayName(literalType.get()) +
+                        "' pattern for a '" + typeDisplayName(valueType) + "' value");
+        }
+        return pattern;
+    }
+
+    if (variantName.empty()) {
+        reportError("Type error: unsupported pattern in match");
+        return pattern;
+    }
+    if (!info) {
+        reportError("Type error: pattern '" + variantName + "' needs an enum value, but the matched value is '" +
+                    typeDisplayName(valueType) + "'");
+        return pattern;
+    }
+    if (!enumName.empty() && enumName != info->name) {
+        reportError("Type error: pattern " + enumName + "." + variantName + " does not match a value of enum '" +
+                    info->name + "'");
+        return pattern;
+    }
+    const EnumVariantInfo* variant = info->variant(variantName);
+    if (!variant) {
+        reportError("Type error: enum '" + info->name + "' has no variant '" + variantName + "'");
+        return pattern;
+    }
+    pattern->kind = PatternNode::Kind::Variant;
+    pattern->enumInstance = valueType ? valueType->getName() : info->name;
+    pattern->variantName = variant->name;
+    pattern->tag = variant->tag;
+    pattern->fieldNames = variant->storageNames;
+    for (const auto& t : variant->fieldTypes) {
+        pattern->fieldTypes.push_back(substituteEnumTypeParameters(t.get(), *info, enumArgs));
+    }
+    if (hasArguments && subpatterns.size() != variant->fieldTypes.size()) {
+        reportError("Type error: pattern " + info->name + "." + variant->name + " needs " +
+                    std::to_string(variant->fieldTypes.size()) + " sub-pattern(s), got " +
+                    std::to_string(subpatterns.size()));
+        return pattern;
+    }
+    for (size_t k = 0; k < subpatterns.size(); ++k) {
+        pattern->subpatterns.push_back(resolvePattern(subpatterns[k], pattern->fieldTypes[k].get()));
+    }
+    // `Circle` without sub-patterns matches every Circle.
+    while (pattern->subpatterns.size() < pattern->fieldTypes.size()) {
+        auto wildcard = std::make_unique<PatternNode>();
+        wildcard->valueType = pattern->fieldTypes[pattern->subpatterns.size()]->clone();
+        pattern->subpatterns.push_back(std::move(wildcard));
+    }
+    return pattern;
+}
+
+// Pattern-matrix exhaustiveness (Maranget, "Warnings for pattern matching"). Each row is the
+// sub-patterns of one unguarded case; returns a value no row matches, written as a pattern, or "".
+namespace {
+using PatternRow = std::vector<const PatternNode*>;
+
+std::string missingValue(const std::vector<PatternRow>& rows, const std::vector<const Type*>& types) {
+    if (types.empty()) return rows.empty() ? "_" : "";
+    std::vector<std::unique_ptr<Type>> enumArgs;
+    const EnumInfo* info = enumOfType(types[0], &enumArgs);
+    std::vector<const Type*> rest(types.begin() + 1, types.end());
+    auto restWitness = [&](const std::string& head, const std::string& tail) {
+        return tail.empty() ? std::string() : head + (types.size() > 1 ? ", " + tail : std::string());
+    };
+    std::set<int> present;  // variants named in the first column
+    if (info) {
+        for (const auto& row : rows) if (row[0]->kind == PatternNode::Kind::Variant) present.insert(row[0]->tag);
+    }
+    if (!info || present.empty()) {
+        // No variant is named here (or the values are not an enum; literals never cover an infinite
+        // domain): only rows that accept anything in this column count.
+        std::vector<PatternRow> remaining;
+        for (const auto& row : rows) {
+            if (row[0]->isIrrefutable()) remaining.push_back(PatternRow(row.begin() + 1, row.end()));
+        }
+        std::string tail = missingValue(remaining, rest);
+        if (tail.empty()) return "";
+        return types.size() > 1 ? "_, " + tail : "_";
+    }
+    for (const auto& variant : info->variants) {
+        const size_t arity = variant.fieldTypes.size();
+        if (!present.count(variant.tag)) {
+            // A variant no row names is covered only by the rows that accept anything here.
+            std::vector<PatternRow> remaining;
+            for (const auto& row : rows) {
+                if (row[0]->isIrrefutable()) remaining.push_back(PatternRow(row.begin() + 1, row.end()));
+            }
+            std::string tail = missingValue(remaining, rest);
+            if (tail.empty()) continue;
+            std::string head = variant.name;
+            if (arity > 0) {
+                head += "(";
+                for (size_t k = 0; k < arity; ++k) head += (k ? ", _" : "_");
+                head += ")";
+            }
+            return types.size() > 1 ? head + ", " + tail : head;
+        }
+        std::vector<std::unique_ptr<Type>> fieldTypes;
+        for (const auto& t : variant.fieldTypes) fieldTypes.push_back(substituteEnumTypeParameters(t.get(), *info, enumArgs));
+        std::vector<const Type*> specializedTypes;
+        for (const auto& t : fieldTypes) specializedTypes.push_back(t.get());
+        specializedTypes.insert(specializedTypes.end(), rest.begin(), rest.end());
+        static const PatternNode wildcard;
+        std::vector<PatternRow> specialized;
+        for (const auto& row : rows) {
+            const PatternNode* head = row[0];
+            PatternRow next;
+            if (head->isIrrefutable()) {
+                for (size_t k = 0; k < arity; ++k) next.push_back(&wildcard);
+            }
+            else if (head->kind == PatternNode::Kind::Variant && head->tag == variant.tag) {
+                for (size_t k = 0; k < arity; ++k) {
+                    next.push_back(k < head->subpatterns.size() && head->subpatterns[k] ? head->subpatterns[k].get() : &wildcard);
+                }
+            }
+            else {
+                continue;
+            }
+            next.insert(next.end(), row.begin() + 1, row.end());
+            specialized.push_back(std::move(next));
+        }
+        std::string witness = missingValue(specialized, specializedTypes);
+        if (witness.empty()) continue;
+        // Split the witness back into this variant's fields and the remaining columns.
+        std::vector<std::string> parts;
+        int depth = 0;
+        std::string current;
+        for (char c : witness) {
+            if (c == '(') ++depth;
+            if (c == ')') --depth;
+            if (c == ',' && depth == 0) { parts.push_back(current); current.clear(); continue; }
+            if (!(c == ' ' && current.empty())) current += c;
+        }
+        parts.push_back(current);
+        std::string head = variant.name;
+        if (arity > 0) {
+            head += "(";
+            for (size_t k = 0; k < arity && k < parts.size(); ++k) head += (k ? ", " : "") + parts[k];
+            head += ")";
+        }
+        std::string tail;
+        for (size_t k = arity; k < parts.size(); ++k) tail += (k > arity ? ", " : "") + parts[k];
+        return types.size() > 1 ? head + ", " + (tail.empty() ? "_" : tail) : head;
+    }
+    return "";
+}
+}  // namespace
+
 void TypeChecker::visit(MatchExpressionNode& node) {
+    const Type* expected = expectedType;
+    expectedType = nullptr;
+    node.normalizeCaseData();
     if (node.expression) {
         node.expression->accept(*this);
     }
-
-    std::unique_ptr<Type> matchType = node.expression ? node.expression->getType() : std::make_unique<UnknownType>();
+    std::unique_ptr<Type> matchType = node.expression ? stripBorrow(node.expression->getType()) : std::make_unique<UnknownType>();
+    const EnumInfo* info = enumOfType(matchType.get());
     std::unique_ptr<Type> resultType;
+    std::vector<PatternRow> rows;  // the unguarded patterns, for the exhaustiveness check
+    auto& cg = CodeGenerator::getInstance();
 
-    for (auto& casePair : node.cases) {
-        if (casePair.first) {
-            casePair.first->accept(*this);
-            auto patternType = casePair.first->getType();
-            const bool isWildcard = dynamic_cast<UnitNode*>(casePair.first.get()) != nullptr;
-            const bool isRegexPattern = [&]() {
-                auto* value = dynamic_cast<ValueNode*>(casePair.first.get());
-                return value && value->valueType == TokenType::REGEX_LITERAL;
-            }();
-            if (!isWildcard && matchType && patternType &&
-                !(isRegexPattern && matchType->isStringTy()) &&
-                !patternType->equals(matchType) &&
-                !patternType->isSubtypeOf(matchType) &&
-                !matchType->isSubtypeOf(patternType)) {
-                std::cerr << "Type error: match case pattern type mismatch" << std::endl;
-                errorCount++;
+    for (size_t i = 0; i < node.cases.size(); ++i) {
+        auto& casePair = node.cases[i];
+        // Resolve the patterns against the matched type (once; a cloned, already resolved match keeps them).
+        casePair.first = resolvePattern(casePair.first.get(), matchType.get());
+        for (auto& alternative : node.alternatives[i]) alternative = resolvePattern(alternative.get(), matchType.get());
+        auto* first = static_cast<PatternNode*>(casePair.first.get());
+
+        std::vector<std::pair<std::string, const Type*>> bindings;
+        first->collectBindings(bindings);
+        for (auto& alternative : node.alternatives[i]) {
+            std::vector<std::pair<std::string, const Type*>> other;
+            static_cast<PatternNode*>(alternative.get())->collectBindings(other);
+            if (!other.empty() || !bindings.empty()) {
+                reportError("Type error: patterns joined with '|' cannot bind variables");
+                break;
+            }
+        }
+        std::set<std::string> seen;
+        for (const auto& b : bindings) {
+            if (!seen.insert(b.first).second) reportError("Type error: pattern binds '" + b.first + "' twice");
+        }
+
+        cg.symbolTable.enterScope();
+        enterOwnershipScope();
+        for (const auto& b : bindings) {
+            std::unique_ptr<Type> boundType = b.second ? const_cast<Type*>(b.second)->clone() : std::make_unique<UnknownType>();
+            bindVariable(b.first, boundType, false);
+            declareOwnership(b.first, boundType);
+        }
+        if (node.guards[i]) {
+            node.guards[i]->accept(*this);
+            auto guardType = node.guards[i]->getType();
+            if (guardType && guardType->getName() != "Boolean" && guardType->getName() != "Bool" &&
+                isResolvedType(guardType)) {
+                reportError("Type error: a match guard must be a Boolean, got '" + typeDisplayName(guardType.get()) + "'");
             }
         }
         if (casePair.second) {
-            casePair.second->accept(*this);
+            visitExpecting(casePair.second.get(), expected);
             auto caseResultType = casePair.second->getType();
             if (!resultType) {
                 resultType = caseResultType ? caseResultType->clone() : std::make_unique<UnknownType>();
@@ -1207,6 +1699,22 @@ void TypeChecker::visit(MatchExpressionNode& node) {
                 std::cerr << "Type error: match case result type mismatch" << std::endl;
                 errorCount++;
             }
+        }
+        exitOwnershipScope();
+        cg.symbolTable.exitScope();
+
+        if (!node.guards[i]) {
+            rows.push_back({first});
+            for (auto& alternative : node.alternatives[i]) rows.push_back({static_cast<PatternNode*>(alternative.get())});
+        }
+    }
+    node.patternsResolved = true;
+
+    if (info) {
+        const std::string missing = missingValue(rows, {matchType.get()});
+        if (!missing.empty()) {
+            reportError("Type error: match on '" + typeDisplayName(matchType.get()) + "' is not exhaustive: " + missing +
+                        " is not handled (add a case for it or `case _ =>`)");
         }
     }
 
@@ -1260,9 +1768,17 @@ void TypeChecker::visit(MethodCallNode& node) {
     if (node.object) {
         node.object->accept(*this);
     }
-    for (auto& arg : node.arguments) {
-        if (arg) {
-            arg->accept(*this);
+    {
+        // Parameter types, when every overload of the method with this arity agrees on them.
+        std::vector<std::vector<const Type*>> candidates;
+        auto receiverType = node.object ? stripBorrow(node.object->getType()) : nullptr;
+        if (receiverType && receiverType->getKind() == Type::Kind::CLASS) {
+            candidates = methodParameterLists(receiverType->getName(), node.methodName, node.arguments.size());
+        }
+        for (size_t i = 0; i < node.arguments.size(); ++i) {
+            if (!node.arguments[i]) continue;
+            const Type* expectedArg = candidates.size() == 1 ? candidates[0][i] : nullptr;
+            visitExpecting(node.arguments[i].get(), expectedArg);
         }
     }
     if (node.object) {
@@ -1352,11 +1868,6 @@ void TypeChecker::visit(ValueNode& node) {
 }
 
 void TypeChecker::visit(FunctionCallNode& node) {
-    for (auto& arg : node.arguments) {
-        if (arg) {
-            arg->accept(*this);
-        }
-    }
     std::vector<std::unique_ptr<Type>> parameterTypes;
     auto& cg = CodeGenerator::getInstance();
     if (auto* symbol = cg.symbolTable.lookup(node.functionName)) {
@@ -1366,8 +1877,17 @@ void TypeChecker::visit(FunctionCallNode& node) {
             }
         }
     }
+    for (size_t i = 0; i < node.arguments.size(); ++i) {
+        if (node.arguments[i]) {
+            const Type* expectedArg = parameterTypes.size() == node.arguments.size() ? parameterTypes[i].get() : nullptr;
+            visitExpecting(node.arguments[i].get(), expectedArg);
+        }
+    }
     if (!parameterTypes.empty()) {
         checkFunctionArguments(node.arguments, parameterTypes, node.functionName);
+    }
+    if (node.functionName == "print" || node.functionName == "println") {
+        for (auto& arg : node.arguments) wrapInToString(arg, *this);
     }
     // spawn(f): processes share nothing. The body must be a zero-argument lambda literal that
     // captures by value (its environment is copied into the child) or a named zero-argument function.
@@ -1495,6 +2015,14 @@ std::string TypeChecker::typeDisplayName(const Type* type) {
     if (auto* array = dynamic_cast<const ArrayType*>(type)) {
         return "Array[" + typeDisplayName(array->elementType.get()) + "]";
     }
+    // A template instance class (`Option$Int`) reads as the type it was written as (`Option<Int>`).
+    std::string templateName;
+    std::vector<std::unique_ptr<Type>> arguments;
+    if (type->getKind() == Type::Kind::CLASS && templateInstanceArguments(type->getName(), &templateName, &arguments)) {
+        std::string text = templateName + "<";
+        for (size_t i = 0; i < arguments.size(); ++i) text += (i ? ", " : "") + typeDisplayName(arguments[i].get());
+        return text + ">";
+    }
     return type->getName();
 }
 
@@ -1565,9 +2093,15 @@ void TypeChecker::visit(AccessFieldNode& node) {
 }
 
 void TypeChecker::visit(ClassInstanceCreationNode& node) {
-    for (auto& arg : node.arguments) {
-        if (arg) {
-            arg->accept(*this);
+    {
+        auto created = node.getType();
+        std::vector<std::vector<const Type*>> candidates;
+        if (created && created->getKind() == Type::Kind::CLASS) {
+            candidates = constructorParameterLists(created->getName(), node.arguments.size());
+        }
+        for (size_t i = 0; i < node.arguments.size(); ++i) {
+            if (!node.arguments[i]) continue;
+            visitExpecting(node.arguments[i].get(), candidates.size() == 1 ? candidates[0][i] : nullptr);
         }
     }
     {
@@ -1601,11 +2135,9 @@ void TypeChecker::visit(AssignmentExpressionNode& node) {
         }
     }
     if (node.right) {
-        node.right->accept(*this);
-        if (node.left) {
-            auto leftType = node.left->getType();
-            narrowToFloatTarget(leftType.get(), node.right.get());
-        }
+        auto leftType = node.left ? node.left->getType() : nullptr;
+        visitExpecting(node.right.get(), leftType.get());
+        narrowToFloatTarget(leftType.get(), node.right.get());
     }
     auto rightType = node.right ? node.right->getType() : std::make_unique<UnknownType>();
     if (auto* access = dynamic_cast<ArrayAccessNode*>(node.left.get())) {

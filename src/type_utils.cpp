@@ -91,6 +91,16 @@ std::unique_ptr<Type> stripBorrow(const std::unique_ptr<Type>& type) {
     return type ? type->clone() : std::make_unique<UnknownType>();
 }
 
+std::string templateArgumentName(const Type* type) {
+    if (!type) return "Unknown";
+    if (auto* generic = dynamic_cast<const GenericType*>(type)) {
+        std::string name = generic->baseType ? generic->baseType->getName() : generic->getName();
+        for (const auto& argument : generic->typeArguments) name += "$" + templateArgumentName(argument.get());
+        return name;
+    }
+    return type->getName();
+}
+
 bool isStructClassType(const Type* type) {
     if (!type || type->getKind() != Type::Kind::CLASS) {
         return false;

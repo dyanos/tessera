@@ -11,7 +11,7 @@
 # 4. rejected: every tests/semantic_negative/*.csec must fail to compile (--emit-ir exits non-zero).
 #
 # Set UPDATE=1 to rewrite tests/expected_results.txt from this run (per-OS overrides:
-# tests/expected_results.<uname -s>.txt, e.g. Darwin, where OpenMP is unavailable).
+# tests/expected_results.<os>.txt, e.g. Darwin, where OpenMP is unavailable; see below).
 set -u
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo"
@@ -51,9 +51,14 @@ find tests/positive tests/semantic_positive tests/stdlib tests/selfhost_concurre
   echo "$f $e $r" >> "$results"
 done
 # Platform-dependent results (e.g. no OpenMP with Apple clang) live in
-# tests/expected_results.<uname -s>.txt as full "path emit run" lines that replace the generic ones.
+# tests/expected_results.<os>.txt as full "path emit run" lines that replace the generic ones. <os> is
+# `uname -s` (Darwin, Linux), or Windows for Git Bash/MSYS, where a negative exit code reads as 127.
 expected="$work/expected_results.txt"
-overrides="tests/expected_results.$(uname -s).txt"
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) os=Windows ;;
+  *) os="$(uname -s)" ;;
+esac
+overrides="tests/expected_results.$os.txt"
 if [ -f "$overrides" ]; then
   awk '{ sub(/\r$/, "") } NR == FNR { o[$1] = $0; next } ($1 in o) { print o[$1]; next } { print }' \
     "$overrides" tests/expected_results.txt > "$expected"

@@ -56,6 +56,10 @@ enum class ASTNodeType {
     TEMPLATE_DECLARATION,
     DICT_LITERAL,
     LOOP_CONTROL,
+    ENUM_DECLARATION,
+    ENUM_CONSTRUCT,
+    PATTERN,
+    TRY_EXPRESSION,
 };
 
 class ASTVisitor;

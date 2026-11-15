@@ -311,6 +311,11 @@ tests/positive/14_language/211_break_continue_foreach.csec 0 0
 tests/positive/14_language/212_default_named_arguments.csec 0 0
 tests/positive/14_language/213_double_literals.csec 0 0
 tests/positive/14_language/214_symbolic_logical_operators.csec 0 0
+tests/positive/14_language/215_enums_basic.csec 0 0
+tests/positive/14_language/216_enum_payload_patterns.csec 0 0
+tests/positive/14_language/217_option_result_try.csec 0 0
+tests/positive/14_language/218_recursive_generic_enums.csec 0 0
+tests/positive/14_language/219_generic_struct_signatures.csec 0 0
 tests/selfhost_concurrency/01_spawn_named.csec 0 42
 tests/selfhost_concurrency/02_async_go.csec 0 42
 tests/selfhost_concurrency/03_thread_atomic.csec 0 42

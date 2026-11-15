@@ -157,6 +157,9 @@
     <ClCompile Include="src/ArrayLiteralNode.cpp" />
     <ClCompile Include="src/dict_support.cpp" />
     <ClCompile Include="src/default_arguments.cpp" />
+    <ClCompile Include="src/enums.cpp" />
+    <ClCompile Include="src/enum_nodes.cpp" />
+    <ClCompile Include="src/LoopControlNode.cpp" />
     <ClCompile Include="src/verifier.cpp" />
     <ClCompile Include="src/AssignmentExpressionNode.cpp" />
     <ClCompile Include="src/AssignmentNode.cpp" />
@@ -226,6 +229,9 @@
     <ClInclude Include="src/dict_support.h" />
     <ClInclude Include="src/default_arguments.h" />
     <ClInclude Include="src/ast_walk.h" />
+    <ClInclude Include="src/enums.h" />
+    <ClInclude Include="src/enum_nodes.h" />
+    <ClInclude Include="src/LoopControlNode.h" />
     <ClInclude Include="src/source_map.h" />
     <ClInclude Include="src/verifier.h" />
     <ClInclude Include="src/AssignmentExpressionNode.h" />

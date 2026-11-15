@@ -299,6 +299,12 @@ llvm::Type* CodeGenerator::getLLVMType(const Type* type) {
         if (classSymbol && !classSymbol->classType && materializeTemplateClass(type->getName())) {
             classSymbol = symbolTable.lookupClass(type->getName());
         }
+        // A template instance registered while type checking has an opaque struct until it is generated.
+        if (classSymbol && classSymbol->classType && llvm::isa<llvm::StructType>(classSymbol->classType) &&
+            llvm::cast<llvm::StructType>(classSymbol->classType)->isOpaque() && generatingCode &&
+            materializeTemplateClass(type->getName())) {
+            classSymbol = symbolTable.lookupClass(type->getName());
+        }
 
 		// Symbol??ClassSymbol濡?罹먯뒪?낇븯??classType???묎렐
         if (classSymbol) {
@@ -341,7 +347,7 @@ llvm::Type* CodeGenerator::getLLVMType(const Type* type) {
             // Build mangled name
             std::string mangledName = baseName;
             for (auto& ta : genericType->typeArguments) {
-                mangledName += "$" + (ta ? ta->getName() : "Unknown");
+                mangledName += "$" + templateArgumentName(ta.get());
             }
             // Look up the instantiated class (generating one registered during type checking).
             auto* classSymbol = symbolTable.lookupClass(mangledName);

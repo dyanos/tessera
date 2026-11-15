@@ -2238,7 +2238,7 @@ llvm::Value* FunctionCallNode::codegen() {
         // Build mangled name
         std::string mangledName = functionName;
         for (auto& ct : concreteTypes) {
-            mangledName += "$" + (ct ? ct->getName() : "Unknown");
+            mangledName += "$" + templateArgumentName(ct.get());
         }
 
         // Check instantiation cache

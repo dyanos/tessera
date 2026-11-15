@@ -7,6 +7,7 @@
 #pragma once
 
 #include "all_ast.h"
+#include "enum_nodes.h"
 
 #include <memory>
 
@@ -58,7 +59,26 @@ void forEachChild(ASTNode* node, F&& f) {
     if (auto* n = dynamic_cast<LambdaExpressionNode*>(node)) { many(n->arguments); one(n->body); return; }
     if (auto* n = dynamic_cast<MatchExpressionNode*>(node)) {
         one(n->expression);
-        for (auto& c : n->cases) { one(c.first); one(c.second); }
+        for (size_t i = 0; i < n->cases.size(); ++i) {
+            one(n->cases[i].first);
+            if (i < n->alternatives.size()) many(n->alternatives[i]);
+            if (i < n->guards.size()) one(n->guards[i]);
+            one(n->cases[i].second);
+        }
+        return;
+    }
+    if (auto* n = dynamic_cast<EnumConstructNode*>(node)) { many(n->arguments); return; }
+    if (auto* n = dynamic_cast<TryNode*>(node)) { one(n->expression); return; }
+    if (auto* n = dynamic_cast<EnumDeclarationNode*>(node)) {
+        for (auto& v : n->variants) {
+            for (auto& field : v.fields) if (field) f(static_cast<ASTNode*>(field.get()), nullptr);
+        }
+        many(n->methods);
+        return;
+    }
+    if (auto* n = dynamic_cast<PatternNode*>(node)) {
+        one(n->literal);
+        for (auto& s : n->subpatterns) if (s) f(static_cast<ASTNode*>(s.get()), nullptr);
         return;
     }
     if (auto* n = dynamic_cast<RangeExpressionNode*>(node)) { one(n->startExpr); one(n->endExpr); return; }

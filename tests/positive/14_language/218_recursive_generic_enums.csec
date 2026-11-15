@@ -1,0 +1,53 @@
+// Recursive and generic enums: expression trees, binary search trees, linked lists.
+enum Expr {
+    Num(value: Int),
+    Add(left: Expr, right: Expr),
+    Mul(left: Expr, right: Expr),
+    Neg(inner: Expr)
+}
+
+def eval(e: Expr): Int = e match {
+    case Num(v) => v;
+    case Add(a, b) => eval(a) + eval(b);
+    case Mul(a, b) => eval(a) * eval(b);
+    case Neg(x) => 0 - eval(x);
+}
+
+enum Tree<T> {
+    Leaf,
+    Node(left: Tree<T>, value: T, right: Tree<T>)
+
+    def size(): Int = this match {
+        case Leaf => 0;
+        case Node(l, _, r) => l.size() + 1 + r.size();
+    }
+}
+
+def insert(t: Tree<Int>, x: Int): Tree<Int> = t match {
+    case Leaf => Node(Leaf, x, Leaf);
+    case Node(l, v, r) if x < v => Node(insert(l, x), v, r);
+    case Node(l, v, r) => Node(l, v, insert(r, x));
+}
+
+def sumTree(t: Tree<Int>): Int = t match {
+    case Leaf => 0;
+    case Node(l, v, r) => sumTree(l) + v + sumTree(r);
+}
+
+enum List<T> { Nil, Cons(head: T, tail: List<T>) }
+
+def length(l: List<String>): Int = l match {
+    case Nil => 0;
+    case Cons(_, rest) => 1 + length(rest);
+}
+
+def main(): Int {
+    if (eval(Add(Num(2), Mul(Num(3), Neg(Num(-4))))) != 14) { return 1; }
+    var t: Tree<Int> = Leaf;
+    for (x <- [5, 2, 8, 1, 9]) { t = insert(t, x); }
+    if (sumTree(t) != 25 || t.size() != 5) { return 2; }
+    val words = Cons("a", Cons("b", Cons("c", Nil)));
+    if (length(words) != 3) { return 3; }
+    if (Add(Num(1), Num(2)).toString() != "Add(Num(1), Num(2))") { return 4; }
+    return 0;
+}

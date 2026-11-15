@@ -1,0 +1,4 @@
+def main(): Int {
+    val x = None;   // Option<what>?
+    return 0;
+}

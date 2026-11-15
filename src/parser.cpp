@@ -5,6 +5,7 @@
 #include <iostream>
 
 #include "all_ast.h"
+#include "enum_nodes.h"
 #include "intrinsics.h"
 
 
@@ -159,6 +160,63 @@ std::unique_ptr<Type> Parser::parseTemplateArgumentAsType() {
     return std::make_unique<UnknownType>();
 }
 
+// enum Name[<T, ...>] { Variant[(field: Type, ...)], ...  [def method(...) ...] }
+std::unique_ptr<ASTNode> Parser::parseEnumDeclaration() {
+	auto node = std::make_unique<EnumDeclarationNode>();
+	node->line = previous().line;
+	if (!matchIdentifierName()) {
+		error("Expected enum name after 'enum'");
+		return nullptr;
+	}
+	node->name = previous().value;
+	if (match(TokenType::OPERATOR, "<")) {
+		do {
+			match(TokenType::KEYWORD, "typename");
+			expect(TokenType::IDENTIFIER);
+			node->typeParameters.push_back(previous().value);
+		} while (match(TokenType::OPERATOR, ","));
+		expectClosingAngle();
+	}
+	const auto savedTemplateTypeParams = templateTypeParams;
+	templateTypeParams = node->typeParameters;
+	expect(TokenType::OPERATOR, "{");
+	while (!check(TokenType::OPERATOR, "}") && !check(TokenType::KEYWORD, "def") &&
+		   !check(TokenType::KEYWORD, "override")) {
+		if (isAtEnd()) {
+			error("Unterminated enum declaration");
+			return nullptr;
+		}
+		if (match(TokenType::OPERATOR, ",") || match(TokenType::OPERATOR, ";")) continue;
+		if (!matchIdentifierName()) {
+			error("Expected a variant name in enum '" + node->name + "'");
+			return nullptr;
+		}
+		EnumDeclarationNode::Variant variant;
+		variant.name = previous().value;
+		variant.line = previous().line;
+		if (match(TokenType::OPERATOR, "(")) {
+			variant.fields = parseParameterList();
+			expect(TokenType::OPERATOR, ")");
+		}
+		node->variants.push_back(std::move(variant));
+	}
+	while (!check(TokenType::OPERATOR, "}")) {
+		if (isAtEnd()) {
+			error("Unterminated enum declaration");
+			return nullptr;
+		}
+		if (match(TokenType::OPERATOR, ";")) continue;
+		const bool isOverride = match(TokenType::KEYWORD, "override");
+		expect(TokenType::KEYWORD, "def");
+		auto method = parseFunctionDeclaration();
+		if (method) method->isOverride = isOverride;
+		node->methods.push_back(std::move(method));
+	}
+	expect(TokenType::OPERATOR, "}");
+	templateTypeParams = savedTemplateTypeParams;
+	return node;
+}
+
 std::vector<std::string> Parser::parseTemplateParameters() {
 	std::vector<std::string> params;
 	currentTemplateParams.clear();
@@ -235,6 +293,10 @@ std::unique_ptr<ASTNode> Parser::parseTopStatement() {
 		// Clear active template type params
 		templateTypeParams.clear();
 		return templateNode;
+	}
+
+	if (match(TokenType::KEYWORD, "enum")) {
+		return parseEnumDeclaration();
 	}
 
 	// Handle constexpr modifier
