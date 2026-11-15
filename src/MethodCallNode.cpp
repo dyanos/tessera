@@ -4,6 +4,7 @@
 #include "ASTVisitor.h"
 #include "IdentifierNode.h"
 #include "type_utils.h"
+#include "interfaces.h"
 #include "dict_support.h"
 
 #include <iostream>
@@ -246,6 +247,9 @@ void MethodCallNode::accept(ASTVisitor& visitor) {
 
 llvm::Value* MethodCallNode::codegen() {
     auto& cg = CodeGenerator::getInstance();
+    if (object && isInterfaceType(object->getType().get())) {
+        return codegenInterfaceCall(*this);
+    }
 
     if (object) {
         auto receiverType = object->getType();
@@ -522,6 +526,14 @@ llvm::Value* MethodCallNode::codegen() {
 
 std::unique_ptr<Type> MethodCallNode::getType() {
     if (type) return type->clone();
+    if (object) {
+        auto receiverType = object->getType();
+        if (const InterfaceInfo* info = isInterfaceType(receiverType.get()) ? findInterface(receiverType->getName()) : nullptr) {
+            const int index = info->methodIndex(methodName, arguments.size());
+            if (index < 0) return std::make_unique<UnknownType>();
+            return info->methods[static_cast<size_t>(index)].returnType->clone();
+        }
+    }
 
     if (object) {
         auto receiverType = object->getType();

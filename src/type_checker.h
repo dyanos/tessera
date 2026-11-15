@@ -141,6 +141,10 @@ public:
 	// generic enum values take their type arguments from a declaration, parameter or return type).
 	void visitExpecting(ASTNode* node, const Type* expected);
 	std::unique_ptr<PatternNode> resolvePattern(ASTNode* raw, const Type* valueType);
+	// A class value used where an interface it implements is expected becomes an interface value.
+	void coerceToInterface(std::unique_ptr<ASTNode>& slot, const Type* target);
+	// Template arguments must implement the interfaces their parameter is bounded by.
+	void checkTemplateBounds(const std::string& templateName, const std::vector<const Type*>& arguments);
 
 private:
     struct OwnershipState {

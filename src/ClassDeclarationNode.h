@@ -29,6 +29,7 @@ public:
             constructorParams.push_back(param ? param->clone() : nullptr);
         }
         superClassName = other.superClassName;
+        interfaces = other.interfaces;
         body = other.body ? other.body->clone() : nullptr;
         isExternal = other.isExternal;
         isStruct = other.isStruct;
@@ -43,6 +44,7 @@ public:
                 constructorParams.push_back(param ? param->clone() : nullptr);
             }
             superClassName = other.superClassName;
+        interfaces = other.interfaces;
             body = other.body ? other.body->clone() : nullptr;
             isExternal = other.isExternal;
             isStruct = other.isStruct;
@@ -56,6 +58,7 @@ public:
     std::string name;
     std::vector<std::unique_ptr<ASTNode>> constructorParams;
     std::string superClassName;
+    std::vector<std::string> interfaces;  // `implements A, B`
     std::unique_ptr<ASTNode> body;
 
     void accept(ASTVisitor& visitor) override;

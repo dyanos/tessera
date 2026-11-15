@@ -60,6 +60,8 @@ enum class ASTNodeType {
     ENUM_CONSTRUCT,
     PATTERN,
     TRY_EXPRESSION,
+    INTERFACE_DECLARATION,
+    INTERFACE_WRAP,
 };
 
 class ASTVisitor;

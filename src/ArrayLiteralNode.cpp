@@ -54,6 +54,8 @@ llvm::Value* ArrayLiteralNode::codegen() {
 		cg.builder.CreateStore(elemValue, elemPtr);
 	}
 
+	// The element count, for loops over the literal once it is bound to a name.
+	cg.arrayRuntimeLength[arrayPtr] = cg.builder.getInt32(static_cast<uint32_t>(elements.size()));
 	return arrayPtr;
 }
 

@@ -50,6 +50,8 @@ class EnumDeclarationNode;
 class EnumConstructNode;
 class PatternNode;
 class TryNode;
+class InterfaceDeclarationNode;
+class InterfaceWrapNode;
 
 class ASTVisitor {
 public:
@@ -108,4 +110,6 @@ public:
     virtual void visit(EnumConstructNode&) {}
     virtual void visit(PatternNode&) {}
     virtual void visit(TryNode&) {}
+    virtual void visit(InterfaceDeclarationNode&) {}
+    virtual void visit(InterfaceWrapNode&) {}
 };

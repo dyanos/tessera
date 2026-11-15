@@ -4,6 +4,7 @@
 #include "default_arguments.h"
 #include "enums.h"
 #include "LambdaExpressionNode.h"
+#include "interfaces.h"
 #ifdef _WIN32
 #define _CRTDBG_MAP_ALLOC
 #include <stdlib.h>
@@ -1585,7 +1586,8 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "Parsing completed successfully." << std::endl;
-    if (!expandDefaultAndNamedArguments(ast.get()) || !lowerEnums(ast.get()) || !markEscapingLambdas(ast.get())) {
+    if (!expandDefaultAndNamedArguments(ast.get()) || !lowerEnums(ast.get()) || !lowerInterfaces(ast.get()) ||
+        !markEscapingLambdas(ast.get())) {
         return 1;
     }
     if (outputMode == OutputMode::SyntaxOnly) {

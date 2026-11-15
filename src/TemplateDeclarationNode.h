@@ -8,6 +8,7 @@
 struct TemplateParam {
     bool isType;           // true: typename, false: non-type
     std::string name;      // "T" or "N"
+    std::vector<std::string> bounds;  // `T: Shape + Show`: interfaces the type argument must implement
     std::unique_ptr<Type> valueType;  // non-type일 때 "Int" 등
 
     TemplateParam() : isType(true) {}
@@ -15,12 +16,13 @@ struct TemplateParam {
     TemplateParam(const std::string& name, std::unique_ptr<Type> vt)
         : isType(false), name(name), valueType(std::move(vt)) {}
     TemplateParam(const TemplateParam& other)
-        : isType(other.isType), name(other.name),
+        : isType(other.isType), name(other.name), bounds(other.bounds),
           valueType(other.valueType ? other.valueType->clone() : nullptr) {}
     TemplateParam& operator=(const TemplateParam& other) {
         if (this != &other) {
             isType = other.isType;
             name = other.name;
+            bounds = other.bounds;
             valueType = other.valueType ? other.valueType->clone() : nullptr;
         }
         return *this;

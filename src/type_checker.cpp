@@ -12,6 +12,7 @@
 #include "all_ast.h"
 #include "ast_walk.h"
 #include "enums.h"
+#include "interfaces.h"
 
 namespace {
 bool isResolvedType(const std::unique_ptr<Type>& type) {
@@ -182,7 +183,8 @@ bool isCopyType(const Type* type) {
             // handle is a shared value (like String), so it is Copy too -- `b = a` needs no `<-`.
             // The built-in number structs Complex/Rational/Quaternion are plain value aggregates too.
             // Enum values are immutable, so sharing one (even a heap-allocated recursive enum) is a copy.
-            return isStructClassType(type) || enumOfType(type) != nullptr || type->getName() == "Nat" || type->getName() == "Complex" ||
+            return isStructClassType(type) || enumOfType(type) != nullptr || isInterfaceType(type) ||
+                   type->getName() == "Nat" || type->getName() == "Complex" ||
                    type->getName() == "Rational" || type->getName() == "Quaternion";
         case Type::Kind::ARRAY:
         case Type::Kind::BOX:
@@ -605,6 +607,7 @@ void TypeChecker::visit(VariableDeclarationNode& node) {
             }
         }
         visitExpecting(node.initializer.get(), node.hasExplicitType ? node.type.get() : nullptr);
+        if (node.hasExplicitType) coerceToInterface(node.initializer, node.type.get());
         auto initType = node.initializer->getType();
         if (!isResolvedType(initType)) {
             if (auto* ifNode = dynamic_cast<IfStatementNode*>(node.initializer.get())) {
@@ -1169,6 +1172,7 @@ void TypeChecker::visit(ForStatementNode& node) {
 void TypeChecker::visit(ReturnStatementNode& node) {
     if (node.expression) {
         visitExpecting(node.expression.get(), currentReturnType);
+        coerceToInterface(node.expression, currentReturnType);
         narrowToFloatTarget(currentReturnType, node.expression.get());
         // Borrow escape (memory model §6): a borrow of a local dangles once the function returns.
         // The MVP forbids returning references outright rather than introducing lifetime
@@ -1280,6 +1284,48 @@ static void unifyEnumType(const Type* declared, const Type* actual, const EnumIn
     }
 }
 
+void TypeChecker::coerceToInterface(std::unique_ptr<ASTNode>& slot, const Type* target) {
+    if (!slot || !isInterfaceType(target)) return;
+    auto valueType = stripBorrow(slot->getType());
+    if (!valueType || valueType->getKind() != Type::Kind::CLASS || valueType->getName() == target->getName()) return;
+    if (isInterfaceType(valueType.get())) {
+        reportError("Type error: a '" + typeDisplayName(valueType.get()) + "' value is not a '" + target->getName() + "'");
+        return;
+    }
+    if (!implementsInterface(valueType.get(), target->getName())) {
+        reportError("Type error: '" + typeDisplayName(valueType.get()) + "' does not implement interface '" +
+                    target->getName() + "'");
+        return;
+    }
+    auto wrap = std::make_unique<InterfaceWrapNode>();
+    wrap->line = slot->line;
+    wrap->className = valueType->getName();
+    wrap->interfaceName = target->getName();
+    wrap->expression = std::move(slot);
+    slot = std::move(wrap);
+}
+
+void TypeChecker::checkTemplateBounds(const std::string& templateName, const std::vector<const Type*>& arguments) {
+    auto* symbol = dynamic_cast<TemplateSymbol*>(CodeGenerator::getInstance().symbolTable.lookup(templateName));
+    if (!symbol) return;
+    for (size_t i = 0; i < symbol->templateParams.size() && i < arguments.size(); ++i) {
+        const auto& param = symbol->templateParams[i];
+        const Type* argument = arguments[i];
+        if (!argument || argument->getKind() == Type::Kind::UNKNOWN) continue;
+        for (const auto& bound : param.bounds) {
+            if (!findInterface(bound)) {
+                reportError("Type error: bound '" + bound + "' of " + templateName + "'s parameter " + param.name +
+                            " is not an interface");
+                continue;
+            }
+            if (!implementsInterface(argument, bound)) {
+                reportError("Type error: " + templateName + "<...> needs its parameter " + param.name + " to implement '" +
+                            bound + "', but '" + typeDisplayName(argument) + "' does not");
+            }
+        }
+    }
+}
+
 void TypeChecker::visitExpecting(ASTNode* node, const Type* expected) {
     if (!node) return;
     const Type* saved = expectedType;
@@ -1333,6 +1379,7 @@ void TypeChecker::visit(EnumConstructNode& node) {
             fieldType = substituteEnumTypeParameters(variant->fieldTypes[i].get(), *info, node.typeArguments);
         }
         visitExpecting(node.arguments[i].get(), fieldType.get());
+        coerceToInterface(node.arguments[i], fieldType.get());
         if (fieldType) narrowToFloatTarget(fieldType.get(), node.arguments[i].get());
     };
     for (size_t i = 0; i < node.arguments.size(); ++i) {
@@ -1772,6 +1819,27 @@ void TypeChecker::visit(MethodCallNode& node) {
         // Parameter types, when every overload of the method with this arity agrees on them.
         std::vector<std::vector<const Type*>> candidates;
         auto receiverType = node.object ? stripBorrow(node.object->getType()) : nullptr;
+        if (const InterfaceInfo* iface = isInterfaceType(receiverType.get()) ? findInterface(receiverType->getName()) : nullptr) {
+            const int index = iface->methodIndex(node.methodName, node.arguments.size());
+            if (index < 0) {
+                reportError("Type error: interface '" + iface->name + "' has no method '" + node.methodName + "' taking " +
+                            std::to_string(node.arguments.size()) + " argument(s)");
+                return;
+            }
+            const auto& method = iface->methods[static_cast<size_t>(index)];
+            for (size_t i = 0; i < node.arguments.size(); ++i) {
+                visitExpecting(node.arguments[i].get(), method.parameterTypes[i].get());
+                coerceToInterface(node.arguments[i], method.parameterTypes[i].get());
+                narrowToFloatTarget(method.parameterTypes[i].get(), node.arguments[i].get());
+                auto argType = node.arguments[i]->getType();
+                if (!isAssignableType(method.parameterTypes[i].get(), argType.get())) {
+                    reportError("Type error: argument " + std::to_string(i + 1) + " of " + iface->name + "." + node.methodName +
+                                " is '" + typeDisplayName(method.parameterTypes[i].get()) + "', got '" +
+                                typeDisplayName(argType.get()) + "'");
+                }
+            }
+            return;
+        }
         if (receiverType && receiverType->getKind() == Type::Kind::CLASS) {
             candidates = methodParameterLists(receiverType->getName(), node.methodName, node.arguments.size());
         }
@@ -1779,6 +1847,7 @@ void TypeChecker::visit(MethodCallNode& node) {
             if (!node.arguments[i]) continue;
             const Type* expectedArg = candidates.size() == 1 ? candidates[0][i] : nullptr;
             visitExpecting(node.arguments[i].get(), expectedArg);
+            coerceToInterface(node.arguments[i], expectedArg);
         }
     }
     if (node.object) {
@@ -1881,6 +1950,7 @@ void TypeChecker::visit(FunctionCallNode& node) {
         if (node.arguments[i]) {
             const Type* expectedArg = parameterTypes.size() == node.arguments.size() ? parameterTypes[i].get() : nullptr;
             visitExpecting(node.arguments[i].get(), expectedArg);
+            coerceToInterface(node.arguments[i], expectedArg);
         }
     }
     if (!parameterTypes.empty()) {
@@ -1888,6 +1958,26 @@ void TypeChecker::visit(FunctionCallNode& node) {
     }
     if (node.functionName == "print" || node.functionName == "println") {
         for (auto& arg : node.arguments) wrapInToString(arg, *this);
+    }
+    if (auto* tmpl = dynamic_cast<TemplateSymbol*>(cg.symbolTable.lookup(node.functionName))) {
+        auto* decl = dynamic_cast<FunctionDeclarationNode*>(tmpl->declaration.get());
+        std::vector<std::unique_ptr<Type>> owned(tmpl->templateParams.size());
+        for (size_t i = 0; i < node.explicitTypeArgs.size() && i < owned.size(); ++i) {
+            if (node.explicitTypeArgs[i]) owned[i] = node.explicitTypeArgs[i]->clone();
+        }
+        // Infer the rest from parameters declared with a bare type parameter.
+        for (size_t p = 0; decl && p < decl->parameters.size() && p < node.arguments.size(); ++p) {
+            auto* param = dynamic_cast<ParameterNode*>(decl->parameters[p].get());
+            if (!param || !param->type) continue;
+            for (size_t t = 0; t < tmpl->templateParams.size(); ++t) {
+                if (!owned[t] && param->type->getName() == tmpl->templateParams[t].name && node.arguments[p]) {
+                    owned[t] = node.arguments[p]->getType();
+                }
+            }
+        }
+        std::vector<const Type*> arguments;
+        for (const auto& o : owned) arguments.push_back(o.get());
+        checkTemplateBounds(node.functionName, arguments);
     }
     // spawn(f): processes share nothing. The body must be a zero-argument lambda literal that
     // captures by value (its environment is copied into the child) or a named zero-argument function.
@@ -2093,6 +2183,11 @@ void TypeChecker::visit(AccessFieldNode& node) {
 }
 
 void TypeChecker::visit(ClassInstanceCreationNode& node) {
+    if (!node.templateArgs.empty()) {
+        std::vector<const Type*> arguments;
+        for (const auto& a : node.templateArgs) arguments.push_back(a.get());
+        checkTemplateBounds(node.className, arguments);
+    }
     {
         auto created = node.getType();
         std::vector<std::vector<const Type*>> candidates;
@@ -2102,6 +2197,7 @@ void TypeChecker::visit(ClassInstanceCreationNode& node) {
         for (size_t i = 0; i < node.arguments.size(); ++i) {
             if (!node.arguments[i]) continue;
             visitExpecting(node.arguments[i].get(), candidates.size() == 1 ? candidates[0][i] : nullptr);
+            coerceToInterface(node.arguments[i], candidates.size() == 1 ? candidates[0][i] : nullptr);
         }
     }
     {
@@ -2137,6 +2233,7 @@ void TypeChecker::visit(AssignmentExpressionNode& node) {
     if (node.right) {
         auto leftType = node.left ? node.left->getType() : nullptr;
         visitExpecting(node.right.get(), leftType.get());
+        coerceToInterface(node.right, leftType.get());
         narrowToFloatTarget(leftType.get(), node.right.get());
     }
     auto rightType = node.right ? node.right->getType() : std::make_unique<UnknownType>();
@@ -2480,10 +2577,23 @@ void TypeChecker::visit(WhileStatementNode& node) {
 }
 
 void TypeChecker::visit(ArrayLiteralNode& node) {
+    const Type* expected = expectedType;
+    expectedType = nullptr;
+    const Type* expectedElement = nullptr;
+    if (auto* array = dynamic_cast<const ArrayType*>(expected)) expectedElement = array->elementType.get();
+    else if (auto* generic = dynamic_cast<const GenericType*>(expected)) {
+        const std::string base = generic->baseType ? generic->baseType->getName() : "";
+        if ((base == "Array" || base == "Vector") && !generic->typeArguments.empty()) expectedElement = generic->typeArguments[0].get();
+    }
     for (auto& element : node.elements) {
         if (element) {
-            element->accept(*this);
+            visitExpecting(element.get(), expectedElement);
+            coerceToInterface(element, expectedElement);
         }
+    }
+    if (isInterfaceType(expectedElement) && !node.elements.empty()) {
+        std::unique_ptr<Type> elementType = const_cast<Type*>(expectedElement)->clone();
+        node.type = std::make_unique<ArrayType>(elementType, static_cast<int>(node.elements.size()));
     }
     checkTypeResolved(node.getType(), "array literal");
 }

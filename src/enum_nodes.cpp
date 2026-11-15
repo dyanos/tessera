@@ -26,7 +26,7 @@ std::vector<std::unique_ptr<Type>> cloneTypes(const std::vector<std::unique_ptr<
 // ---- EnumDeclarationNode --------------------------------------------------------------------
 
 EnumDeclarationNode::EnumDeclarationNode(const EnumDeclarationNode& other)
-    : name(other.name), typeParameters(other.typeParameters) {
+    : name(other.name), typeParameters(other.typeParameters), interfaces(other.interfaces) {
     nodeType = ASTNodeType::ENUM_DECLARATION;
     line = other.line;
     for (const auto& v : other.variants) {

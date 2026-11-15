@@ -2,6 +2,7 @@
 #include "codegen.h"
 #include "TensorRuntime.h"
 #include "type_utils.h"
+#include "interfaces.h"
 #include <llvm/IR/Verifier.h>
 #include <llvm/IR/Type.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -337,6 +338,9 @@ llvm::Type* CodeGenerator::getLLVMType(const Type* type) {
     else if (type->getKind() == Type::Kind::CLASS) {
         if (TensorRuntime::isTensorTypeName(type->getName())) {
             return TensorRuntime::getTensorPointerType(*this);
+        }
+        if (isInterfaceType(type)) {
+            return llvm::PointerType::getUnqual(context);  // { object, vtable } on the heap
         }
         auto* classSymbol = symbolTable.lookupClass(type->getName());
         if (classSymbol && !classSymbol->classType && materializeTemplateClass(type->getName())) {

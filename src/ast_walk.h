@@ -8,6 +8,7 @@
 
 #include "all_ast.h"
 #include "enum_nodes.h"
+#include "interfaces.h"
 
 #include <memory>
 
@@ -69,6 +70,11 @@ void forEachChild(ASTNode* node, F&& f) {
     }
     if (auto* n = dynamic_cast<EnumConstructNode*>(node)) { many(n->arguments); return; }
     if (auto* n = dynamic_cast<TryNode*>(node)) { one(n->expression); return; }
+    if (auto* n = dynamic_cast<InterfaceWrapNode*>(node)) { one(n->expression); return; }
+    if (auto* n = dynamic_cast<InterfaceDeclarationNode*>(node)) {
+        for (auto& m : n->methods) if (m) f(static_cast<ASTNode*>(m.get()), nullptr);
+        return;
+    }
     if (auto* n = dynamic_cast<EnumDeclarationNode*>(node)) {
         for (auto& v : n->variants) {
             for (auto& field : v.fields) if (field) f(static_cast<ASTNode*>(field.get()), nullptr);

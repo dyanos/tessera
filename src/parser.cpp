@@ -6,6 +6,7 @@
 
 #include "all_ast.h"
 #include "enum_nodes.h"
+#include "interfaces.h"
 #include "intrinsics.h"
 
 
@@ -177,6 +178,12 @@ std::unique_ptr<ASTNode> Parser::parseEnumDeclaration() {
 		} while (match(TokenType::OPERATOR, ","));
 		expectClosingAngle();
 	}
+	if (matchWord("implements")) {
+		do {
+			expect(TokenType::IDENTIFIER);
+			node->interfaces.push_back(previous().value);
+		} while (match(TokenType::OPERATOR, ","));
+	}
 	const auto savedTemplateTypeParams = templateTypeParams;
 	templateTypeParams = node->typeParameters;
 	expect(TokenType::OPERATOR, "{");
@@ -217,6 +224,43 @@ std::unique_ptr<ASTNode> Parser::parseEnumDeclaration() {
 	return node;
 }
 
+// interface Name { def m(params): T; def n(): T = default; ... }
+std::unique_ptr<ASTNode> Parser::parseInterfaceDeclaration() {
+	auto node = std::make_unique<InterfaceDeclarationNode>();
+	node->line = previous().line;
+	expect(TokenType::IDENTIFIER);
+	node->name = previous().value;
+	expect(TokenType::OPERATOR, "{");
+	while (!check(TokenType::OPERATOR, "}")) {
+		if (isAtEnd()) {
+			error("Unterminated interface declaration");
+			return nullptr;
+		}
+		if (match(TokenType::OPERATOR, ";")) continue;
+		expect(TokenType::KEYWORD, "def");
+		auto method = parseFunctionDeclaration(true);  // the signature; the body is optional
+		if (match(TokenType::OPERATOR, "{")) {
+			method->body = parseBlock();
+		}
+		else if (match(TokenType::OPERATOR, "=")) {
+			auto expr = parseExpression();
+			auto body = std::make_unique<BlockNode>();
+			if (method->returnType && !method->returnType->isVoidTy() && method->returnType->getName() != "Unit") {
+				auto ret = std::make_unique<ReturnStatementNode>();
+				ret->expression = std::move(expr);
+				body->statements.push_back(std::move(ret));
+			}
+			else {
+				body->statements.push_back(std::move(expr));
+			}
+			method->body = std::move(body);
+		}
+		node->methods.push_back(std::move(method));
+	}
+	expect(TokenType::OPERATOR, "}");
+	return node;
+}
+
 std::vector<std::string> Parser::parseTemplateParameters() {
 	std::vector<std::string> params;
 	currentTemplateParams.clear();
@@ -226,7 +270,14 @@ std::vector<std::string> Parser::parseTemplateParameters() {
 			expect(TokenType::IDENTIFIER);
 			std::string name = previous().value;
 			params.push_back(name);
-			currentTemplateParams.push_back(TemplateParam(name));
+			TemplateParam param(name);
+			if (match(TokenType::OPERATOR, ":")) {  // `T: Shape + Show`
+				do {
+					expect(TokenType::IDENTIFIER);
+					param.bounds.push_back(previous().value);
+				} while (match(TokenType::OPERATOR, "+"));
+			}
+			currentTemplateParams.push_back(param);
 		}
 		else if (check(TokenType::IDENTIFIER)) {
 			// Non-type template parameter: e.g. "Int N"
@@ -297,6 +348,12 @@ std::unique_ptr<ASTNode> Parser::parseTopStatement() {
 
 	if (match(TokenType::KEYWORD, "enum")) {
 		return parseEnumDeclaration();
+	}
+	// `interface` is a word only here (before a name and a `{`), so it stays usable as an identifier.
+	if (checkWord("interface") && peek(1).type == TokenType::IDENTIFIER &&
+		peek(2).type == TokenType::OPERATOR && peek(2).value == "{") {
+		advance();
+		return parseInterfaceDeclaration();
 	}
 
 	// Handle constexpr modifier

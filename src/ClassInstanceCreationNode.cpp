@@ -465,8 +465,9 @@ void ClassInstanceCreationNode::accept(ASTVisitor& visitor) {
 llvm::Value* ClassInstanceCreationNode::codegen() {
     auto& cg = CodeGenerator::getInstance();
 
-    // Primitive allocation: return typed pointer from malloc.
-    if (isPrimitiveType(className)) {
+    // Primitive allocation: return typed pointer from malloc. A class the program declares under a
+    // primitive's name (`class Word`) is a class.
+    if (isPrimitiveType(className) && !cg.symbolTable.lookupClass(className)) {
         BasicType basicType(className);
         llvm::Type* type = cg.getLLVMType(&basicType);
         if (!type) {

@@ -1,0 +1,27 @@
+// Template type parameters bounded by interfaces: `T: Show + Sized`.
+interface Show { def show(): String; }
+interface Sized { def size(): Int; }
+
+class Word(text: String) implements Show, Sized {
+    def show(): String = text
+    def size(): Int = text.length
+}
+
+class Point(x: Int) implements Show {
+    def show(): String = "P" + x
+}
+
+template<typename T: Show + Sized>
+def label(item: T): String = item.show() + ":" + item.size()
+
+template<typename T: Show>
+class Box(item: T) {
+    def text(): String = "[" + item.show() + "]"
+}
+
+def main(): Int {
+    if (label(new Word("hello")) != "hello:5") { return 1; }
+    if (new Box<Point>(new Point(3)).text() != "[P3]") { return 2; }
+    if (new Box<Word>(new Word("w")).text() != "[w]") { return 3; }
+    return 0;
+}

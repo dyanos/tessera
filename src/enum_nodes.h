@@ -28,6 +28,7 @@ public:
     std::vector<std::string> typeParameters;
     std::vector<Variant> variants;
     std::vector<std::unique_ptr<ASTNode>> methods;  // FunctionDeclarationNode
+    std::vector<std::string> interfaces;            // `implements A, B`
 
     EnumDeclarationNode() { nodeType = ASTNodeType::ENUM_DECLARATION; }
     EnumDeclarationNode(const EnumDeclarationNode& other);

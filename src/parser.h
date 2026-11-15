@@ -44,6 +44,7 @@ private:
     std::unique_ptr<ASTNode> parseCallArgument();
     std::unique_ptr<ASTNode> parsePattern();
     std::unique_ptr<ASTNode> parseEnumDeclaration();
+    std::unique_ptr<ASTNode> parseInterfaceDeclaration();
     // 현재 Token position 저장/복원
     bool saveTokenPosition();
     void restoreTokenPosition();

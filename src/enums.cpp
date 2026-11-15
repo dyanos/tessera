@@ -166,6 +166,7 @@ std::unique_ptr<ASTNode> lowerEnumDeclaration(EnumDeclarationNode& decl, int& er
     auto cls = std::make_unique<ClassDeclarationNode>(decl.name, params, "", std::move(body));
     cls->isStruct = !info.isReference;
     cls->line = decl.line;
+    cls->interfaces = decl.interfaces;
 
     const std::string name = decl.name;
     registry()[name] = std::move(info);

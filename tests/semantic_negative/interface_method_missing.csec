@@ -1,0 +1,7 @@
+interface Shape { def area(): Double; def name(): String; }
+
+class Circle(r: Double) implements Shape {
+    def area(): Double = r * r
+}   // name() is missing
+
+def main(): Int { return 0; }

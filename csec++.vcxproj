@@ -159,6 +159,7 @@
     <ClCompile Include="src/default_arguments.cpp" />
     <ClCompile Include="src/enums.cpp" />
     <ClCompile Include="src/enum_nodes.cpp" />
+    <ClCompile Include="src/interfaces.cpp" />
     <ClCompile Include="src/LoopControlNode.cpp" />
     <ClCompile Include="src/verifier.cpp" />
     <ClCompile Include="src/AssignmentExpressionNode.cpp" />
@@ -231,6 +232,7 @@
     <ClInclude Include="src/ast_walk.h" />
     <ClInclude Include="src/enums.h" />
     <ClInclude Include="src/enum_nodes.h" />
+    <ClInclude Include="src/interfaces.h" />
     <ClInclude Include="src/LoopControlNode.h" />
     <ClInclude Include="src/source_map.h" />
     <ClInclude Include="src/verifier.h" />
