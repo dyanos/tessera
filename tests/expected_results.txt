@@ -70,12 +70,12 @@ tests/positive/03_control_flow/040_deep_nesting.csec 0 28
 tests/positive/03_control_flow/041_for_expressions_as_bounds.csec 0 55
 tests/positive/03_control_flow/042_multiple_returns.csec 0 47
 tests/positive/03_control_flow/043_constexpr_if_variants.csec 0 31
-tests/positive/03_control_flow/044_for_over_iterable.csec 0 0
+tests/positive/03_control_flow/044_for_over_iterable.csec 0 21
 tests/positive/03_control_flow/045_match_as_expression.csec 0 45
 tests/positive/03_control_flow/046_else_if_chain.csec 0 1
 tests/positive/04_collections/040_map_pipeline.csec 0 0
 tests/positive/04_collections/041_reduce_pipeline.csec 0 0
-tests/positive/04_collections/042_for_over_expression.csec 0 0
+tests/positive/04_collections/042_for_over_expression.csec 0 6
 tests/positive/04_collections/043_nested_array_literals.csec 0 0
 tests/positive/04_collections/044_filter_standalone.csec 0 0
 tests/positive/04_collections/045_pmap_standalone.csec 0 0
@@ -307,6 +307,10 @@ tests/positive/13_simulation/133_differential_function_euler.csec 0 0
 tests/positive/13_simulation/134_ode_sugar_syntax.csec 0 0
 tests/positive/13_simulation/135_md_lattice_100x100.csec 0 0
 tests/positive/13_simulation/136_protein_mcmc_modeling.csec 0 0
+tests/positive/14_language/211_break_continue_foreach.csec 0 0
+tests/positive/14_language/212_default_named_arguments.csec 0 0
+tests/positive/14_language/213_double_literals.csec 0 0
+tests/positive/14_language/214_symbolic_logical_operators.csec 0 0
 tests/selfhost_concurrency/01_spawn_named.csec 0 42
 tests/selfhost_concurrency/02_async_go.csec 0 42
 tests/selfhost_concurrency/03_thread_atomic.csec 0 42

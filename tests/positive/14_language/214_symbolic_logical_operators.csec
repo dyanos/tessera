@@ -1,0 +1,9 @@
+// `&&` and `||` are the same as `and` and `or`.
+def check(a: Int, b: Int): Boolean = a > 0 && b > 0 || a == b
+
+def main(): Int {
+    if (!(1 < 2 && 3 < 4)) { return 1; }
+    if (1 > 2 || 2 > 3) { return 2; }
+    if (!check(1, 2) || !check(-1, -1) || check(-1, 2)) { return 3; }
+    return 0;
+}

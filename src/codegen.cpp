@@ -228,6 +228,15 @@ void CodeGenerator::emitAllCleanupsExcept(llvm::Value* retainedPointer) {
     }
 }
 
+void CodeGenerator::emitCleanupsAbove(size_t depth) {
+    for (size_t i = cleanupScopes.size(); i > depth; --i) {
+        auto& cleanups = cleanupScopes[i - 1];
+        for (auto it = cleanups.rbegin(); it != cleanups.rend(); ++it) {
+            emitCleanupEntry(it->first, it->second, nullptr);
+        }
+    }
+}
+
 void CodeGenerator::addExternalLinkLibrary(const std::string& library) {
     addUnique(externalLinkLibraries, library);
 }

@@ -1,6 +1,7 @@
 // main.cpp
 #include "source_map.h"
 #include "verifier.h"
+#include "default_arguments.h"
 #ifdef _WIN32
 #define _CRTDBG_MAP_ALLOC
 #include <stdlib.h>
@@ -1582,6 +1583,9 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "Parsing completed successfully." << std::endl;
+    if (!expandDefaultAndNamedArguments(ast.get())) {
+        return 1;
+    }
     if (outputMode == OutputMode::SyntaxOnly) {
         ast.reset();
         return 0;

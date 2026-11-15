@@ -67,6 +67,8 @@ public:
 
     // 이항 표현식 노드를 방문합니다.
     void visit(BinaryExpressionNode& node) override;
+    void narrowFloatOperands(BinaryExpressionNode& node);
+    void visitBinaryExpression(BinaryExpressionNode& node);
 
     // 할당 노드를 방문합니다.
     void visit(AssignmentNode& node) override;
@@ -130,6 +132,7 @@ public:
 	void visit(DestructuringAssignmentNode& node) override;
 	void visit(WhileStatementNode& node) override;
 	void visit(TemplateDeclarationNode& node) override;
+	void visit(LoopControlNode& node) override;
 
 private:
     struct OwnershipState {
@@ -141,6 +144,8 @@ private:
 
     int errorCount = 0;
     int unsafeContextDepth = 0;
+    int loopDepth = 0;
+    const Type* currentReturnType = nullptr;  // declared return type of the function being checked  // enclosing while/for loops of the current function (break/continue targets)
     // True while checking the body of an `async def`. `await` is only valid here, and the M8
     // no-borrow-across-await rule is enforced at each await point.
     bool inAsyncFunction = false;

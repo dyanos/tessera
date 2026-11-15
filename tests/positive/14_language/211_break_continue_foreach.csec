@@ -1,0 +1,78 @@
+// break / continue in while, range for, array for-each, and dictionary loops.
+def firstSquareAbove(limit: Int): Int {
+    for (k <- 0 until 100) {
+        if (k * k > limit) {
+            return k;
+        }
+    }
+    return -1;
+}
+
+def main(): Int {
+    var i = 0;
+    var total = 0;
+    while (true) {
+        i = i + 1;
+        if (i > 10) { break; }
+        if (i % 2 == 0) { continue; }
+        total = total + i;            // 1 + 3 + 5 + 7 + 9
+    }
+    if (total != 25) { return 1; }
+
+    var found = -1;
+    for (k <- 0 until 100) {
+        if (k * k > 50) { found = k; break; }
+    }
+    if (found != 8 or firstSquareAbove(50) != 8) { return 2; }
+
+    var multiples = 0;
+    for (k <- 1 to 10) {
+        if (k % 3 != 0) { continue; }
+        multiples = multiples + k;    // 3 + 6 + 9
+    }
+    if (multiples != 18) { return 3; }
+
+    val xs = [4, 5, 6];
+    var sum = 0;
+    for (x <- xs) { sum = sum + x; }
+    if (sum != 15) { return 4; }
+
+    var firstBig = 0;
+    for (x <- [1, 7, 3, 9]) {
+        if (x > 5) { firstBig = x; break; }
+    }
+    if (firstBig != 7) { return 5; }
+
+    val words = ["a", "bb", "ccc"];
+    var letters = 0;
+    for (w <- words) { letters = letters + w.length; }
+    if (letters != 6) { return 6; }
+
+    // break leaves only the innermost loop
+    var pairs = 0;
+    for (a <- 0 until 4) {
+        for (c <- 0 until 4) {
+            if (c > a) { break; }
+            pairs = pairs + 1;
+        }
+    }
+    if (pairs != 10) { return 7; }
+
+    val ages = {"a": 1, "b": 2, "c": 3};
+    var odd = 0;
+    for (k, v <- ages) {
+        if (v % 2 == 0) { continue; }
+        odd = odd + v;
+    }
+    if (odd != 4) { return 8; }
+
+    // an owned local declared in the body is dropped on the break path as well
+    var n = 0;
+    while (n < 5) {
+        var b: box Int = 7;
+        n = n + 1;
+        if (n == 2) { break; }
+    }
+    if (n != 2) { return 9; }
+    return 0;
+}

@@ -9,6 +9,7 @@
 #include <iostream>
 
 #include "all_ast.h"
+#include "ast_walk.h"
 
 namespace {
 bool isResolvedType(const std::unique_ptr<Type>& type) {
@@ -309,6 +310,123 @@ bool statementDiverges(const ASTNode* stmt) {
 }
 }
 
+// True when `node` contains a `break` that leaves the loop whose body it is (not one of a nested loop).
+static bool containsLoopExit(ASTNode* node) {
+    if (!node) return false;
+    if (auto* control = dynamic_cast<LoopControlNode*>(node)) return control->isBreak;
+    if (dynamic_cast<WhileStatementNode*>(node) || dynamic_cast<ForStatementNode*>(node) ||
+        dynamic_cast<LambdaExpressionNode*>(node) || dynamic_cast<FunctionDeclarationNode*>(node)) {
+        return false;
+    }
+    bool found = false;
+    ast_walk::forEachChild(node, [&](ASTNode* child, std::unique_ptr<ASTNode>*) {
+        if (!found && containsLoopExit(child)) found = true;
+    });
+    return found;
+}
+
+// A decimal literal is a Double. Where a Float is expected -- a Float variable, parameter, return value,
+// or the other operand of a Float -- a literal expression (decimal and integer literals, unary minus,
+// + - * /, and operands that are already Float) is evaluated as a Float instead, so `val x: Float = 0.5`
+// and `x * 2.5` keep Float precision without an `f` suffix. Returns whether `node` is such an
+// expression; with `apply`, retypes its Double literals to Float.
+static bool narrowDoubleLiteralsToFloat(ASTNode* node, bool apply) {
+    if (!node) return false;
+    if (auto* value = dynamic_cast<ValueNode*>(node)) {
+        if (value->valueType == TokenType::EXPONENTIAL_LITERAL) {
+            if (apply) value->type = std::make_unique<BasicType>("Float");
+            return true;
+        }
+        return value->valueType == TokenType::FLOAT_LITERAL || value->valueType == TokenType::INTEGER_LITERAL;
+    }
+    if (auto* unary = dynamic_cast<UnaryExpressionNode*>(node)) {
+        if (unary->op != "-" && unary->op != "+") return false;
+        if (!narrowDoubleLiteralsToFloat(unary->expression.get(), apply)) return false;
+        if (apply) unary->type.reset();
+        return true;
+    }
+    if (auto* prefix = dynamic_cast<PrefixExpressionNode*>(node)) {
+        if (prefix->op != "-" && prefix->op != "+") return false;
+        if (!narrowDoubleLiteralsToFloat(prefix->expression.get(), apply)) return false;
+        if (apply) prefix->type.reset();
+        return true;
+    }
+    if (auto* binary = dynamic_cast<BinaryExpressionNode*>(node)) {
+        const std::string& op = binary->op;
+        if (op != "+" && op != "-" && op != "*" && op != "/") return false;
+        auto operandOk = [&](ASTNode* operand) {
+            if (narrowDoubleLiteralsToFloat(operand, false)) return true;
+            auto t = operand ? operand->getType() : nullptr;
+            return t && (t->isFloatTy() || t->isIntegerTy());
+        };
+        if (!operandOk(binary->left.get()) || !operandOk(binary->right.get())) return false;
+        if (apply) {
+            narrowDoubleLiteralsToFloat(binary->left.get(), true);
+            narrowDoubleLiteralsToFloat(binary->right.get(), true);
+            binary->type.reset();
+        }
+        return true;
+    }
+    return false;
+}
+
+// When `expr` has type Double and `target` is Float, narrows its literals (see above).
+static void narrowToFloatTarget(const Type* target, ASTNode* expr) {
+    if (!target || !expr || !target->isFloatTy()) return;
+    auto exprType = expr->getType();
+    if (!exprType || !exprType->isDoubleTy()) return;
+    if (narrowDoubleLiteralsToFloat(expr, false)) narrowDoubleLiteralsToFloat(expr, true);
+}
+
+// Narrows literal arguments at positions where every candidate signature takes a Float.
+static void narrowArgumentsToFloat(std::vector<std::unique_ptr<ASTNode>>& arguments,
+                                   const std::vector<std::vector<const Type*>>& candidates) {
+    if (candidates.empty()) return;
+    BasicType floatType("Float");
+    for (size_t i = 0; i < arguments.size(); ++i) {
+        bool allFloat = true;
+        for (const auto& params : candidates) {
+            if (i >= params.size() || !params[i] || !params[i]->isFloatTy()) { allFloat = false; break; }
+        }
+        if (allFloat) narrowToFloatTarget(&floatType, arguments[i].get());
+    }
+}
+
+// Parameter types (receiver excluded) of the methods `name` of `className` and its parents that take
+// `arity` arguments.
+static std::vector<std::vector<const Type*>> methodParameterLists(const std::string& className,
+                                                                   const std::string& name, size_t arity) {
+    std::vector<std::vector<const Type*>> result;
+    auto& table = CodeGenerator::getInstance().symbolTable;
+    for (const ClassSymbol* cls = table.lookupClass(className); cls; cls = cls->superClassSymbol) {
+        for (const auto& entry : cls->methods) {
+            const Symbol* candidate = entry.second.get();
+            if (!candidate || candidate->name != name) continue;
+            auto* funcType = dynamic_cast<const FunctionType*>(candidate->type.get());
+            if (!funcType) continue;
+            std::vector<const Type*> params;
+            for (const auto& p : funcType->parameterTypes) params.push_back(p.get());
+            if (params.size() == arity + 1) params.erase(params.begin());  // registered with the receiver
+            if (params.size() == arity) result.push_back(std::move(params));
+        }
+    }
+    return result;
+}
+
+// Constructor parameter types of `className` when it takes `arity` arguments.
+static std::vector<std::vector<const Type*>> constructorParameterLists(const std::string& className, size_t arity) {
+    std::vector<std::vector<const Type*>> result;
+    auto* cls = CodeGenerator::getInstance().symbolTable.lookupClass(className);
+    if (!cls || cls->constructorParamOrder.size() != arity) return result;
+    std::vector<const Type*> params;
+    for (const auto& name : cls->constructorParamOrder) {
+        auto it = cls->constructorParams.find(name);
+        params.push_back(it != cls->constructorParams.end() && it->second ? it->second->type.get() : nullptr);
+    }
+    result.push_back(std::move(params));
+    return result;
+}
+
 // External linkage (see type_checker.h): main.cpp toggles this from `--strict-ownership`. Defined
 // here, past the anonymous namespace, so it references the internal g_strictOwnership by TU scope.
 void setStrictOwnership(bool enabled) { g_strictOwnership = enabled; }
@@ -411,6 +529,7 @@ void TypeChecker::checkFunctionArguments(const std::vector<std::unique_ptr<ASTNo
     for (size_t i = 0; i < arguments.size(); ++i) {
         ASTNode* arg = arguments[i].get();
         Type* paramType = i < parameterTypes.size() && parameterTypes[i] ? parameterTypes[i].get() : nullptr;
+        narrowToFloatTarget(paramType, arg);
         bool mutableBorrowArg = false;
         const bool argIsMove = isMoveExpression(arg);
         const bool argIsBorrow = isBorrowExpression(arg, &mutableBorrowArg);
@@ -492,6 +611,10 @@ void TypeChecker::visit(VariableDeclarationNode& node) {
             }
         }
 
+        if (node.type && node.hasExplicitType && node.initializer) {
+            narrowToFloatTarget(node.type.get(), node.initializer.get());
+            initType = node.initializer->getType();
+        }
         if (node.type) {
             if (!node.hasExplicitType && isResolvedType(initType)) {
                 node.type = initType ? initType->clone() : std::make_unique<UnknownType>();
@@ -593,9 +716,17 @@ void TypeChecker::visit(FunctionDeclarationNode& node) {
     }
     const bool savedAsync = inAsyncFunction;
     inAsyncFunction = node.isAsync;
+    const int savedLoopDepth = loopDepth;
+    loopDepth = 0;
+    const Type* savedReturnType = currentReturnType;
+    currentReturnType = node.returnType.get();
 
     if (node.body) {
         node.body->accept(*this);
+        // An expression-bodied `def f(): Float = 0.5` returns its last expression.
+        if (node.returnType && !node.body->statements.empty()) {
+            narrowToFloatTarget(node.returnType.get(), node.body->statements.back().get());
+        }
         auto bodyType = node.body->getType();
 
         if (node.returnType) {
@@ -624,6 +755,8 @@ void TypeChecker::visit(FunctionDeclarationNode& node) {
         --unsafeContextDepth;
     }
     inAsyncFunction = savedAsync;
+    loopDepth = savedLoopDepth;
+    currentReturnType = savedReturnType;
 
     exitOwnershipScope();
     cg.symbolTable.exitScope();
@@ -681,12 +814,26 @@ bool TypeChecker::checkClassOperatorOperand(const std::string& op, const Type* l
 }
 
 void TypeChecker::visit(BinaryExpressionNode& node) {
-    if (node.left) {
-        node.left->accept(*this);
-    }
-    if (node.right) {
-        node.right->accept(*this);
-    }
+    narrowFloatOperands(node);
+    visitBinaryExpression(node);
+}
+
+void TypeChecker::narrowFloatOperands(BinaryExpressionNode& node) {
+    if (node.left) node.left->accept(*this);
+    if (node.right) node.right->accept(*this);
+    const std::string& op = node.op;
+    const bool numeric = op == "+" || op == "-" || op == "*" || op == "/" || op == "%" || op == "**" ||
+        op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=";
+    if (!numeric || !node.left || !node.right) return;
+    auto leftType = node.left->getType();
+    auto rightType = node.right->getType();
+    if (leftType && leftType->isFloatTy()) narrowToFloatTarget(leftType.get(), node.right.get());
+    if (rightType && rightType->isFloatTy()) narrowToFloatTarget(rightType.get(), node.left.get());
+    node.type.reset();
+}
+
+void TypeChecker::visitBinaryExpression(BinaryExpressionNode& node) {
+    // The operands were visited by narrowFloatOperands.
     if (node.left && node.right) {
         auto leftType = node.left->getType();
         auto rightType = node.right->getType();
@@ -924,12 +1071,32 @@ void TypeChecker::visit(ForStatementNode& node) {
         }
     }
     else {
-        bindVariable(node.variable, std::make_unique<BasicType>("Int"), false);
-        declareOwnership(node.variable, std::make_unique<BasicType>("Int"));
+        std::unique_ptr<Type> elementType;
+        if (auto* arrayType = dynamic_cast<ArrayType*>(iterableType.get())) {
+            if (arrayType->elementType) elementType = arrayType->elementType->clone();
+        }
+        else if (auto* genericType = dynamic_cast<GenericType*>(iterableType.get())) {
+            const std::string base = genericType->baseType ? genericType->baseType->getName() : "";
+            if ((base == "Array" || base == "Vector") && !genericType->typeArguments.empty() &&
+                genericType->typeArguments[0]) {
+                elementType = genericType->typeArguments[0]->clone();
+            }
+        }
+        if (!elementType && !node.isRange && !node.tokenStream && iterableType &&
+            isResolvedType(iterableType) && iterableType->getKind() != Type::Kind::UNKNOWN) {
+            reportError("Type error: cannot iterate over a value of type '" + typeDisplayName(iterableType.get()) +
+                        "' in for (" + node.variable + " <- ...); iterate an array, a range (a to b, a until b), "
+                        "a Dict or a Set");
+        }
+        if (!elementType) elementType = std::make_unique<BasicType>("Int");
+        bindVariable(node.variable, elementType, false);
+        declareOwnership(node.variable, elementType);
     }
     visitLoopContracts(node);
     if (node.body) {
+        ++loopDepth;
         node.body->accept(*this);
+        --loopDepth;
     }
     exitOwnershipScope();
     cg.symbolTable.exitScope();
@@ -938,6 +1105,7 @@ void TypeChecker::visit(ForStatementNode& node) {
 void TypeChecker::visit(ReturnStatementNode& node) {
     if (node.expression) {
         node.expression->accept(*this);
+        narrowToFloatTarget(currentReturnType, node.expression.get());
         // Borrow escape (memory model §6): a borrow of a local dangles once the function returns.
         // The MVP forbids returning references outright rather than introducing lifetime
         // parameters, so `return &x` / `return &mut x` is always rejected.
@@ -1099,6 +1267,10 @@ void TypeChecker::visit(MethodCallNode& node) {
     }
     if (node.object) {
         auto receiverType = node.object->getType();
+        if (receiverType && receiverType->getKind() == Type::Kind::CLASS) {
+            narrowArgumentsToFloat(node.arguments,
+                                   methodParameterLists(receiverType->getName(), node.methodName, node.arguments.size()));
+        }
         if (isSetType(receiverType.get())) {
             if (!setMethodType(receiverType.get(), node.methodName, node.arguments.size())) {
                 reportError("Type error: " + typeDisplayName(receiverType.get()) + " has no method '" + node.methodName +
@@ -1398,6 +1570,12 @@ void TypeChecker::visit(ClassInstanceCreationNode& node) {
             arg->accept(*this);
         }
     }
+    {
+        auto created = node.getType();
+        if (created && created->getKind() == Type::Kind::CLASS) {
+            narrowArgumentsToFloat(node.arguments, constructorParameterLists(created->getName(), node.arguments.size()));
+        }
+    }
     checkTypeResolved(node.getType(), "class instance creation");
 }
 
@@ -1424,6 +1602,10 @@ void TypeChecker::visit(AssignmentExpressionNode& node) {
     }
     if (node.right) {
         node.right->accept(*this);
+        if (node.left) {
+            auto leftType = node.left->getType();
+            narrowToFloatTarget(leftType.get(), node.right.get());
+        }
     }
     auto rightType = node.right ? node.right->getType() : std::make_unique<UnknownType>();
     if (auto* access = dynamic_cast<ArrayAccessNode*>(node.left.get())) {
@@ -1569,8 +1751,18 @@ void TypeChecker::visit(AttributeNode& node) {
     }
 }
 
+void TypeChecker::visit(LoopControlNode& node) {
+    if (loopDepth == 0) {
+        reportError(std::string("Type error: '") + (node.isBreak ? "break" : "continue") +
+                    "' outside a while or for loop");
+    }
+}
+
 void TypeChecker::visit(LambdaExpressionNode& node) {
     auto& cg = CodeGenerator::getInstance();
+    const int savedLoopDepth = loopDepth;
+    loopDepth = 0;
+    struct RestoreLoopDepth { int& depth; int saved; ~RestoreLoopDepth() { depth = saved; } } restoreLoopDepth{loopDepth, savedLoopDepth};
     cg.symbolTable.enterScope();
     enterOwnershipScope();
     for (auto& capture : node.captureVariables) {
@@ -1745,8 +1937,11 @@ void TypeChecker::visit(WhileStatementNode& node) {
         // those moves, mirroring the diverging-if-arm handling. A non-diverging body keeps its moves
         // (a value moved in a body that can loop is conservatively treated as moved afterward).
         const auto beforeBody = ownershipScopes;
+        ++loopDepth;
         node.body->accept(*this);
-        if (statementDiverges(node.body.get())) {
+        --loopDepth;
+        // A `break` leaves the loop with the body's moves in effect, so such a body is not diverging.
+        if (statementDiverges(node.body.get()) && !containsLoopExit(node.body.get())) {
             ownershipScopes = beforeBody;
         }
     }

@@ -423,6 +423,23 @@ std::unique_ptr<ClassBodyNode> Parser::parseClassBody() {
 	return classBody;
 }
 
+// One call argument. `name = value` is a named argument, matched to a parameter by name before
+// type checking (default_arguments.cpp).
+std::unique_ptr<ASTNode> Parser::parseCallArgument() {
+	if (check(TokenType::IDENTIFIER) && position + 1 < tokens.size() &&
+		tokens[position + 1].type == TokenType::OPERATOR && tokens[position + 1].value == "=") {
+		const int argLine = peek().line;
+		auto named = std::make_unique<AssignmentExpressionNode>();
+		named->left = std::make_unique<IdentifierNode>(advance().value);
+		advance();  // '='
+		named->right = parseExpression();
+		named->isNamedArgument = true;
+		named->line = argLine;
+		return named;
+	}
+	return parseExpression();
+}
+
 std::vector<std::unique_ptr<ASTNode>> Parser::parseCallParameterList()
 {
 	std::vector<std::unique_ptr<ASTNode>> arguments;
@@ -432,7 +449,7 @@ std::vector<std::unique_ptr<ASTNode>> Parser::parseCallParameterList()
 			return std::vector<std::unique_ptr<ASTNode>>();
 		}
 
-		arguments.push_back(parseExpression());
+		arguments.push_back(parseCallArgument());
 		if (!match(TokenType::OPERATOR, ",")) {
 			break;
 		}
@@ -451,10 +468,16 @@ std::vector<std::unique_ptr<ParameterNode>> Parser::parseParameterList() {
 			expect(TokenType::IDENTIFIER);
 			std::string paramName = previous().value;
 
+			const int paramLine = previous().line;
 			expect(TokenType::OPERATOR, ":");
 			std::unique_ptr<Type> paramType = parseType();
 
-			parameters.push_back(std::make_unique<ParameterNode>(paramName, paramType->clone()));
+			auto parameter = std::make_unique<ParameterNode>(paramName, paramType->clone());
+			parameter->line = paramLine;
+			if (match(TokenType::OPERATOR, "=")) {
+				parameter->defaultValue = parseExpression();
+			}
+			parameters.push_back(std::move(parameter));
 		} while (match(TokenType::OPERATOR, ","));
 	}
 
@@ -481,7 +504,7 @@ std::vector<std::unique_ptr<ASTNode>> Parser::parseArgumentList() {
 	std::vector<std::unique_ptr<ASTNode>> arguments;
 	if (!check(TokenType::OPERATOR, ")")) {
 		do {
-			arguments.push_back(parseExpression());
+			arguments.push_back(parseCallArgument());
 		} while (match(TokenType::OPERATOR, ","));
 	}
 	expect(TokenType::OPERATOR, ")");

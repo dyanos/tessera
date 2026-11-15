@@ -8,6 +8,7 @@
 # 2. verify: tests/verify/*.csec through `csec++ --verify` must print their .expected diagnostics
 #    (skipped when csec++ was built without Z3).
 # 3. self-host: tests/selfhost_concurrency/*.csec compiled by the self-hosted compiler must exit 42.
+# 4. rejected: every tests/semantic_negative/*.csec must fail to compile (--emit-ir exits non-zero).
 #
 # Set UPDATE=1 to rewrite tests/expected_results.txt from this run (per-OS overrides:
 # tests/expected_results.<uname -s>.txt, e.g. Darwin, where OpenMP is unavailable).
@@ -54,10 +55,11 @@ done
 expected="$work/expected_results.txt"
 overrides="tests/expected_results.$(uname -s).txt"
 if [ -f "$overrides" ]; then
-  awk 'NR == FNR { o[$1] = $0; next } ($1 in o) { print o[$1]; next } { print }' \
+  awk '{ sub(/\r$/, "") } NR == FNR { o[$1] = $0; next } ($1 in o) { print o[$1]; next } { print }' \
     "$overrides" tests/expected_results.txt > "$expected"
 else
-  cp tests/expected_results.txt "$expected"
+  # A Windows checkout (core.autocrlf) has CRLF line endings; compare without them.
+  tr -d '\r' < tests/expected_results.txt > "$expected"
 fi
 if [ "${UPDATE:-0}" = "1" ]; then
   cp "$results" tests/expected_results.txt
@@ -71,6 +73,19 @@ else
     failures=$((failures + 1))
   fi
 fi
+
+# ---- 4. rejected programs ----
+rejected_ok=0; rejected_bad=0
+for f in tests/semantic_negative/*.csec; do
+  if run_limited 120 "$compiler" --emit-ir -o "$work/rejected.ll" "$f" > /dev/null 2>&1 < /dev/null; then
+    echo "  accepted but should be rejected: $f"
+    rejected_bad=$((rejected_bad + 1))
+  else
+    rejected_ok=$((rejected_ok + 1))
+  fi
+done
+echo "rejected: $rejected_ok rejected, $rejected_bad wrongly accepted"
+[ "$rejected_bad" -eq 0 ] || failures=$((failures + 1))
 
 # ---- 2. verify ----
 if "$compiler" --verify tests/verify/04_wrap_mode.csec 2>&1 | grep -q "built without Z3"; then

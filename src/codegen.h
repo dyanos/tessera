@@ -74,6 +74,18 @@ public:
     void emitCurrentScopeCleanups();
     void emitAllCleanups();
     void emitAllCleanupsExcept(llvm::Value* retainedPointer);
+    // Number of open cleanup scopes, and the drops of every scope opened at or above `depth`
+    // (innermost first, entries kept) -- used by break/continue to leave a loop body early.
+    size_t cleanupDepth() const { return cleanupScopes.size(); }
+    void emitCleanupsAbove(size_t depth);
+
+    // Enclosing loops of the code being generated: where `break` and `continue` jump.
+    struct LoopTarget {
+        llvm::BasicBlock* breakBB;
+        llvm::BasicBlock* continueBB;
+        size_t cleanupDepth;
+    };
+    std::vector<LoopTarget> loopTargets;
 
     llvm::Function* mallocFunction; // non-owning, owned by module
     llvm::Function* freeFunction;  // non-owning, owned by module

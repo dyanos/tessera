@@ -55,6 +55,7 @@ enum class ASTNodeType {
     LAMBDA_EXPRESSION,
     TEMPLATE_DECLARATION,
     DICT_LITERAL,
+    LOOP_CONTROL,
 };
 
 class ASTVisitor;

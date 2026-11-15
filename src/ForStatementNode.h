@@ -59,6 +59,7 @@ public:
 
     void accept(ASTVisitor& visitor) override;
     llvm::Value* codegenDictLoop();
+    llvm::Value* codegenArrayLoop();
     llvm::Value* codegen() override;
 
     std::unique_ptr<Type> getType() override {

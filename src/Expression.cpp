@@ -352,11 +352,20 @@ std::unique_ptr<ASTNode> Parser::parseSimpleExpression() {
 		return parseBlock();
 	}
 	else if (check(TokenType::OPERATOR, "[")) {
-        bool looksLikeLambda =
-            peek(1).value == "&" ||
-            peek(1).value == "=" ||
-            peek(1).type == TokenType::IDENTIFIER ||
-            peek(1).value == "]";
+        // A lambda starts with a capture list -- identifiers, `&`, `=` and commas -- closed by `]` and
+        // followed by `(`. Anything else (`[f(x), 1]`, `[a + b]`) is an array literal.
+        bool looksLikeLambda = false;
+        for (int k = 1; position + k < tokens.size(); ++k) {
+            const Token& t = peek(k);
+            if (t.type == TokenType::OPERATOR && t.value == "]") {
+                looksLikeLambda = peek(k + 1).type == TokenType::OPERATOR && peek(k + 1).value == "(";
+                break;
+            }
+            const bool captureToken = t.type == TokenType::IDENTIFIER ||
+                (t.type == TokenType::KEYWORD && t.value == "mut") ||
+                (t.type == TokenType::OPERATOR && (t.value == "&" || t.value == "=" || t.value == ","));
+            if (!captureToken) break;
+        }
 
         if (looksLikeLambda) {
 		    saveTokenPosition();

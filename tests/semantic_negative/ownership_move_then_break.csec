@@ -1,0 +1,11 @@
+class R(v: Int) { def get(): Int = v }
+def consume(r: R): Int = r.get()
+
+def main(): Int {
+    val r = new R(5);
+    while (true) {
+        if (r.get() > 0) { consume(<- r); break; }
+        return 0;
+    }
+    return consume(<- r);   // r was moved on the break path
+}
