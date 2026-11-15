@@ -1,0 +1,85 @@
+// std.autodiff -- forward-mode automatic differentiation with dual numbers.
+//
+//     import std.autodiff
+//     def f(x: Dual): Dual = x * x * x + dsin(x) * 2.0;     // f(x) = x^3 + 2 sin x
+//     val slope = derivative(f, 1.5);                      // f'(1.5), exact to rounding
+//     val g, h = gradient2([=](x: Dual, y: Dual) -> { return x * y + dexp(y); }, 1.0, 2.0);
+//     val root = newton(f, 1.0, 20);                       // a zero of f near 1.0
+//
+// A Dual carries a value and its derivative; arithmetic and the elementary functions below apply
+// the chain rule. Mix in constants with `x * 2.0`, `x + 1.0` (Dual on the left) or constant(c).
+
+struct Dual(v: Double, d: Double) {
+    def operator +(o: Dual): Dual = new Dual(v + o.v, d + o.d)
+    def operator -(o: Dual): Dual = new Dual(v - o.v, d - o.d)
+    def operator *(o: Dual): Dual = new Dual(v * o.v, v * o.d + d * o.v)
+    def operator /(o: Dual): Dual = new Dual(v / o.v, (d * o.v - v * o.d) / (o.v * o.v))
+    def operator +(c: Double): Dual = new Dual(v + c, d)
+    def operator -(c: Double): Dual = new Dual(v - c, d)
+    def operator *(c: Double): Dual = new Dual(v * c, d * c)
+    def operator /(c: Double): Dual = new Dual(v / c, d / c)
+    def operator -(): Dual = new Dual(0.0 - v, 0.0 - d)
+    def value(): Double = v
+    def derivative(): Double = d
+    def toString(): String = "Dual(" + v + ", " + d + ")"
+}
+
+// The variable of differentiation at x (derivative 1), and a constant (derivative 0).
+def variable(x: Double): Dual = new Dual(x, 1.0)
+def constant(c: Double): Dual = new Dual(c, 0.0)
+
+def dsin(x: Dual): Dual = new Dual(sin(x.v), cos(x.v) * x.d)
+def dcos(x: Dual): Dual = new Dual(cos(x.v), 0.0 - sin(x.v) * x.d)
+def dexp(x: Dual): Dual {
+    val e: Double = exp(x.v);
+    return new Dual(e, e * x.d);
+}
+def dlog(x: Dual): Dual = new Dual(log(x.v), x.d / x.v)
+def dsqrt(x: Dual): Dual {
+    val r: Double = sqrt(x.v);
+    return new Dual(r, x.d / (2.0 * r));
+}
+// x ** n for a constant exponent n.
+def dpow(x: Dual, n: Double): Dual = new Dual(pow(x.v, n), n * pow(x.v, n - 1.0) * x.d)
+def dtanh(x: Dual): Dual {
+    val t: Double = tanh(x.v);
+    return new Dual(t, (1.0 - t * t) * x.d);
+}
+def dsigmoid(x: Dual): Dual {
+    val s: Double = 1.0 / (1.0 + exp(0.0 - x.v));
+    return new Dual(s, s * (1.0 - s) * x.d);
+}
+
+// f'(x).
+def derivative(f: (Dual) => Dual, x: Double): Double {
+    val r = f(variable(x));
+    return r.d;
+}
+
+// (df/dx, df/dy) at (x, y): one forward pass per variable.
+def gradient2(f: (Dual, Dual) => Dual, x: Double, y: Double): (Double, Double) {
+    val dx = f(variable(x), constant(y));
+    val dy = f(constant(x), variable(y));
+    return dx.d, dy.d;
+}
+
+// (df/dx, df/dy, df/dz) at (x, y, z).
+def gradient3(f: (Dual, Dual, Dual) => Dual, x: Double, y: Double, z: Double): (Double, Double, Double) {
+    val dx = f(variable(x), constant(y), constant(z));
+    val dy = f(constant(x), variable(y), constant(z));
+    val dz = f(constant(x), constant(y), variable(z));
+    return dx.d, dy.d, dz.d;
+}
+
+// Newton's method for f(x) = 0 from x0, at most `steps` iterations.
+def newton(f: (Dual) => Dual, x0: Double, steps: Int): Double {
+    var x = x0;
+    for (i <- 0 until steps) {
+        val r = f(variable(x));
+        if (r.d == 0.0) { break; }
+        val next = x - r.v / r.d;
+        if (abs(next - x) < 1.0e-12) { return next; }
+        x = next;
+    }
+    return x;
+}

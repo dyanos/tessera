@@ -296,6 +296,7 @@ tests/positive/11_tensor/117_tensor_math_builtins.csec 0 0
 tests/positive/11_tensor/118_tensor_element_assignment.csec 0 0
 tests/positive/11_tensor/119_vector_componentwise.csec 0 0
 tests/positive/11_tensor/120_fortran_slice_assignment.csec 0 0
+tests/positive/11_tensor/121_tensor_reductions_and_dtypes.csec 0 0
 tests/positive/12_native/120_stdout_functions.csec 0 0
 tests/positive/12_native/121_stdin_functions.csec 0 0
 tests/positive/12_native/122_math_functions.csec 0 0
@@ -374,3 +375,5 @@ tests/stdlib/positive/25_json.csec 0 0
 tests/stdlib/positive/26_http_openai_local.csec 0 0
 tests/stdlib/positive/27_math_algebra.csec 0 0
 tests/stdlib/positive/28_logic.csec 0 0
+tests/stdlib/positive/29_random.csec 0 0
+tests/stdlib/positive/30_autodiff.csec 0 0

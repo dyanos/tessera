@@ -1,0 +1,72 @@
+// std.random -- random numbers from xoshiro256** generators.
+//
+//     import std.random
+//     setRandomSeed(42);                    // the shared generator (seeded from the clock otherwise)
+//     val u = random();                     // uniform in [0, 1)
+//     val d = randomInt(1, 7);              // a die roll: uniform integer in [1, 7)
+//     val g = randomNormal(0.0, 1.0);       // standard normal
+//
+//     val rng = newRng(7);                  // an independent, reproducible generator
+//     val x = rng.uniform(-1.0, 1.0);
+//     val k = rng.int(0, 10);
+//     val n = rng.normal();                 // mean 0, standard deviation 1 by default
+//
+// Tensors are filled in place with the builtins fillUniform(t, low, high[, rng.handle]) and
+// fillNormal(t, mean, sd[, rng.handle]).
+
+external def csec_rng_new(seed: Long): Long;
+external def csec_rng_seed(rng: Long, seed: Long): Void;
+external def csec_rng_uniform(rng: Long): Double;
+external def csec_rng_int(rng: Long, low: Long, high: Long): Long;
+external def csec_rng_normal(rng: Long, mean: Double, sd: Double): Double;
+
+// A generator with its own state; equal seeds give equal sequences.
+struct Rng(handle: Long) {
+    // Uniform in [low, high).
+    def uniform(low: Double = 0.0, high: Double = 1.0): Double {
+        val u: Double = csec_rng_uniform(handle);
+        return low + (high - low) * u;
+    }
+    // Uniform integer in [low, high).
+    def int(low: Long, high: Long): Long = csec_rng_int(handle, low, high)
+    // Normal with the given mean and standard deviation.
+    def normal(mean: Double = 0.0, sd: Double = 1.0): Double = csec_rng_normal(handle, mean, sd)
+    def reseed(seed: Long): Int {
+        csec_rng_seed(handle, seed);
+        return 0;
+    }
+    // true with probability p.
+    def chance(p: Double): Boolean {
+        val u: Double = csec_rng_uniform(handle);
+        return u < p;
+    }
+}
+
+def newRng(seed: Long): Rng = new Rng(csec_rng_new(seed))
+
+// The shared generator (handle 0).
+def sharedRng(): Rng {
+    val shared: Long = 0;
+    return new Rng(shared);
+}
+
+def setRandomSeed(seed: Long): Int {
+    val shared: Long = 0;
+    csec_rng_seed(shared, seed);
+    return 0;
+}
+
+def random(): Double {
+    val shared: Long = 0;
+    return csec_rng_uniform(shared);
+}
+
+def randomInt(low: Long, high: Long): Long {
+    val shared: Long = 0;
+    return csec_rng_int(shared, low, high);
+}
+
+def randomNormal(mean: Double = 0.0, sd: Double = 1.0): Double {
+    val shared: Long = 0;
+    return csec_rng_normal(shared, mean, sd);
+}

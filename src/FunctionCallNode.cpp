@@ -18,6 +18,7 @@
 #include "VariableDeclarationNode.h"
 #include "TensorRuntime.h"
 #include "type_utils.h"
+#include "tensor_builtins.h"
 
 #include <iostream>
 #include <llvm/IR/Function.h>
@@ -1989,6 +1990,11 @@ static llvm::Value* createTypedCallWithAdjustedArgs(
 
 llvm::Value* FunctionCallNode::codegen() {
     auto& cg = CodeGenerator::getInstance();
+    {
+        bool handled = false;
+        llvm::Value* tensorResult = codegenTensorBuiltin(*this, &handled);
+        if (handled) return tensorResult;
+    }
 
     // Evaluate arguments first
     std::vector<llvm::Value*> argValues;
@@ -2523,6 +2529,7 @@ llvm::Value* FunctionCallNode::codegen() {
 
 std::unique_ptr<Type> FunctionCallNode::getType() {
     if (type) return type->clone();
+    if (auto tensorType = tensorBuiltinType(*this)) return tensorType;
 
     // A template function: its declared return type, with a bare type parameter replaced by the
     // explicit type argument or the type of the argument passed for a parameter of that type.

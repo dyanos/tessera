@@ -623,13 +623,19 @@ llvm::Value* ClassInstanceCreationNode::codegen() {
                 clonedCtorParams.push_back(param ? param->clone() : nullptr);
             }
 
+            // Evaluate every argument before binding any constructor parameter: a later argument must
+            // not see an earlier parameter in place of the caller's variable of the same name.
+            std::vector<llvm::Value*> evaluatedArgs;
+            for (size_t i = 0; i < clonedCtorParams.size(); ++i) {
+                evaluatedArgs.push_back(i < arguments.size() ? arguments[i]->codegen() : nullptr);
+            }
             for (size_t i = 0; i < clonedCtorParams.size(); ++i) {
                 auto* param = dynamic_cast<ParameterNode*>(clonedCtorParams[i].get());
                 if (!param) {
                     continue;
                 }
                 resolveTemplateType(param->type, constructionBinding);
-                llvm::Value* argValue = i < arguments.size() ? arguments[i]->codegen() : nullptr;
+                llvm::Value* argValue = evaluatedArgs[i];
                 if (!initializeField(param->name, param->type, argValue)) {
                     return failTemplateInitialization();
                 }
@@ -677,6 +683,9 @@ llvm::Value* ClassInstanceCreationNode::codegen() {
         return nullptr;
     };
 
+    // Evaluate every argument before binding any constructor parameter (see above).
+    std::vector<llvm::Value*> evaluatedArgs;
+    for (auto& argument : arguments) evaluatedArgs.push_back(argument->codegen());
     for (size_t i = 0; i < classSymbol->constructorParamOrder.size(); ++i) {
         const std::string& paramName = classSymbol->constructorParamOrder[i];
         auto paramIt = classSymbol->constructorParams.find(paramName);
@@ -685,7 +694,7 @@ llvm::Value* ClassInstanceCreationNode::codegen() {
             return failInitialization();
         }
 
-        llvm::Value* argValue = arguments[i]->codegen();
+        llvm::Value* argValue = evaluatedArgs[i];
         if (!initializeField(paramName, paramIt->second->type, argValue)) {
             return failInitialization();
         }

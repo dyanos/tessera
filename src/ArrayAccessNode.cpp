@@ -118,7 +118,21 @@ llvm::Value* ArrayAccessNode::codegen() {
             }
         }
 
-        return TensorRuntime::sliceTensor(cg, arrayValue, isSlice, starts, ends, steps);
+        llvm::Value* element = TensorRuntime::sliceTensor(cg, arrayValue, isSlice, starts, ends, steps);
+        // Elements are stored as doubles; an element of a Tensor<Int, ...>, Tensor<Long, ...> or
+        // Tensor<Float, ...> reads as a value of that type.
+        auto* tensorType = dynamic_cast<GenericType*>(arrayTypeInfo.get());
+        if (element && element->getType()->isDoubleTy() && tensorType && !tensorType->typeArguments.empty()) {
+            const Type* elementType = tensorType->typeArguments[0].get();
+            if (elementType && (elementType->isIntegerTy() || elementType->getName() == "Long" ||
+                                elementType->isFloatTy())) {
+                if (llvm::Type* target = cg.getLLVMType(elementType)) {
+                    element = target->isIntegerTy() ? cg.builder.CreateFPToSI(element, target, "tensor.elem.int")
+                                                    : cg.builder.CreateFPTrunc(element, target, "tensor.elem.float");
+                }
+            }
+        }
+        return element;
     }
 
     llvm::Value* currentValue = arrayValue;
