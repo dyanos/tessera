@@ -161,6 +161,7 @@
     <ClCompile Include="src/enum_nodes.cpp" />
     <ClCompile Include="src/interfaces.cpp" />
     <ClCompile Include="src/tensor_builtins.cpp" />
+    <ClCompile Include="src/debug_info.cpp" />
     <ClCompile Include="src/LoopControlNode.cpp" />
     <ClCompile Include="src/verifier.cpp" />
     <ClCompile Include="src/AssignmentExpressionNode.cpp" />
@@ -235,6 +236,7 @@
     <ClInclude Include="src/enum_nodes.h" />
     <ClInclude Include="src/interfaces.h" />
     <ClInclude Include="src/tensor_builtins.h" />
+    <ClInclude Include="src/debug_info.h" />
     <ClInclude Include="src/LoopControlNode.h" />
     <ClInclude Include="src/source_map.h" />
     <ClInclude Include="src/verifier.h" />

@@ -157,6 +157,7 @@ set(_
     "enum_nodes.cpp"
     "interfaces.cpp"
     "tensor_builtins.cpp"
+    "debug_info.cpp"
 )
 source_group("?뚯뒪 ?뚯씪" FILES ${_})
 

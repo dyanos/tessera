@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "debug_info.h"
 #include "LambdaExpressionNode.h"
 #include "ASTVisitor.h"
 #include "ParameterNode.h"
@@ -274,6 +275,7 @@ llvm::Value* LambdaExpressionNode::codegen() {
     auto savedPoint = cg.builder.GetInsertPoint();
     llvm::BasicBlock* entry = llvm::BasicBlock::Create(cg.context, "entry", lambdaFunc);
     cg.builder.SetInsertPoint(entry);
+    debuginfo::beginFunction(lambdaFunc, "lambda", line);
     cg.symbolTable.enterScope();
 
     // Bind captured variables from the environment argument.

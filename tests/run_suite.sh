@@ -9,6 +9,7 @@
 #    (skipped when csec++ was built without Z3).
 # 3. self-host: tests/selfhost_concurrency/*.csec compiled by the self-hosted compiler must exit 42.
 # 4. rejected: every tests/semantic_negative/*.csec must fail to compile (--emit-ir exits non-zero).
+# 5. debug info: tests/positive/14_language/*.csec compile with -g (valid debug metadata).
 #
 # Set UPDATE=1 to rewrite tests/expected_results.txt from this run (per-OS overrides:
 # tests/expected_results.<os>.txt, e.g. Darwin, where OpenMP is unavailable; see below).
@@ -91,6 +92,17 @@ for f in tests/semantic_negative/*.csec; do
 done
 echo "rejected: $rejected_ok rejected, $rejected_bad wrongly accepted"
 [ "$rejected_bad" -eq 0 ] || failures=$((failures + 1))
+
+# ---- 5. debug info ----
+debug_bad=0
+for f in tests/positive/14_language/*.csec; do
+  if ! run_limited 120 "$compiler" -g --emit-ir -o "$work/debug.ll" "$f" > /dev/null 2>&1 < /dev/null; then
+    echo "  -g failed: $f"
+    debug_bad=$((debug_bad + 1))
+  fi
+done
+echo "debug info: $debug_bad failure(s)"
+[ "$debug_bad" -eq 0 ] || failures=$((failures + 1))
 
 # ---- 2. verify ----
 if "$compiler" --verify tests/verify/04_wrap_mode.csec 2>&1 | grep -q "built without Z3"; then

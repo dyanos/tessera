@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "debug_info.h"
 #include "ClassDeclarationNode.h"
 #include "ASTVisitor.h"
 #include "ast.h"
@@ -344,6 +345,7 @@ llvm::Function* ClassDeclarationNode::defineMethod(FunctionDeclarationNode* meth
 
     auto* entry = llvm::BasicBlock::Create(cg.context, "entry", function);
     cg.builder.SetInsertPoint(entry);
+    debuginfo::beginFunction(function, name + "." + method->name, method->line);
 
     auto argIt = function->arg_begin();
     if (argIt == function->arg_end()) {

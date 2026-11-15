@@ -5,6 +5,7 @@
 #include "enums.h"
 #include "LambdaExpressionNode.h"
 #include "interfaces.h"
+#include "debug_info.h"
 #ifdef _WIN32
 #define _CRTDBG_MAP_ALLOC
 #include <stdlib.h>
@@ -105,6 +106,7 @@ void printUsage(const char* programName) {
         << "  --static                     Link the runtime into the .exe (no System.Native.dll needed)\n"
         << "  -o <path>                    Output path for --emit-ir/--emit-obj/--emit-exe\n"
         << "  -O0 / -O1 / -O2 / -O3 / -O   Optimization level (-O = -O2; default: mem2reg only)\n"
+        << "  -g                           Emit debug information (source lines, function names)\n"
         << "  -march=native                Generate code for this machine's CPU (e.g. AVX2/AVX-512)\n"
         << "  --link-lib <name-or-path>    Link an additional native library/import library\n"
         << "  --lib-path <dir>             Add a standard-library root searched by import\n"
@@ -1254,6 +1256,7 @@ bool writeExecutableToFile(
             linkArgs.push_back("/LIBPATH:" + quoteCommandArg(linkPathArg));
         }
     }
+    if (debuginfo::enabled()) linkArgs.push_back("/DEBUG");
     linkArgs.push_back("libcmt.lib");
     linkArgs.push_back("libvcruntime.lib");
     linkArgs.push_back("libucrt.lib");
@@ -1395,6 +1398,7 @@ int main(int argc, char** argv) {
     // 1/2/3 = -O1/-O2/-O3 (LLVM per-module default pipeline).
     int optLevel = -1;
     bool marchNative = false;
+    bool debugInfo = false;
     // --static: link the native runtime directly into the emitted executable (no System.Native.dll
     // dependency at run time). Only affects --emit-exe.
     bool staticRuntime = false;
@@ -1479,6 +1483,7 @@ int main(int argc, char** argv) {
             outputMode = OutputMode::EmitExecutable;
             continue;
         }
+        if (arg == "-g") { debugInfo = true; continue; }
         if (arg == "--static") {
             staticRuntime = true;
             continue;
@@ -1617,6 +1622,14 @@ int main(int argc, char** argv) {
         auto mainFile = std::filesystem::weakly_canonical(std::filesystem::path(inputFile), canonicalError);
         return verifyProgram(ast.get(), canonicalError ? inputFile : mainFile.string());
     }
+    if (debugInfo) {
+        // CodeView for the MSVC toolchain (Visual Studio, WinDbg), DWARF elsewhere.
+#ifdef _WIN32
+        debuginfo::enable(inputFile, true);
+#else
+        debuginfo::enable(inputFile, false);
+#endif
+    }
     CodeGenerator::getInstance().generatingCode = true;
     ast->codegen();
 
@@ -1639,6 +1652,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    debuginfo::finalize();
     if (llvm::verifyModule(*codeGen.module, &llvm::errs())) {
         std::cerr << "Generated LLVM IR is invalid. Aborting execution." << std::endl;
         // Debug aid: CSEC_DUMP_INVALID_IR=<path> writes the rejected module for inspection.

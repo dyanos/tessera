@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "debug_info.h"
 #include "BlockNode.h"
 #include "ASTVisitor.h"
 #include "ast_walk.h"
@@ -84,6 +85,7 @@ llvm::Value* BlockNode::codegen() {
                 }
             }
         }
+        if (stmt->line > 0) debuginfo::setLine(stmt->line);
         last = stmt->codegen();
     }
 
