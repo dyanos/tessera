@@ -4,6 +4,7 @@
 #include "ASTVisitor.h"
 
 #include <iostream>
+#include <sstream>
 #include <llvm/IR/Function.h>
 
 void LoopControlNode::accept(ASTVisitor& visitor) {
@@ -13,7 +14,7 @@ void LoopControlNode::accept(ASTVisitor& visitor) {
 llvm::Value* LoopControlNode::codegen() {
     auto& cg = CodeGenerator::getInstance();
     if (cg.loopTargets.empty()) {
-        std::cerr << "Error: '" << (isBreak ? "break" : "continue") << "' outside a loop" << std::endl;
+        { std::ostringstream os_; os_ << "'" << (isBreak ? "break" : "continue") << "' outside a loop"; CodeGenerator::getInstance().reportError(os_.str()); }
         return nullptr;
     }
     auto* block = cg.builder.GetInsertBlock();

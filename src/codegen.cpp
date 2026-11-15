@@ -272,6 +272,18 @@ void CodeGenerator::emitAllCleanupsExcept(llvm::Value* retainedPointer) {
     }
 }
 
+void CodeGenerator::reportError(const std::string& message) {
+    std::cerr << "Error: " << message << std::endl;
+    ++errorCount;
+}
+
+llvm::AllocaInst* CodeGenerator::createEntryAlloca(llvm::Type* type, const std::string& name) {
+    llvm::Function* fn = builder.GetInsertBlock()->getParent();
+    llvm::BasicBlock& entry = fn->getEntryBlock();
+    llvm::IRBuilder<> at(&entry, entry.getFirstInsertionPt());
+    return at.CreateAlloca(type, nullptr, name);
+}
+
 void CodeGenerator::emitCleanupsAbove(size_t depth) {
     for (size_t i = cleanupScopes.size(); i > depth; --i) {
         auto& cleanups = cleanupScopes[i - 1];

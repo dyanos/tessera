@@ -321,6 +321,7 @@ tests/positive/14_language/220_escaping_closures.csec 0 0
 tests/positive/14_language/221_owned_locals_dropped.csec 0 173
 tests/positive/14_language/222_interfaces.csec 0 0
 tests/positive/14_language/223_template_bounds.csec 0 0
+tests/positive/14_language/224_call_resolution_and_drop.csec 0 0
 tests/selfhost_concurrency/01_spawn_named.csec 0 42
 tests/selfhost_concurrency/02_async_go.csec 0 42
 tests/selfhost_concurrency/03_thread_atomic.csec 0 42
@@ -335,6 +336,7 @@ tests/selfhost_concurrency/11_import_alias.csec 0 42
 tests/selfhost_concurrency/12_dict_literal.csec 0 42
 tests/selfhost_concurrency/13_set_literal.csec 0 42
 tests/selfhost_concurrency/14_contracts.csec 0 42
+tests/selfhost_concurrency/15_logical_symbols.csec 0 42
 tests/semantic_positive/ownership_clone.csec 0 2
 tests/semantic_positive/parallel_api_emit_ir.csec 0 3
 tests/semantic_positive/pmap_openmp_capture_emit_ir.csec 0 0

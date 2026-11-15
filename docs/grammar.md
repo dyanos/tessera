@@ -331,6 +331,8 @@ and should not be relied upon. Blocks (`{ … }`) do not require a trailing `;`.
   exception is a `this`/`super` **assignment target**, which still lowers via
   dotted-identifier handling (reads through `this`/`super` use the chain).
 - `&&` / `||` are the keywords `and` / `or`.
-- The self-hosted compiler (`selfhost/`) does not implement default/named arguments,
-  enums, `match` patterns beyond literals, `?`, interfaces, `break`/`continue`, or `-g`.
+- The self-hosted compiler (`selfhost/`) lexes the same words and operators (`break`,
+  `continue`, `enum`, `&&`/`||` as `and`/`or`, the `f` suffix) but does not implement
+  default/named arguments, enums, `match` patterns beyond literals, `?`, interfaces,
+  `break`/`continue`, or `-g`.
 ```

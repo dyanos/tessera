@@ -740,7 +740,7 @@ static bool csec_lex_is_keyword(const std::string& text) {
         "unatomic", "unsafe", "val", "var", "while", "xor", "and", "or",
         "to", "until", "inner", "outer", "tensor", "box", "extends", "mut",
         "null", "ode", "molecule", "cfd", "protein", "cpu", "openmp", "gpu",
-        "simd", "async", "await", "go"
+        "simd", "async", "await", "go", "enum"
     };
     for (const char* keyword : keywords) {
         if (text == keyword) return true;
@@ -982,6 +982,11 @@ char* csec_tokenize_source(const char* sourceText) {
             std::string text = csec_lex_slice(source, cursor, end);
             char kind = (text.find('.') != std::string::npos || text.find('e') != std::string::npos ||
                          text.find('E') != std::string::npos) ? 'F' : 'N';
+            // `1.5f`: the Float suffix of a decimal literal (the token text stays the number).
+            if (kind == 'F' && end < source.size() && (source[end] == 'f' || source[end] == 'F') &&
+                !(end + 1 < source.size() && csec_lex_is_identifier_part(source[end + 1]))) {
+                ++end;
+            }
             csec_token_builder_append(builder, kind, text.c_str());
             cursor = end;
         } else if (csec_lex_is_identifier_start(ch)) {
@@ -997,7 +1002,12 @@ char* csec_tokenize_source(const char* sourceText) {
         } else {
             size_t width = csec_lex_operator_width(source, cursor);
             std::string text = csec_lex_slice(source, cursor, cursor + width);
-            csec_token_builder_append(builder, 'O', text.c_str());
+            // `&&` and `||` are the keywords `and` and `or` (as in the csec++ lexer).
+            if (text == "&&" || text == "||") {
+                csec_token_builder_append(builder, 'K', text == "&&" ? "and" : "or");
+            } else {
+                csec_token_builder_append(builder, 'O', text.c_str());
+            }
             cursor += width;
         }
     }

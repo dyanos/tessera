@@ -184,7 +184,12 @@ std::unique_ptr<ASTNode> Parser::parseEnumDeclaration() {
 			node->interfaces.push_back(previous().value);
 		} while (match(TokenType::OPERATOR, ","));
 	}
-	const auto savedTemplateTypeParams = templateTypeParams;
+	// Restored however this function is left (an error throws out of the parser).
+	struct RestoreTypeParams {
+		std::vector<std::string>& target;
+		std::vector<std::string> saved;
+		~RestoreTypeParams() { target = saved; }
+	} restoreTypeParams{templateTypeParams, templateTypeParams};
 	templateTypeParams = node->typeParameters;
 	expect(TokenType::OPERATOR, "{");
 	while (!check(TokenType::OPERATOR, "}") && !check(TokenType::KEYWORD, "def") &&
@@ -216,11 +221,14 @@ std::unique_ptr<ASTNode> Parser::parseEnumDeclaration() {
 		const bool isOverride = match(TokenType::KEYWORD, "override");
 		expect(TokenType::KEYWORD, "def");
 		auto method = parseFunctionDeclaration();
-		if (method) method->isOverride = isOverride;
+		if (!method) {
+			error("Expected a method in enum '" + node->name + "'");
+			return nullptr;
+		}
+		method->isOverride = isOverride;
 		node->methods.push_back(std::move(method));
 	}
 	expect(TokenType::OPERATOR, "}");
-	templateTypeParams = savedTemplateTypeParams;
 	return node;
 }
 
@@ -239,6 +247,10 @@ std::unique_ptr<ASTNode> Parser::parseInterfaceDeclaration() {
 		if (match(TokenType::OPERATOR, ";")) continue;
 		expect(TokenType::KEYWORD, "def");
 		auto method = parseFunctionDeclaration(true);  // the signature; the body is optional
+		if (!method) {
+			error("Expected a method signature in interface '" + node->name + "'");
+			return nullptr;
+		}
 		if (match(TokenType::OPERATOR, "{")) {
 			method->body = parseBlock();
 		}

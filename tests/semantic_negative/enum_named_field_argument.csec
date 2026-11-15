@@ -1,0 +1,4 @@
+def main(): Int {
+    val x: Option<Int> = Some(value = 1);
+    return 0;
+}

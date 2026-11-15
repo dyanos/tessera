@@ -422,6 +422,14 @@ Symbol* checkSymbol(Symbol* symbol, const std::string& name) {
     return nullptr;
 }
 
+Symbol* SymbolTable::lookupGlobal(const std::string& name) {
+    Scope* scope = this->currentScope;
+    while (scope && scope->outer) scope = scope->outer;
+    if (!scope) return nullptr;
+    auto it = scope->symbols.find(name);
+    return it == scope->symbols.end() ? nullptr : it->second.get();
+}
+
 Symbol* SymbolTable::lookup(const std::string& name) {
     auto names = split(name, '.');
 

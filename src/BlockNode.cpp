@@ -7,20 +7,25 @@
 #include "enums.h"
 #include "type_checker.h"
 #include "type_utils.h"
+#include "default_arguments.h"
 
 namespace {
 // Whether every use of `name` in `statements[from..]` leaves it the only owner of its object:
 // a method call or field access on it, a borrow, a `<-` move or free() (both clear its drop flag),
 // returning it, comparing it, or printing it. Anything else -- a capture, an array element, a value
 // stored without `<-` -- could keep a second reference, so such a local is not dropped.
-bool onlyOwningUses(const std::string& name, std::vector<std::unique_ptr<ASTNode>>& statements, size_t from) {
+bool onlyOwningUses(const std::string& name, const std::string& className,
+                    std::vector<std::unique_ptr<ASTNode>>& statements, size_t from) {
     bool safe = true;
     std::function<void(ASTNode*, ASTNode*)> visit = [&](ASTNode* node, ASTNode* parent) {
         if (!node || !safe) return;
         if (auto* id = dynamic_cast<IdentifierNode*>(node)) {
             if (id->value.rfind(name + ".", 0) == 0) return;  // `x.field`
             if (id->value != name) return;
-            if (auto* call = dynamic_cast<MethodCallNode*>(parent)) { if (call->object.get() == node) return; }
+            if (auto* call = dynamic_cast<MethodCallNode*>(parent)) {
+                // A method that returns or stores `this` shares the object.
+                if (call->object.get() == node && !methodMayKeepThis(className, call->methodName)) return;
+            }
             if (auto* access = dynamic_cast<AccessFieldNode*>(parent)) { if (access->base.get() == node) return; }
             if (auto* prefix = dynamic_cast<PrefixExpressionNode*>(parent)) {
                 if (prefix->op == "<-" || prefix->op == "&" || prefix->op == "&mut") return;
@@ -81,7 +86,10 @@ llvm::Value* BlockNode::codegen() {
                 auto declType = decl->getType();
                 if (declType && declType->getKind() == Type::Kind::CLASS && !isStructClassType(declType.get()) &&
                     !enumOfType(declType.get())) {
-                    decl->autoDrop = onlyOwningUses(decl->name, statements, i + 1);
+                    std::string className = declType->getName();
+                    std::string templateName;
+                    if (templateInstanceArguments(className, &templateName, nullptr)) className = templateName;
+                    decl->autoDrop = onlyOwningUses(decl->name, className, statements, i + 1);
                 }
             }
         }

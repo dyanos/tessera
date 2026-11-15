@@ -7,6 +7,7 @@
 #include "type_utils.h"
 
 #include <iostream>
+#include <sstream>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/Function.h>
@@ -377,7 +378,7 @@ llvm::Value* codegenInterfaceCall(MethodCallNode& call) {
     const InterfaceInfo* info = receiverType ? findInterface(receiverType->getName()) : nullptr;
     const int index = info ? info->methodIndex(call.methodName, call.arguments.size()) : -1;
     if (index < 0) {
-        std::cerr << "Error: interface has no method '" << call.methodName << "'" << std::endl;
+        { std::ostringstream os_; os_ << "interface has no method '" << call.methodName << "'"; CodeGenerator::getInstance().reportError(os_.str()); }
         return nullptr;
     }
     const InterfaceMethod& method = info->methods[static_cast<size_t>(index)];

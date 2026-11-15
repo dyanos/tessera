@@ -85,7 +85,7 @@ llvm::Value* ForStatementNode::codegenDictLoop() {
     };
 
     llvm::Function* function = cg.builder.GetInsertBlock()->getParent();
-    auto* indexSlot = cg.builder.CreateAlloca(i64Ty, nullptr, "dict.iter.index");
+    auto* indexSlot = cg.createEntryAlloca(i64Ty, "dict.iter.index");
     cg.builder.CreateStore(llvm::ConstantInt::get(i64Ty, 0), indexSlot);
 
     llvm::BasicBlock* condBB = llvm::BasicBlock::Create(cg.context, "dict.iter.cond", function);
@@ -170,7 +170,7 @@ llvm::Value* ForStatementNode::codegenArrayLoop() {
             arraySize = static_cast<int>(llvmArrayTy->getNumElements());
             sizeKnown = true;
         }
-        llvm::Value* tmpArray = cg.builder.CreateAlloca(llvmArrayTy, nullptr, "for.arr.tmp");
+        llvm::Value* tmpArray = cg.createEntryAlloca(llvmArrayTy, "for.arr.tmp");
         cg.builder.CreateStore(arrayPtr, tmpArray);
         llvm::Value* zero = cg.builder.getInt32(0);
         arrayPtr = cg.builder.CreateInBoundsGEP(llvmArrayTy, tmpArray, { zero, zero }, "for.arr.decay");
@@ -181,9 +181,9 @@ llvm::Value* ForStatementNode::codegenArrayLoop() {
     if (lenIt != cg.arrayRuntimeLength.end()) runtimeLen = lenIt->second;
 
     if (!elementType || !elementSourceType || !arrayPtr->getType()->isPointerTy() || (!sizeKnown && !runtimeLen)) {
-        std::cerr << "Error: for (" << variable << " <- ...) needs an array whose length is known here "
-                  << "(a literal, a fixed-size array, or a map/filter result); iterate an index range instead"
-                  << std::endl;
+        cg.reportError("for (" + variable + " <- ...) needs an array whose length is known here (a literal, "
+                       "a fixed-size array, or a map/filter result); iterate an index range instead" +
+                       (line > 0 ? " (line " + std::to_string(line) + ")" : std::string()));
         return nullptr;
     }
 
@@ -192,7 +192,7 @@ llvm::Value* ForStatementNode::codegenArrayLoop() {
     if (bound->getType() != i32Ty) bound = cg.builder.CreateIntCast(bound, i32Ty, true, "for.len");
 
     llvm::Function* function = cg.builder.GetInsertBlock()->getParent();
-    llvm::Value* indexSlot = cg.builder.CreateAlloca(i32Ty, nullptr, "for.index");
+    llvm::Value* indexSlot = cg.createEntryAlloca(i32Ty, "for.index");
     cg.builder.CreateStore(llvm::ConstantInt::get(i32Ty, 0), indexSlot);
 
     llvm::BasicBlock* condBB = llvm::BasicBlock::Create(cg.context, "for.each.cond", function);

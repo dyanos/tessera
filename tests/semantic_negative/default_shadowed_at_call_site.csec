@@ -1,0 +1,8 @@
+val factor = 2.0;
+def g(x: Double, k: Double = factor): Double = x * k
+
+def main(): Int {
+    val factor = 10.0;
+    if (g(1.0) == 2.0) { return 0; }   // the default would read this local
+    return 1;
+}

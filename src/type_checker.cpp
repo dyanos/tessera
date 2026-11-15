@@ -13,6 +13,7 @@
 #include "ast_walk.h"
 #include "enums.h"
 #include "interfaces.h"
+#include "default_arguments.h"
 
 namespace {
 bool isResolvedType(const std::unique_ptr<Type>& type) {
@@ -921,6 +922,7 @@ void TypeChecker::visitBinaryExpression(BinaryExpressionNode& node) {
 
 void TypeChecker::visit(ProgramNode& node) {
     enterOwnershipScope();
+    indexCallSignatures(&node);
     // Templates and class names first, so that applied template types in signatures (`Opt<Int>`) can
     // be resolved to their instance classes before function signatures are registered.
     for (auto& stmt : node.statements) {
@@ -1200,6 +1202,7 @@ void TypeChecker::visit(BlockNode& node) {
     blockResultExpected = nullptr;
     for (auto& stmt : node.statements) {
         if (stmt) {
+            if (stmt->line > 0) currentLine = stmt->line;
             if (resultExpected && &stmt == &node.statements.back()) visitExpecting(stmt.get(), resultExpected);
             else stmt->accept(*this);
             auto stmtType = stmt->getType();
@@ -1326,6 +1329,25 @@ void TypeChecker::checkTemplateBounds(const std::string& templateName, const std
     }
 }
 
+// The class a template instance (`Box$Int`) was made from, or the class itself.
+static std::string declaredClassName(const std::string& className) {
+    std::string templateName;
+    if (templateInstanceArguments(className, &templateName, nullptr)) return templateName;
+    return className;
+}
+
+bool TypeChecker::expandArguments(std::vector<std::unique_ptr<ASTNode>>& args, int kind, const std::string& owner,
+                                  const std::string& name, int line) {
+    auto& table = CodeGenerator::getInstance().symbolTable;
+    CallReport report;
+    report.error = [this](const std::string& message) { reportError(message); };
+    report.isShadowed = [&table](const std::string& id) {
+        Symbol* visible = table.lookup(id);
+        return visible && visible != table.lookupGlobal(id);
+    };
+    return expandCallArguments(args, static_cast<CallTarget>(kind), owner, name, line > 0 ? line : currentLine, report);
+}
+
 void TypeChecker::visitExpecting(ASTNode* node, const Type* expected) {
     if (!node) return;
     const Type* saved = expectedType;
@@ -1341,6 +1363,11 @@ void TypeChecker::visit(EnumDeclarationNode& node) {
 void TypeChecker::visit(EnumConstructNode& node) {
     const Type* expected = expectedType;
     expectedType = nullptr;
+    if (hasNamedArguments(node.arguments)) {
+        reportError("Type error: the fields of " + node.enumName + "." + node.variantName + " are given in order; "
+                    "named arguments are not supported here");
+        return;
+    }
     const EnumInfo* info = findEnum(node.enumName);
     const EnumVariantInfo* variant = info ? info->variant(node.variantName) : nullptr;
     if (!info || !variant) {
@@ -1816,6 +1843,35 @@ void TypeChecker::visit(MethodCallNode& node) {
         node.object->accept(*this);
     }
     {
+        auto& table = CodeGenerator::getInstance().symbolTable;
+        CallTarget kind = CallTarget::None;
+        std::string owner;
+        const std::string receiver = identifierName(node.object.get());
+        auto* objectId = dynamic_cast<IdentifierNode*>(node.object.get());
+        Symbol* named = objectId ? table.lookup(objectId->value) : nullptr;
+        if (named && named->symbolType == SymbolType::NAMESPACE) {
+            kind = CallTarget::Namespaced;
+            owner = objectId->value;
+        }
+        else if (objectId && (objectId->value == "this" || objectId->value == "super")) {
+            ClassSymbol* cls = table.getEnclosingClassSymbol();
+            if (cls && objectId->value == "super") cls = table.lookupClass(cls->superClassName);
+            if (cls) {
+                kind = CallTarget::Method;
+                owner = declaredClassName(cls->name);
+            }
+        }
+        else if (node.object) {
+            auto receiverType = stripBorrow(node.object->getType());
+            if (receiverType && receiverType->getKind() == Type::Kind::CLASS && !isInterfaceType(receiverType.get())) {
+                kind = CallTarget::Method;
+                owner = declaredClassName(receiverType->getName());
+            }
+        }
+        (void)receiver;
+        if (!expandArguments(node.arguments, static_cast<int>(kind), owner, node.methodName, node.line)) return;
+    }
+    {
         // Parameter types, when every overload of the method with this arity agrees on them.
         std::vector<std::vector<const Type*>> candidates;
         auto receiverType = node.object ? stripBorrow(node.object->getType()) : nullptr;
@@ -1939,6 +1995,26 @@ void TypeChecker::visit(ValueNode& node) {
 void TypeChecker::visit(FunctionCallNode& node) {
     std::vector<std::unique_ptr<Type>> parameterTypes;
     auto& cg = CodeGenerator::getInstance();
+    {
+        // A declared function (not a closure variable of that name), else a method of the
+        // enclosing class called without `this.`.
+        CallTarget kind = CallTarget::None;
+        std::string owner;
+        Symbol* target = cg.symbolTable.lookup(node.functionName);
+        if (target && (target->symbolType == SymbolType::FUNCTION || target->symbolType == SymbolType::TEMPLATE)) {
+            kind = CallTarget::Function;
+        }
+        else if (!target || (target->symbolType != SymbolType::VARIABLE && target->symbolType != SymbolType::FIELD)) {
+            if (ClassSymbol* cls = cg.symbolTable.getEnclosingClassSymbol()) {
+                const std::string className = declaredClassName(cls->name);
+                if (hasMethodSignatures(className, node.functionName)) {
+                    kind = CallTarget::Method;
+                    owner = className;
+                }
+            }
+        }
+        if (!expandArguments(node.arguments, static_cast<int>(kind), owner, node.functionName, node.line)) return;
+    }
     if (auto* symbol = cg.symbolTable.lookup(node.functionName)) {
         if (auto* funcType = dynamic_cast<FunctionType*>(symbol->type.get())) {
             for (const auto& parameterType : funcType->parameterTypes) {
@@ -2183,6 +2259,7 @@ void TypeChecker::visit(AccessFieldNode& node) {
 }
 
 void TypeChecker::visit(ClassInstanceCreationNode& node) {
+    if (!expandArguments(node.arguments, static_cast<int>(CallTarget::Constructor), node.className, "", node.line)) return;
     if (!node.templateArgs.empty()) {
         std::vector<const Type*> arguments;
         for (const auto& a : node.templateArgs) arguments.push_back(a.get());

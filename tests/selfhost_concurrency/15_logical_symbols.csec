@@ -1,0 +1,11 @@
+// `&&` / `||` are `and` / `or`, and `2.5f` is a Float literal, in both compilers.
+def main(): Int {
+    val a = 3;
+    val f: Float = 2.5f;
+    if ((a > 1 && a < 5) || a == 9) {
+        if (f > 2.0f && !(a == 4 || a == 5)) {
+            return 42;
+        }
+    }
+    return 1;
+}
