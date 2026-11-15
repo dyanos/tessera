@@ -17,6 +17,8 @@ pub enum DeclKind {
     Class,
     Struct,
     Object,
+    Enum,
+    Interface,
     /// `molecule` / `cfd` / `ode` / `protein` block with a name.
     Dsl,
     /// `val`/`var` in a class body, or a constructor parameter.
@@ -38,7 +40,7 @@ impl DeclKind {
     }
 
     pub fn is_type(self) -> bool {
-        matches!(self, DeclKind::Class | DeclKind::Struct | DeclKind::Object | DeclKind::TypeParameter)
+        matches!(self, DeclKind::Class | DeclKind::Struct | DeclKind::Object | DeclKind::Enum | DeclKind::Interface | DeclKind::TypeParameter)
     }
 
     pub fn is_callable(self) -> bool {
@@ -54,6 +56,8 @@ impl DeclKind {
             DeclKind::Class => "class",
             DeclKind::Struct => "struct",
             DeclKind::Object => "object",
+            DeclKind::Enum => "enum",
+            DeclKind::Interface => "interface",
             DeclKind::Dsl => "simulation block",
             DeclKind::Field => "field",
             DeclKind::Global => "global",
@@ -436,7 +440,12 @@ impl<'a> Scanner<'a> {
                     si = self.function(si);
                     continue;
                 }
-                "class" | "struct" | "object" if is_kw => {
+                "class" | "struct" | "object" | "enum" if is_kw => {
+                    si = self.type_decl(si, word);
+                    continue;
+                }
+                // `interface` is a word only before a name and `{`.
+                "interface" if self.is_ident(si + 1) && self.text(si + 2) == "{" => {
                     si = self.type_decl(si, word);
                     continue;
                 }
@@ -599,6 +608,8 @@ impl<'a> Scanner<'a> {
         let kind = match word {
             "class" => DeclKind::Class,
             "struct" => DeclKind::Struct,
+            "enum" => DeclKind::Enum,
+            "interface" => DeclKind::Interface,
             _ => DeclKind::Object,
         };
         let start = self.decl_start(kw_si);

@@ -13,7 +13,7 @@ pub const KEYWORDS: &[&str] = &[
     "object", "override", "operator", "return", "super", "this", "true", "val", "var", "while", "to",
     "until", "and", "or", "xor", "map", "pmap", "reduce", "preduce", "filter", "external", "inline",
     "constexpr", "template", "typename", "mut", "box", "unsafe", "unatomic", "struct", "async",
-    "await", "go", "build", "molecule", "cfd", "ode", "protein",
+    "await", "go", "build", "break", "continue", "enum", "molecule", "cfd", "ode", "protein",
 ];
 
 /// Operators (`Lexer::initializeOperators`), matched longest first (max 3).
@@ -21,7 +21,7 @@ pub const OPERATORS: &[&str] = &[
     "=", "==", "!=", "+", "-", "*", "/", "%", "$", "$$", "\\", "<", ">", "<=", ">=", "<<", ">>",
     "<<|", ">>|", "!", "&", "|", "^", "~", ":", ".", ",", ";", "(", ")", "{", "}", "[", "]", "[@",
     "<-", "->", "++", "--", "+=", "-=", "*=", "/=", "%=", "**", "_", "=>", "<:", "<%", ">:", "#",
-    "@", "'",
+    "@", "'", "?",
 ];
 
 pub fn is_keyword(word: &str) -> bool {
@@ -432,7 +432,7 @@ mod tests {
                 (TokKind::Ident, "이름"),
                 (TokKind::Op, "="),
                 (TokKind::Ident, "π"),
-                (TokKind::Unknown, "?"),
+                (TokKind::Op, "?"),
                 (TokKind::Unknown, "`"),
             ]
         );
