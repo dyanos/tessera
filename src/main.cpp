@@ -842,6 +842,15 @@ std::vector<std::filesystem::path> systemLibrarySearchDirectories(
         addDirectory(linkPath);
     }
     addDirectory(std::filesystem::path(outputPath).parent_path());
+    // The runtime is built next to csec++ itself, so search there too: otherwise invoking
+    // csec++ from another directory (without --link-path) cannot find it.
+    {
+        static int executableAnchor = 0;
+        std::filesystem::path executable = llvm::sys::fs::getMainExecutable("", &executableAnchor);
+        if (!executable.empty()) {
+            addDirectory(executable.parent_path());
+        }
+    }
     addDirectory(std::filesystem::current_path());
     addDirectory(std::filesystem::current_path() / "Debug");
     addDirectory(std::filesystem::current_path() / "Release");
@@ -981,7 +990,12 @@ std::string resolvedNativeLinkLibraryArg(
     }
 
 #ifdef __APPLE__
-    return "-l:" + systemLinkLibraryFileName(library);
+    // Apple ld has no `-l:<file>` form; libSystem.Native.dylib is found via -lSystem.Native.
+    {
+        std::string stem = std::filesystem::path(systemLinkLibraryFileName(library)).stem().string();
+        if (stem.rfind("lib", 0) == 0 && stem.size() > 3) stem = stem.substr(3);
+        return "-l" + stem;
+    }
 #else
     return "-l:" + systemLinkLibraryFileName(library);
 #endif
@@ -1188,8 +1202,20 @@ bool writeExecutableToFile(
         }
     }
     linkCommand += " -pthread";
-#ifndef __APPLE__
-    if (!runtimeLibrariesToCopy.empty()) {
+    bool linksSharedSystemLibrary = false;
+    for (const auto& library : linkLibraries) {
+        if (!staticRuntime && startsWithSystemLibraryPrefix(library)) {
+            linksSharedSystemLibrary = true;
+        }
+    }
+#ifdef __APPLE__
+    // libSystem.Native.dylib's install name is @rpath/..., and it is copied next to the
+    // executable, so the executable needs an LC_RPATH of @executable_path to load it.
+    if (linksSharedSystemLibrary || !runtimeLibrariesToCopy.empty()) {
+        linkCommand += " -Wl,-rpath,@executable_path";
+    }
+#else
+    if (linksSharedSystemLibrary || !runtimeLibrariesToCopy.empty()) {
         linkCommand += " -Wl,-rpath,\\$ORIGIN";
     }
 #endif
