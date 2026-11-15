@@ -145,6 +145,9 @@ public:
 	void coerceToInterface(std::unique_ptr<ASTNode>& slot, const Type* target);
 	// Template arguments must implement the interfaces their parameter is bounded by.
 	void checkTemplateBounds(const std::string& templateName, const std::vector<const Type*>& arguments);
+	// Default and named arguments of a call whose target is now known (default_arguments.cpp).
+	bool expandArguments(std::vector<std::unique_ptr<ASTNode>>& args, int kind, const std::string& owner,
+	                     const std::string& name, int line);
 
 private:
     struct OwnershipState {
@@ -159,6 +162,7 @@ private:
     int loopDepth = 0;
     const Type* currentReturnType = nullptr;  // declared return type of the function being checked
     const Type* expectedType = nullptr;       // see visitExpecting
+    int currentLine = 0;                      // line of the statement being checked
     const Type* blockResultExpected = nullptr;  // expected type of the next block's last statement  // enclosing while/for loops of the current function (break/continue targets)
     // True while checking the body of an `async def`. `await` is only valid here, and the M8
     // no-borrow-across-await rule is enforced at each await point.

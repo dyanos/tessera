@@ -1,0 +1,7 @@
+def total(xs: Array<Int>): Int {
+    var s = 0;
+    for (x <- xs) { s = s + x; }   // the length of xs is not known here
+    return s;
+}
+
+def main(): Int { return total([1, 2]); }

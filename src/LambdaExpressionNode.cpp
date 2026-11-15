@@ -108,6 +108,9 @@ struct EscapeMarker {
     int errors = 0;
 
     void mark(ASTNode* candidate, int line) {
+        if (auto* named = dynamic_cast<AssignmentExpressionNode*>(candidate)) {
+            if (named->isNamedArgument) candidate = named->right.get();  // `f(callback = [=](...) -> ...)`
+        }
         auto* lambda = dynamic_cast<LambdaExpressionNode*>(candidate);
         if (!lambda || lambda->escapes) return;
         lambda->escapes = true;

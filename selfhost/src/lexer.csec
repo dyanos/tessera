@@ -82,7 +82,8 @@ def isKeyword(text: String): Boolean {
         strEq(text, "xor") or strEq(text, "ode") or strEq(text, "molecule") or strEq(text, "cfd") or
         strEq(text, "protein") or strEq(text, "cpu") or strEq(text, "openmp") or
         strEq(text, "gpu") or strEq(text, "simd") or strEq(text, "build") or
-        strEq(text, "async") or strEq(text, "await") or strEq(text, "go");
+        strEq(text, "async") or strEq(text, "await") or strEq(text, "go") or
+        strEq(text, "break") or strEq(text, "continue") or strEq(text, "enum");
 }
 
 def appendToken(tokens: String, kind: Char, text: String): String {
@@ -241,6 +242,12 @@ def tokenizeSlow(source: String): String {
             text = slice(source, cursor, end);
             if (text.contains(".") or text.contains("e") or text.contains("E")) {
                 appendTokenTo(builder, kindFloat(), text);
+                // `1.5f`: the Float suffix; the token text stays the number.
+                if (end < source.length and (source.charAt(end) == 'f' or source.charAt(end) == 'F')) {
+                    if (end + 1 >= source.length or !isIdentifierPart(source.charAt(end + 1))) {
+                        end = end + 1;
+                    }
+                }
             }
             else {
                 appendTokenTo(builder, kindInteger(), text);
@@ -270,7 +277,17 @@ def tokenizeSlow(source: String): String {
         }
         else {
             width = operatorLength(source, cursor);
-            appendTokenTo(builder, kindOperator(), slice(source, cursor, cursor + width));
+            text = slice(source, cursor, cursor + width);
+            // `&&` and `||` are the keywords `and` and `or`.
+            if (strEq(text, "&&")) {
+                appendTokenTo(builder, kindKeyword(), "and");
+            }
+            else if (strEq(text, "||")) {
+                appendTokenTo(builder, kindKeyword(), "or");
+            }
+            else {
+                appendTokenTo(builder, kindOperator(), text);
+            }
             cursor = cursor + width;
         }
     }

@@ -691,13 +691,15 @@ native-only (§5).
 
 A parameter may declare a default, `def f(x: Int, k: Int = 2)`; every parameter after one with a
 default needs one too, and a default may not refer to other parameters. A call may name
-arguments, `f(1, k = 3)`; named arguments follow the positional ones, in any order. Before type
-checking, each call that omits an argument or names one is rewritten into a positional call: named
-arguments move to their parameter's position and each omitted one becomes a copy of its default,
-evaluated at the call site (in parameter order). Calls are matched by name against top-level
-functions, `object` functions, constructors (`new C(...)`) and methods (on `this`/`super`, or on
-any class declaring a method of that name); when several declarations accept the call they must
-agree on parameter names and defaults. A named argument to anything else is an error.
+arguments, `f(1, k = 3)`; named arguments follow the positional ones, in any order. The type
+checker rewrites each call that omits an argument or names one into a positional call once it
+knows the call's target: a declared function (a local closure of the same name is not one), a
+function of an `object`, the constructor of `new C(...)`, or a method of the receiver's class —
+the most derived class that declares it, including enum methods. Named arguments move to their
+parameter's position and each omitted one becomes a copy of its default, evaluated at the call
+site (in parameter order); a default that names a variable the call site shadows with a local is
+an error. When several overloads accept the call they must agree on parameter names and defaults.
+A named argument to anything else is an error.
 
 ### 14.2 Loops
 
@@ -705,7 +707,8 @@ agree on parameter names and defaults. A named argument to anything else is an e
 increment of a range loop still runs). Both drop the owned locals of the scopes they leave. Either
 outside a loop is an error. `for (x <- e)` iterates an array whose length is known at that point
 (a literal, also once bound to a name, a fixed-size array, or a `map`/`filter` result), a range,
-a `Dict` or a `Set`; iterating any other value is a type error. For the ownership checker a
+a `Dict` or a `Set`; iterating any other value is a type error, and an array whose length is not
+known there (an `Array<T>` parameter) is a compile-time error. For the ownership checker a
 `break` carries the body's moves past the loop.
 
 ### 14.3 Logical operators
@@ -732,8 +735,9 @@ in every construct of the body.
 
 Under strict ownership, a local initialized with `new C(...)` of a reference class (not a struct
 or enum) is freed when its scope ends — at the block end and on every `return`, `break` and
-`continue` leaving it — if each later use in its scope leaves it the only owner: a method call or
-field read on it, a borrow `&`/`&mut`, a move `<-`, `free`, `return`, `==`/`!=`, or printing. A
+`continue` leaving it — if each later use in its scope leaves it the only owner: a call of a
+method that does not return, store or capture `this` (directly or through the methods it calls on
+`this`), a field read, a borrow `&`/`&mut`, a move `<-`, `free`, `return`, `==`/`!=`, or printing. A
 move or `free` clears the local's drop flag, so a value moved on some paths is freed exactly once.
 Any other use (a lambda capture, an array element, ...) leaves the local to explicit `free`. The
 objects its fields own are not freed with it.

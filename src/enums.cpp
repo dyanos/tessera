@@ -410,6 +410,12 @@ private:
             visitSlot(access->base);  // the field name is not an expression
             return;
         }
+        if (auto* assign = dynamic_cast<AssignmentExpressionNode*>(node)) {
+            if (assign->isNamedArgument) {  // `name = value`: the name is a parameter, not an expression
+                visitSlot(assign->right);
+                return;
+            }
+        }
         visitChildren(node);
     }
 };

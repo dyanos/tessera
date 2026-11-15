@@ -1,0 +1,5 @@
+interface Shape {
+    def (x: Int): Int;
+}
+
+def main(): Int { return 0; }

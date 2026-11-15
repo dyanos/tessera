@@ -1,0 +1,57 @@
+// Default arguments come from the declaration the call resolves to; a local that a method hands
+// out (`return this`) is not freed when its scope ends.
+class Gen(seed: Int) {
+    def normal(mean: Double = 0.0, sd: Double = 1.0): Double = mean + sd
+}
+
+class Other(v: Int) {
+    def normal(): Double = 7.0
+}
+
+class A(v: Int) { def scale(f: Double = 1.0): Double = f }
+class B(v: Int) { def scale(f: Double = 2.0): Double = f }
+
+class Base(v: Int) { def step(n: Int = 1): Int = v + n }
+class Derived(w: Int) extends Base { def step(n: Int = 10): Int = w + n }
+
+def f(x: Int, y: Int = 10): Int = x + y
+def apply(f: (Int) => Int): Int = f(3)          // the parameter, not the top-level f
+
+enum Shape {
+    Circle(r: Double),
+    Square(s: Double)
+
+    def area(scale: Double = 1.0): Double = this match {
+        case Circle(r) => r * r * scale;
+        case Square(s) => s * s * scale;
+    }
+}
+
+class Node(n: Int) {
+    def self(): Node { return this; }
+    def get(): Int = n
+}
+
+def keep(): Node {
+    val x = new Node(41);
+    return x.self();                              // x must outlive keep()
+}
+
+def churn(): Int {
+    val a = new Node(1);
+    val b = new Node(2);
+    return a.get() + b.get();
+}
+
+def main(): Int {
+    if (new Other(1).normal() != 7.0 || new Gen(1).normal() != 1.0) { return 1; }
+    if (new A(1).scale() != 1.0 || new B(1).scale() != 2.0) { return 2; }
+    if (new Derived(5).step() != 15 || new Base(5).step() != 6) { return 3; }
+    if (apply([=](x: Int) -> { return x * 2; }) + f(1) != 17) { return 4; }
+    val s = Shape.Square(2.0);
+    if (s.area() != 4.0 || s.area(scale = 2.0) != 8.0) { return 5; }
+    val k = keep();
+    val noise = churn();
+    if (k.get() != 41 || noise != 3) { return 6; }
+    return 0;
+}

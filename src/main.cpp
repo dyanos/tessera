@@ -1617,7 +1617,7 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "Parsing completed successfully." << std::endl;
-    if (!expandDefaultAndNamedArguments(ast.get()) || !lowerEnums(ast.get()) || !lowerInterfaces(ast.get()) ||
+    if (!checkDefaultParameters(ast.get()) || !lowerEnums(ast.get()) || !lowerInterfaces(ast.get()) ||
         !markEscapingLambdas(ast.get())) {
         return 1;
     }
@@ -1658,6 +1658,11 @@ int main(int argc, char** argv) {
     }
     CodeGenerator::getInstance().generatingCode = true;
     ast->codegen();
+    if (CodeGenerator::getInstance().errorCount > 0) {
+        std::cerr << "Code generation found " << CodeGenerator::getInstance().errorCount
+                  << " error(s)." << std::endl;
+        return 1;
+    }
 
     // Keep IR dumping opt-in; unconditional dumps make large template suites unreasonably slow.
     // CodeGenerator::getInstance().dumpIR();

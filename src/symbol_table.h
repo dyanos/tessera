@@ -35,6 +35,8 @@ public:
     void exitScope();
     bool addSymbol(const std::string& name, std::unique_ptr<Symbol> symbol);
     Symbol* lookup(const std::string& name);
+    // The symbol `name` in the outermost (program) scope only.
+    Symbol* lookupGlobal(const std::string& name);
     ClassSymbol* lookupClass(const std::string& name);
     StructSymbol* lookupStruct(const std::string& name);
     NamespaceSymbol* lookupNamespace(const std::string& name);

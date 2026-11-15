@@ -14,6 +14,7 @@
 
 #include <functional>
 #include <iostream>
+#include <sstream>
 
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -105,7 +106,7 @@ bool emitPatternTest(CodeGenerator& cg, PatternNode& pattern, const ValueRef& re
             BinaryExpressionNode equal(ref(), "==", pattern.literal->clone());
             llvm::Value* condition = toCondition(cg, equal.codegen());
             if (!condition) {
-                std::cerr << "Error: cannot compare the matched value with a pattern" << std::endl;
+                { std::ostringstream os_; os_ << "cannot compare the matched value with a pattern"; CodeGenerator::getInstance().reportError(os_.str()); }
                 return false;
             }
             branchOn(condition);
@@ -154,7 +155,7 @@ llvm::Value* MatchExpressionNode::codegenResolved() {
     static int counter = 0;
     auto valueType = expression ? stripBorrow(expression->getType()) : nullptr;
     if (!valueType || valueType->getKind() == Type::Kind::UNKNOWN) {
-        std::cerr << "Error: cannot determine the type of the matched value" << std::endl;
+        { std::ostringstream os_; os_ << "cannot determine the type of the matched value"; CodeGenerator::getInstance().reportError(os_.str()); }
         return nullptr;
     }
     const std::string name = "__match_" + std::to_string(counter++);
@@ -197,7 +198,7 @@ llvm::Value* MatchExpressionNode::codegenResolved() {
         if (guards[i]) {
             llvm::Value* condition = toCondition(cg, guards[i]->codegen());
             if (!condition) {
-                std::cerr << "Error: a match guard must be a Boolean" << std::endl;
+                { std::ostringstream os_; os_ << "a match guard must be a Boolean"; CodeGenerator::getInstance().reportError(os_.str()); }
                 cg.symbolTable.exitScope();
                 return nullptr;
             }
@@ -210,7 +211,7 @@ llvm::Value* MatchExpressionNode::codegenResolved() {
             if (resultLLVMType) {
                 result = coerceValueToLLVMType(result, resultLLVMType);
                 if (!result || result->getType() != resultLLVMType) {
-                    std::cerr << "Error: match case result has an unexpected type" << std::endl;
+                    { std::ostringstream os_; os_ << "match case result has an unexpected type"; CodeGenerator::getInstance().reportError(os_.str()); }
                     cg.symbolTable.exitScope();
                     return nullptr;
                 }
