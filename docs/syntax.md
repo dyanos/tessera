@@ -19,7 +19,9 @@ def main(): Int {
 A bare `csec++ app.csec` compiles straight to a native executable (`--emit-exe`
 is the default output mode); `--static` links the runtime into the binary so it
 needs no `System.Native` shared library beside it. `--emit-ir`, `--emit-obj`,
-and `--run`/`--run-ir` select the other output modes.
+and `--run`/`--run-ir` select the other output modes. `-g` adds debug information
+(function names and the source line of every statement; CodeView and a `.pdb` on
+Windows, DWARF elsewhere), so debuggers can set breakpoints and step by line.
 
 ## Declarations
 
@@ -39,7 +41,7 @@ variable (or constant) then takes the initializer's type.
 ```ts
 val n = 3;                    // Int
 val big = 3000000000;         // Long (does not fit an Int)
-val ratio = 0.5;              // Float (a plain decimal literal is a Float)
+val ratio = 0.5;              // Double (a plain decimal literal is a Double; 0.5f is a Float)
 val name = "run";             // String
 val done = n > 2;             // Bool, also for mixed Int/Long comparisons
 val total = sumAll(xs);       // the function's declared return type
@@ -58,6 +60,24 @@ def add(left: Int, right: Int): Int {
     return left + right;
 }
 ```
+
+Parameters may have default values, and a call may name its arguments. A default is
+evaluated at each call that leaves the argument out; named arguments follow the
+positional ones, in any order. This works for functions, methods, constructors and
+`object` functions:
+
+```ts
+def scale(x: Int, factor: Int = 2, offset: Int = 0): Int = x * factor + offset
+
+scale(5);                         // 10
+scale(5, offset = 1);             // 11
+scale(x = 2, offset = 4, factor = 10);
+class Box(width: Int, height: Int = 1) { def area(pad: Int = 0): Int = (width + pad) * (height + pad) }
+new Box(width = 2, height = 5).area();
+```
+
+A default may not refer to the other parameters, and a parameter after one with a
+default needs one too.
 
 External native functions can be declared with `external def`:
 
@@ -172,7 +192,12 @@ val b: Bool = a >= 10 and a != 0;
 val c: Int = (a << 1) | 1;
 ```
 
-Supported boolean operators include `and`, `or`, and `xor`.
+Supported boolean operators include `and`, `or`, and `xor`; `&&` and `||` are the
+same as `and` and `or`.
+
+A decimal literal (`0.5`, `1e-3`) is a `Double`. Where a `Float` is expected — a
+`Float` variable, parameter or return value, or the other operand of a `Float` — a
+literal expression is evaluated as a `Float`; `0.5f` is a `Float` anywhere.
 
 String literals are inferred as `String`. If either side of `+` is `String`,
 the other primitive value is converted with the runtime `toString` path:
@@ -357,9 +382,16 @@ free(c);                 // release c's memory early
 ```
 
 `clone(x)` produces a fresh owned copy; `free(x)` consumes and releases a named heap value.
-Automatic scope-exit destruction currently covers `box`, `Tensor`, `Shared`, and `Weak`; heap
-classes and arrays/vectors must be released explicitly with `free(x)` until ownership-aware drop
-glue is implemented.
+Automatic scope-exit destruction covers `box`, `Tensor`, `Shared`, and `Weak`, and a class
+instance made by `new` and held by a local that stays its only owner: it is freed when the
+local's scope ends (also on `return` and `break`), unless it was moved away with `<-` or freed —
+a drop flag makes a value moved on some paths only freed exactly once. A local that is captured by
+a lambda, put in an array, or stored without `<-` is not freed automatically. The fields of a freed
+object are not freed with it, and arrays/vectors are still released with `free(x)`.
+
+A lambda that outlives the function creating it — returned, directly or through a local, or
+stored in an object, array or field — keeps its captured values on the heap. Such a lambda must
+capture by value (`[=]`); a `[&]` lambda that escapes is a compile-time error.
 
 **Shared / Weak** provide reference counting for shared ownership:
 
@@ -497,6 +529,8 @@ The shipped modules live in `lib/std`:
 | `std.thread` | `threadStart(lambda)`, `threadJoin`, `mutexNew/Lock/TryLock/Unlock`, `atomicNew/Add/Get/CompareExchange`, `channelNew/Send/Receive/ReceiveTimeout/Closed/Close/Free` |
 | `std.dataframe` | Polars-style: `readParquet`, `scanParquet`, `col`, `lit`, `when`, `len`; `DataFrame.filter/select/withColumns/groupBy().agg/sort/join/unique/describe`; `LazyFrame.collect/explain` (LANGUAGE_SPEC.md §8) |
 | `std.process` | `runCommand`, `commandOutput`, `startProcess`, `waitProcess`, `killProcess`, `currentProcessId` |
+| `std.random` | `random`, `randomInt`, `randomNormal`, `setRandomSeed`; `newRng(seed)` with `uniform`, `int`, `normal`, `chance` (xoshiro256**) |
+| `std.autodiff` | forward-mode automatic differentiation: `Dual` numbers, `dsin`/`dexp`/`dlog`/`dsqrt`/`dpow`/`dtanh`/`dsigmoid`, `derivative`, `gradient2`/`gradient3`, `newton` |
 | `std.math.natural` | `natDiv`, `natMod`, `natPow`, `natGcd`, `natLcm`, `natSqrt`, `isPrime`, `factorial`, `binomial`, `fibonacci` |
 | `std.math.real` | `pi()`, `euler()`, `approxEqual`, `hypot`, `cbrt`, `nthRoot`, `logBase`, ... |
 | `std.math.complex` | `imaginaryUnit()`, `complex`, `conj`, `cabs`, `carg`, `cexp`, `clog`, `csqrt`, `cpowInt`, `cpow`, `csin`, `ccos` |
@@ -674,6 +708,83 @@ val b = new Residue<7>(3) + new Residue<11>(3);  // error: no 'operator+' of Res
 
 `std.math.algebra` provides `Mod<N>` and `GF<P>` built this way (LANGUAGE_SPEC.md §11).
 
+A template struct or class can be used in signatures like any type:
+`def find(n: Int): Holder<Int>`. A type parameter can be bounded by interfaces; the
+template arguments are checked against the bounds:
+
+```ts
+template<typename T: Show + Sized>
+def label(item: T): String = item.show() + ":" + item.size()
+```
+
+## Enums And Pattern Matching
+
+An `enum` is a type with a fixed set of variants, each optionally carrying data. Values
+are built with `Enum.Variant(...)`, or with the bare variant name where it is
+unambiguous, and taken apart with `match`:
+
+```ts
+enum Shape {
+    Circle(radius: Double),
+    Rect(w: Double, h: Double),
+    Empty
+}
+
+def area(s: Shape): Double = s match {
+    case Circle(r) => 3.14159 * r * r;
+    case Rect(w, h) if w == h => w * w;      // a guard
+    case Rect(w, h) => w * h;
+    case Empty => 0.0;
+}
+
+val shapes = [Shape.Circle(1.0), Rect(2.0, 3.0), Empty];
+```
+
+Patterns are `_`, literals (`0`, `-1`, `"let"`, `r"regex"`), a name (binds the value),
+and variants with sub-patterns (`Some(Some(x))`, `Word("let")`); `case A | B =>`
+joins patterns that bind nothing. A match on an enum must handle every variant, also
+inside nested patterns: `Both(Some(_), None) is not handled` names a missing case.
+Enums may be generic (`enum Tree<T> { Leaf, Node(left: Tree<T>, value: T, right: Tree<T>) }`)
+and recursive, may declare methods after the variants (`def size(): Int = this match {...}`),
+and get a `toString()` (`Rect(2.000000, 3.000000)`) used by `println` and string `+`.
+Enum values are immutable and copied freely; enums without data compare with `==`.
+
+The built-in `Option<T>` (`Some(value)`, `None`) and `Result<T, E>` (`Ok(value)`,
+`Err(error)`) have `isSome`/`isNone`, `isOk`/`isErr`, `unwrap`, `unwrapOr` and
+`unwrapErr`. Type arguments come from the context (`val x: Option<Int> = None`, a
+parameter or return type, the payload) or are written: `Option<Int>.None`. A postfix `?`
+unwraps a `Some`/`Ok` or returns the `None`/`Err` from the enclosing function:
+
+```ts
+def sum(a: String, b: String): Result<Int, String> {
+    val x = parse(a)?;      // returns Err(...) from sum when parse fails
+    val y = parse(b)?;
+    return Ok(x + y);
+}
+```
+
+## Interfaces
+
+An interface lists methods; a class, struct or enum `implements` it. Missing methods and
+different return types are compile-time errors; a method with a body is a default that
+implementing types may leave out.
+
+```ts
+interface Shape {
+    def area(): Double;
+    def describe(): String = "area " + area()
+}
+class Circle(r: Double) implements Shape { def area(): Double = 3.14159 * r * r }
+struct Square(s: Double) implements Shape { def area(): Double = s * s }
+
+def total(shapes: &Array<Shape>, n: Int): Double { ... }   // dynamic dispatch
+val shapes: Array<Shape> = [new Circle(1.0), new Square(2.0)];
+```
+
+A value of an implementing type is converted where the interface is expected (a declared
+variable, parameter, return value, array element). Calls through an interface value
+dispatch to the implementing type's method.
+
 Generic library-shaped types such as `Vector[Int]` and `Matrix[Double]` can be
 used in signatures as opaque reference types until a concrete runtime
 implementation is provided.
@@ -692,13 +803,22 @@ return 0;
 Loops:
 
 ```ts
-for (x <- xs) {
+for (x <- xs) {          // an array, a range (see below), a Dict or a Set
     print(x);
 }
 
 var i: Int = 0;
 while (i < 5) {
     i = i + 1;
+}
+```
+
+`break` leaves the innermost loop and `continue` starts its next iteration:
+
+```ts
+for (k <- 0 until 100) {
+    if (k % 2 == 0) { continue; }
+    if (k * k > 50) { break; }
 }
 ```
 
@@ -840,6 +960,19 @@ def layer(x: Tensor<Double, 1, 3>, w: Tensor<Double, 3, 4>,
 
 A complete two-layer network is in
 [examples/feedforward_nn.csec](../examples/feedforward_nn.csec).
+
+Reductions and helpers (`axis` is a constant; a negative one counts from the last):
+
+```ts
+val cols = sum(m, 0);          // Tensor<Double, 3> for a Tensor<Double, 2, 3>; also mean, max, min, prod
+val top = max(m);              // all elements (also min, prod; sum and mean as before)
+val at = argmax(m);            // flat row-major index (also argmin)
+val z = zerosLike(m);          // also onesLike(m), fullLike(m, 2.5)
+fillUniform(noise, 0.0, 1.0);  // in place; fillNormal(t, mean, sd); an optional 4th argument is an Rng handle
+```
+
+Elements are stored as doubles; elements of `Tensor<Int, …>`, `Tensor<Long, …>` and
+`Tensor<Float, …>` read as values of that type and are converted when stored.
 
 ## Math And Set Helpers
 

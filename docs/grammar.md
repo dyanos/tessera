@@ -39,7 +39,7 @@ to until and or xor
 map pmap reduce preduce filter
 external inline constexpr template typename mut box unsafe unatomic
         async await go
-        build
+        build break continue enum
 molecule cfd ode protein
 ```
 
@@ -52,12 +52,13 @@ ordinary identifiers everywhere else.
 ### 1.2 Literals
 
 ```
-literal      = int-lit | float-lit | exp-lit | char-lit | string-lit
+literal      = int-lit | decimal-lit | exp-lit | float-lit | char-lit | string-lit
              | regex-lit | bool-lit | 'null' ;
 int-lit      = dec-int | '0x' hex { hex } | '0b' bin { bin } | '0o' oct { oct } ;
 dec-int      = digit { digit } ;                            (* arbitrary length; Nat targets read it exactly *)
-float-lit    = digit { digit } '.' digit { digit } ;
-exp-lit      = ( float-lit | dec-int ) ('e'|'E') ['+'|'-'] digit { digit } ;
+decimal-lit  = digit { digit } '.' digit { digit } ;          (* a Double *)
+exp-lit      = ( decimal-lit | dec-int ) ('e'|'E') ['+'|'-'] digit { digit } ;   (* a Double *)
+float-lit    = ( decimal-lit | exp-lit ) ( 'f' | 'F' ) ;      (* a Float: 1.5f *)
 char-lit     = "'" ( char | '\' escape ) "'" ;
 string-lit   = ['u'] '"' { char | '\' escape } '"' ;        (* u"…" = explicit unicode; plain is unicode too *)
 regex-lit    = 'r' '"' { char } '"' ;                        (* used by `match` patterns *)
@@ -82,11 +83,16 @@ punct        = ':' '.' ',' ';' '(' ')' '{' '}' '[' ']' '_' ;
 arrows       = '->' | '=>' ;                                 (* '->' lambda body / '=>' match-arm & fn-type *)
 attribute    = '[@' ;
 latex        = '$' | '$$' | '\' ;
-misc         = '!' '#' '@' "'" '<:' '<%' '>:' ;
+misc         = '!' '#' '@' "'" '<:' '<%' '>:' '?' ;          (* '?' = postfix try, see 5 *)
+logical      = '&&' | '||' ;                                 (* spellings of the keywords and / or *)
 ```
 
-Note: boolean logic uses the **keywords** `and` / `or` / `xor`. `&&` / `||` are
-not parsed as logical operators; `&` / `|` are bitwise.
+Note: boolean logic uses the keywords `and` / `or` / `xor`; `&&` and `||` are
+the same as `and` and `or`. `&` / `|` are bitwise.
+
+A decimal literal is a `Double`. Where a `Float` is expected (a `Float` variable,
+parameter, return value or the other operand of a `Float`), a literal expression
+is evaluated as a `Float`; `1.5f` is a `Float` anywhere.
 
 ---
 
@@ -95,7 +101,7 @@ not parsed as logical operators; `&` / `|` are bitwise.
 ```
 program      = { top-decl } ;
 top-decl     = import | attribute* ( function | class | struct | object
-             | external-fn | template-decl ) ;
+             | external-fn | template-decl | enum-decl | interface-decl ) ;
 
 import       = 'import' ( string-lit | dotted-name ) [ '=' ident ] [ ';' ] ;
                (* import std.io ;  import std.dataframe = df ;  see LANGUAGE_SPEC.md 1.1 *)
@@ -110,21 +116,31 @@ fn-name      = member-name | 'operator' operator ;        (* a keyword may name 
 member-name  = identifier | keyword ;                      (* after '.' or 'def' only *)
 fn-body      = block | '=' expr ;                            (* block form or expression body *)
 params       = param { ',' param } ;
-param        = identifier ':' type ;
+param        = identifier ':' type [ '=' expr ] ;           (* a default: evaluated at each call that omits it;
+                                                               parameters after one with a default need one too *)
 
 external-fn  = attribute* 'external' 'def' identifier '(' [ params ] ')' [ ':' type ] ';' ;
 
-class        = 'class' identifier [ '(' [ params ] ')' ] [ 'extends' type ] class-body ;
-struct       = 'struct' identifier '(' [ params ] ')' [ class-body ] ;   (* value type *)
+class        = 'class' identifier [ '(' [ params ] ')' ] [ 'extends' type ] [ implements ] class-body ;
+struct       = 'struct' identifier '(' [ params ] ')' [ implements ] [ class-body ] ;   (* value type *)
+implements   = 'implements' identifier { ',' identifier } ;   (* contextual word *)
 object       = 'object' identifier class-body ;
 class-body   = '{' { member } '}' ;
 member       = field | method ;
 field        = ( 'val' | 'var' ) identifier ':' type [ '=' expr ] [ ';' ] ;
 method       = [ 'override' ] function ;
 
-template-decl= 'template' '<' tparam { ',' tparam } '>' ( function | class ) ;
-tparam       = ( 'typename' | 'class' ) identifier         (* type parameter *)
+template-decl= 'template' '<' tparam { ',' tparam } '>' ( function | class | struct ) ;
+tparam       = ( 'typename' | 'class' ) identifier [ ':' identifier { '+' identifier } ]
+                                                            (* type parameter, optionally bounded by interfaces *)
              | type identifier ;                            (* non-type (e.g. Int N) *)
+
+enum-decl    = 'enum' identifier [ '<' identifier { ',' identifier } '>' ] [ implements ]
+               '{' variant { ( ',' | ';' ) variant } { method } '}' ;
+variant      = identifier [ '(' [ params ] ')' ] ;          (* Circle(radius: Double), Empty *)
+
+interface-decl = 'interface' identifier '{' { 'def' fn-name '(' [ params ] ')' [ ':' type ] [ fn-body ] [ ';' ] } '}' ;
+                                                            (* `interface` is contextual; a body is a default *)
 ```
 
 ---
@@ -155,7 +171,8 @@ Copy; reference `class`, arrays, `box T`, `Shared`/`Weak` are owned (move-checke
 
 ```
 statement    = decl-stmt | assign-stmt | if-stmt | while-stmt | for-stmt
-             | return-stmt | match-stmt | comprehension | dsl-block | expr-stmt ;
+             | return-stmt | loop-control | match-stmt | comprehension | dsl-block | expr-stmt ;
+loop-control = ( 'break' | 'continue' ) terminator ;        (* inside while/for only *)
 terminator   = [ ';' ] ;                                    (* see §7 *)
 
 decl-stmt    = ( 'val' | 'var' ) l-names [ ':' type ] [ '=' expr ] terminator ;
@@ -174,7 +191,7 @@ for-stmt     = 'for' '(' identifier '<-' iterable ')' { loop-spec } block ;
 loop-spec    = 'invariant' expr | 'decreases' expr ;        (* checked by csec++ --verify only *)
              | 'for' '(' identifier ',' identifier '<-' token-range ')' block ;
              | 'for' '(' identifier ',' identifier '<-' expr ')' block ;   (* key, value of a Dict *)
-iterable     = expr | range ;
+iterable     = expr | range ;                              (* an array, a range, a Dict or a Set *)
 token-range  = identifier '.between(' expr ',' expr ')' [ '.withoutTrivia()' ] ;
 range        = expr ( 'to' | 'until' ) expr [ 'step' expr ] ;   (* 'to' inclusive, 'until' exclusive *)
 return-stmt  = 'return' [ expr { ',' expr } ] terminator ;   (* multiple values → tuple *)
@@ -218,15 +235,18 @@ pow-expr     = unary-expr { '**' unary-expr } ;             (* right-assoc *)
 unary-expr   = ( '-' | '!' | '~' | '<-' | '&' [ 'mut' ] | 'await' ) unary-expr
              | ( 'async' | 'go' ) postfix-expr                  (* operand must be a call f(...) *)
              | postfix-expr ;
-postfix-expr = primary { '.' member-name | call-args | '[' index-list ']' | '++' | '--' } ;
+postfix-expr = primary { '.' member-name | call-args | '[' index-list ']' | '++' | '--' | '?' } ;
+                                                            (* `e?`: the Some/Ok payload, or return the None/Err *)
                                                             (* postfix binds tighter than prefix: !s.f() = !(s.f()) *)
-call-args    = '(' [ expr { ',' expr } ] ')' ;
+call-args    = '(' [ call-arg { ',' call-arg } ] ')' ;
+call-arg     = [ identifier '=' ] expr ;                     (* `name = value`: a named argument; positional ones come first *)
 index-list   = index { ',' index } ;
 index        = expr | [ expr ] ':' [ expr ] [ ':' expr ] ;  (* Fortran section t[i:j:k], t[:] *)
 
 primary      = literal | identifier | '(' expr ')'
              | 'build' '{' { expr [ ';' ] } '}'
              | 'new' applied-type call-args
+             | identifier generic-args '.' identifier [ call-args ]   (* Option<Int>.None: a variant of a generic enum *)
              | lambda | if-expr | match-expr | array-lit | dict-lit | set-lit | latex-math
              | 'this' | 'super' | dsl-entry ;
 lambda       = '[' [ capture-list ] ']' '(' [ params ] ')' '->' block ;
@@ -268,9 +288,15 @@ concatenation and is batched with adjacent builder fragments.
 
 ```
 match-expr   = expr 'match' '{' { match-arm } '}' ;
-match-arm    = 'case' pattern '=>' ( expr | block ) ';' ;
-pattern      = literal | regex-lit | string-lit | '_' | identifier ;
+match-arm    = 'case' pattern { '|' pattern } [ 'if' expr ] '=>' ( expr | block ) ';' ;
+pattern      = '_' | [ '-' ] literal | regex-lit | identifier
+             | [ identifier '.' ] identifier [ '(' pattern { ',' pattern } ')' ] ;   (* enum variants *)
 ```
+
+On an enum value an identifier is a variant name or binds the value; a match on an
+enum must handle every variant (also inside nested patterns) unless it has a
+`case _`. Patterns joined with `|` bind no variables. A value no case matches stops
+the program.
 
 ---
 
@@ -304,6 +330,7 @@ and should not be relied upon. Blocks (`{ … }`) do not require a trailing `;`.
   (`a.b.c = …`, `a.b.c += …`, and reads of the same nest left-to-right). The one
   exception is a `this`/`super` **assignment target**, which still lowers via
   dotted-identifier handling (reads through `this`/`super` use the chain).
-- `&&` / `||` tokenize as paired single-character operators and are not parsed as
-  logical operators — use `and` / `or`.
+- `&&` / `||` are the keywords `and` / `or`.
+- The self-hosted compiler (`selfhost/`) does not implement default/named arguments,
+  enums, `match` patterns beyond literals, `?`, interfaces, `break`/`continue`, or `-g`.
 ```

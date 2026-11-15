@@ -461,11 +461,12 @@ none).
 
 ## Still Incomplete
 
-- Operator overloading on user `struct`s whose operators take a struct parameter asserts in LLVM
-  ("Calling a function with a bad signature"); the built-in `Complex` type is used for complex
-  numbers instead.
-- A plain decimal literal (`3.14`) is a 32-bit `Float`; precision-sensitive code writes `3.14e0`
-  (`Double`).
+- The self-hosted compiler does not implement the additions of LANGUAGE_SPEC.md §14-§18
+  (default/named arguments, `break`/`continue`, enums and patterns, `?`, interfaces, template bounds,
+  tensor reductions, `-g`); they are direct-compiler (`csec++`) features.
+- Automatic drop (§14.6) frees an unshared `new` local but not the objects its fields own, nor
+  arrays; tensor storage is double for every element type (§17.1). `-g` describes functions and
+  lines, not local variables.
 - Self-host: an expression-bodied function that concatenates a String parameter
   (`= f(text + "\n")`) treats the parameter as an Int. Block bodies work.
 - `selfhost/llvm_subset.csec` (bootstrap smoke test) and `10_integration/203` crash or hang with
@@ -486,12 +487,10 @@ none).
   and a `Vector[Int]` return of `new Int[n]` reads back correctly (`v[0] + v[1]`). The earlier
   "declared to return 'Vector' but returns 'Array'" rejection and wrong-value behavior no longer
   reproduce — the array-literal/`new T[n]` direct-binding work fixed it.
-- Generic/template execution, enum/union/nullable/ownership behavior, rich string/char
-  interactions, iterable collection loops, broad function ABI coverage, and mixed numeric
-  conversion semantics remain incomplete. Literal `Int` `match` expressions with a `_` fallback
-  do execute: `034_match_expressions.csec`, `038_match_many_cases.csec`, and
-  `045_match_as_expression.csec` agree between the direct and self-host paths. Richer patterns
-  than literal cases are untested.
+- Rich string/char interactions, broad function ABI coverage, and mixed numeric conversion
+  semantics remain incomplete in the self-host path. Enums, variant patterns, guards and
+  exhaustiveness (LANGUAGE_SPEC.md §15) and for-each over arrays run in the direct compiler
+  (`tests/positive/14_language`).
 
 ## Validation Commands
 

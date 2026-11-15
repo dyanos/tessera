@@ -85,6 +85,8 @@ name that no imported module declared is an ordinary unresolved call (an error).
 | `std.math.complex` | complex numbers: `imaginaryUnit()`, `conj`, `cabs`, `carg`, `cexp`, `clog`, `csqrt`, `cpow`, ... |
 | `std.math.algebra` | rings and fields with operator overloading: Z/nZ, GF(p), GF(p)[x], GF(p^k) (§11) |
 | `std.logic` | formulas, validity / counterexamples with Z3, and an LCF-style proof kernel (§13) |
+| `std.random` | xoshiro256** random numbers: shared and seeded generators, uniform/integer/normal (§17.2) |
+| `std.autodiff` | forward-mode automatic differentiation with dual numbers (§17.3) |
 | `std.symbolic` | symbolic algebra: parse, simplify, expand, diff, integrate, subst, solve, evaluate, print |
 | `std.pipe` | byte/line pipes between threads and microthreads; child processes with piped stdin/stdout (§6) |
 | `std.shared` | shared memory: private (threads/microthreads) or named (across OS processes) (§6) |
@@ -382,7 +384,8 @@ Examples: `examples/web_fetch.csec`, `examples/web_crawler.csec`,
 In `val name = expr` and `var name = expr` (also `constexpr val`), the annotation may be
 omitted when the type of `expr` is known; the variable or constant then has that type. This
 applies to locals, module-level globals, and class fields (`var total = 0`). Literals give
-`Int` (or `Long` when the value does not fit 32 bits), `Float` for a plain decimal literal,
+`Int` (or `Long` when the value does not fit 32 bits), `Double` for a decimal literal (`Float`
+with the `f` suffix, `1.5f`, or where a `Float` is expected, §14.4),
 `String`, `Char`, and `Bool`; calls give the callee's declared return type; operators give
 their result type (a comparison or `and`/`or` is always `Bool`, also when the operands are a
 mix of `Int` and `Long`; a bitwise operator on mixed integer widths gives the wider type); a
@@ -681,6 +684,150 @@ isValid(forAll(intVar("x"), intVar("x") * intVar("x") >= intVal(0)));   // true
 The kernel is independent of `csec++ --verify` (§12): contracts are proved by the verifier, while
 `std.logic` reasons about formulas a program builds. Like other struct-based modules, it is
 native-only (§5).
+
+## 14. Calls, loops, literals and memory
+
+### 14.1 Default and named arguments
+
+A parameter may declare a default, `def f(x: Int, k: Int = 2)`; every parameter after one with a
+default needs one too, and a default may not refer to other parameters. A call may name
+arguments, `f(1, k = 3)`; named arguments follow the positional ones, in any order. Before type
+checking, each call that omits an argument or names one is rewritten into a positional call: named
+arguments move to their parameter's position and each omitted one becomes a copy of its default,
+evaluated at the call site (in parameter order). Calls are matched by name against top-level
+functions, `object` functions, constructors (`new C(...)`) and methods (on `this`/`super`, or on
+any class declaring a method of that name); when several declarations accept the call they must
+agree on parameter names and defaults. A named argument to anything else is an error.
+
+### 14.2 Loops
+
+`break` leaves the innermost `while`/`for` loop and `continue` starts its next iteration (the
+increment of a range loop still runs). Both drop the owned locals of the scopes they leave. Either
+outside a loop is an error. `for (x <- e)` iterates an array whose length is known at that point
+(a literal, also once bound to a name, a fixed-size array, or a `map`/`filter` result), a range,
+a `Dict` or a `Set`; iterating any other value is a type error. For the ownership checker a
+`break` carries the body's moves past the loop.
+
+### 14.3 Logical operators
+
+`&&` and `||` are the keywords `and` and `or`.
+
+### 14.4 Decimal literals
+
+A decimal literal is a `Double`; `1.5f` (also `1e3f`) is a `Float`. Where a `Float` is expected —
+an annotated `Float` declaration, a `Float` parameter, return value or assignment target, or the
+other operand of an arithmetic or comparison operator whose operand is a `Float` — a literal
+expression (decimal and integer literals, unary minus, `+ - * /`, and operands already `Float`)
+is evaluated as a `Float`.
+
+### 14.5 Closures
+
+A lambda literal that outlives the frame creating it — returned (directly, or as the value of a
+local that is returned), or stored in an object, enum value, array, dictionary, tuple or field —
+allocates its closure and captured values on the heap; other lambdas stay on the stack. Such a
+lambda must capture by value: an escaping `[&]` lambda is an error. Captured variables are found
+in every construct of the body.
+
+### 14.6 Automatic drop
+
+Under strict ownership, a local initialized with `new C(...)` of a reference class (not a struct
+or enum) is freed when its scope ends — at the block end and on every `return`, `break` and
+`continue` leaving it — if each later use in its scope leaves it the only owner: a method call or
+field read on it, a borrow `&`/`&mut`, a move `<-`, `free`, `return`, `==`/`!=`, or printing. A
+move or `free` clears the local's drop flag, so a value moved on some paths is freed exactly once.
+Any other use (a lambda capture, an array element, ...) leaves the local to explicit `free`. The
+objects its fields own are not freed with it.
+
+## 15. Enums and pattern matching
+
+### 15.1 Declarations and values
+
+`enum E<T...> { V1(field: Type, ...), V2, ... def m(...) ... }` declares variants (with optional
+positional fields) and methods. Before type checking an enum lowers to a struct — a class when a
+variant field mentions the enum itself (a recursive enum) — whose fields are a tag and the fields
+of every variant. Values are built as `E.V(args)`, `V(args)` or `V` (when exactly one enum has a
+variant `V` and no variable, function or class of that name is in scope; otherwise `E.V` is
+required and an ambiguous bare name is an error). A generic enum's type arguments are taken from
+the expected type (an annotated declaration, a parameter, a return value, an assignment target, a
+field of an enclosing variant) or inferred from the payload, or written: `Option<Int>.None`.
+Enum values are immutable and Copy (a recursive enum shares its heap nodes). `==`/`!=` compare
+enums without fields by variant; comparing enums with fields is an error. Every enum without its
+own `toString()` gets one printing the variant and its fields (`Rect(2.000000, 3.000000)`);
+`println` and string concatenation call `toString()` on any class value that has one.
+
+### 15.2 Patterns
+
+`case p1 | p2 if guard => result`. A pattern is `_`; a literal (also `-1`) or regex literal,
+compared with the value; a name — on an enum value a variant name if the enum has one (a variant
+of another enum is an error), otherwise a binding of the value (on a non-enum value an existing
+variable's name compares with it); or a variant with one sub-pattern per field, `Rect(w, _)`,
+`Some(Some(x))`, also written `E.V(...)`. A variant name without sub-patterns matches every value
+of that variant. Alternatives joined with `|` bind no variables. The guard sees the bindings.
+
+### 15.3 Evaluation and exhaustiveness
+
+The matched value is evaluated once; cases are tried in order; a case matches when one of its
+patterns matches and its guard (if any) is true. A value no case matches stops the program with
+`AssertionError: no case of the match matched the value`. A match on an enum value is checked
+for exhaustiveness over nested patterns, counting cases without a guard: when some value is not
+handled, the error names one, e.g. `Both(Some(_), None) is not handled`.
+
+### 15.4 Option, Result and `?`
+
+`Option<T> { Some(value: T), None }` and `Result<T, E> { Ok(value: T), Err(error: E) }` are
+declared for every program that mentions them (and does not declare its own). Methods:
+`isSome`/`isNone`, `isOk`/`isErr`, `unwrap` (stops the program on `None`/`Err`), `unwrapOr(x)`,
+`unwrapErr`. `e?` on an `Option<T>`/`Result<T, E>` value is its payload; on `None`/`Err(x)` the
+enclosing function returns `None`/`Err(x)` — it must return an `Option`, or a `Result` with the
+same error type.
+
+## 16. Interfaces
+
+`interface I { def m(params): T; def d(): U = expr }` declares methods; a method with a body is a
+default. `class C(...) implements I, J`, `struct S(...) implements I` and `enum E implements I`
+must provide every method of each interface with the same parameter types and return type (an
+inherited method counts); a missing method with a default gets a copy of the default, in which
+calls of the interface's methods call this object's. Types that do not conform are errors.
+An interface type is a value: a reference to the object (a heap copy for a struct) and a table of
+its methods. A value of a type implementing `I` is converted where an `I` is expected (an
+annotated declaration, a parameter, a return value, an assignment, an element of an array literal
+of `I`, a variant field); calls on an `I` dispatch to the implementing type's method. Interface
+values are Copy. `template<typename T: I + J>` bounds a type parameter: the arguments of
+`new C<...>` and of calls of template functions (explicit or inferred from a parameter of type `T`)
+must implement the bounds.
+
+## 17. Numerics
+
+### 17.1 Tensor builtins
+
+For a tensor `t`: `sum`/`mean`/`max`/`min`/`prod(t, axis)` reduce along a constant axis (negative
+counts from the last) to a tensor without that axis (a rank-1 tensor gives one element);
+`max(t)`, `min(t)`, `prod(t)` reduce all elements to a `Real`; `argmax(t)`/`argmin(t)` give the
+flat row-major index (`Long`); `zerosLike(t)`, `onesLike(t)`, `fullLike(t, v)` make a tensor of
+`t`'s shape; `fillUniform(t, low, high[, rng])` and `fillNormal(t, mean, sd[, rng])` fill `t` in
+place (`rng` is an `Rng.handle` of `std.random`; the shared generator otherwise). Storage is
+double for every element type; an element of `Tensor<Int|Long|Float, ...>` reads as that type and
+a stored value is converted to double.
+
+### 17.2 `std.random`
+
+xoshiro256** generators: `newRng(seed)` returns an `Rng` (`uniform(low = 0.0, high = 1.0)`,
+`int(low, high)` in `[low, high)`, `normal(mean = 0.0, sd = 1.0)`, `chance(p)`, `reseed(seed)`);
+equal seeds give equal sequences. `random()`, `randomInt`, `randomNormal` and `setRandomSeed` use
+the shared generator, seeded from the clock unless `setRandomSeed` is called.
+
+### 17.3 `std.autodiff`
+
+Forward-mode automatic differentiation: `Dual(v, d)` carries a value and a derivative with
+`+ - * /` (with a `Dual` or a `Double` on the right) and unary `-`; `variable(x)`, `constant(c)`,
+`dsin`, `dcos`, `dexp`, `dlog`, `dsqrt`, `dpow(x, n)`, `dtanh`, `dsigmoid`; `derivative(f, x)`,
+`gradient2(f, x, y)`, `gradient3(f, x, y, z)` and `newton(f, x0, steps)` take a function of `Dual`s.
+
+## 18. Debug information
+
+`csec++ -g` describes every function, method and lambda and the source line of each statement,
+mapped through import expansion to the original file: CodeView with a `.pdb` (linked with
+`/DEBUG`) on Windows, DWARF elsewhere. Local variables are not described.
 
 ## 5. Self-hosted compiler support
 
