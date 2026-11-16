@@ -695,10 +695,15 @@ arguments, `f(1, k = 3)`; named arguments follow the positional ones, in any ord
 checker rewrites each call that omits an argument or names one into a positional call once it
 knows the call's target: a declared function (a local closure of the same name is not one), a
 function of an `object`, the constructor of `new C(...)`, or a method of the receiver's class —
-the most derived class that declares it, including enum methods. Named arguments move to their
-parameter's position and each omitted one becomes a copy of its default, evaluated at the call
-site (in parameter order); a default that names a variable the call site shadows with a local is
-an error. When several overloads accept the call they must agree on parameter names and defaults.
+the most derived class that declares it, including enum methods; for an interface-typed receiver,
+the interface's declaration. Calls in template bodies, which are not type checked, are matched by
+name (functions and constructors unless a local of the body has the name, methods of `this`/`super`,
+object functions, a method only one class declares). Named arguments move to their parameter's
+position and each omitted one becomes a copy of its default, evaluated at the call site (in
+parameter order). A field of the method's class in a default is read from the receiver
+(`c.m()` uses `c.k`; a default naming a field needs a named receiver or `this`); any other name the
+call site shadows with a local is an error. A named argument that is never matched fails the
+compilation. When several overloads accept the call they must agree on parameter names and defaults.
 A named argument to anything else is an error.
 
 ### 14.2 Loops
@@ -736,8 +741,8 @@ in every construct of the body.
 Under strict ownership, a local initialized with `new C(...)` of a reference class (not a struct
 or enum) is freed when its scope ends — at the block end and on every `return`, `break` and
 `continue` leaving it — if each later use in its scope leaves it the only owner: a call of a
-method that does not return, store or capture `this` (directly or through the methods it calls on
-`this`), a field read, a borrow `&`/`&mut`, a move `<-`, `free`, `return`, `==`/`!=`, or printing. A
+method that does not return, store or capture `this` or one of its fields (directly, through the
+methods it calls on `this`, or in an override of a subclass), a field read, a borrow `&`/`&mut`, a move `<-`, `free`, `return`, `==`/`!=`, or printing. A
 move or `free` clears the local's drop flag, so a value moved on some paths is freed exactly once.
 Any other use (a lambda capture, an array element, ...) leaves the local to explicit `free`. The
 objects its fields own are not freed with it.

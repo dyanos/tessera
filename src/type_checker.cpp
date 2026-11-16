@@ -923,6 +923,7 @@ void TypeChecker::visitBinaryExpression(BinaryExpressionNode& node) {
 void TypeChecker::visit(ProgramNode& node) {
     enterOwnershipScope();
     indexCallSignatures(&node);
+    expandTemplateBodies(&node, callReport());
     // Templates and class names first, so that applied template types in signatures (`Opt<Int>`) can
     // be resolved to their instance classes before function signatures are registered.
     for (auto& stmt : node.statements) {
@@ -934,24 +935,28 @@ void TypeChecker::visit(ProgramNode& node) {
         }
     }
     normalizeAppliedTemplateTypes(&node);
-    for (auto& stmt : node.statements) {
-        if (!stmt) {
+    for (auto& slot : node.statements) {
+        if (!slot) {
             continue;
         }
+        // `[@Attribute] def f(...)`: register the declaration under its attributes as well.
+        ASTNode* stmtNode = slot.get();
+        while (auto* attribute = dynamic_cast<AttributeNode*>(stmtNode)) stmtNode = attribute->target.get();
+        if (!stmtNode) continue;
 
-        if (auto* functionNode = dynamic_cast<FunctionDeclarationNode*>(stmt.get())) {
+        if (auto* functionNode = dynamic_cast<FunctionDeclarationNode*>(stmtNode)) {
             ensureFunctionSymbol(*functionNode);
         }
-        else if (auto* classNode = dynamic_cast<ClassDeclarationNode*>(stmt.get())) {
+        else if (auto* classNode = dynamic_cast<ClassDeclarationNode*>(stmtNode)) {
             ensureClassSymbol(*classNode);
         }
-        else if (auto* objectNode = dynamic_cast<ObjectDeclarationNode*>(stmt.get())) {
+        else if (auto* objectNode = dynamic_cast<ObjectDeclarationNode*>(stmtNode)) {
             auto& cg = CodeGenerator::getInstance();
             if (!cg.symbolTable.lookup(objectNode->name)) {
                 cg.symbolTable.addSymbol(objectNode->name, std::make_unique<NamespaceSymbol>(objectNode->name));
             }
         }
-        else if (auto* templateNode = dynamic_cast<TemplateDeclarationNode*>(stmt.get())) {
+        else if (auto* templateNode = dynamic_cast<TemplateDeclarationNode*>(stmtNode)) {
             ensureTemplateSymbol(*templateNode);
         }
     }
@@ -1336,8 +1341,7 @@ static std::string declaredClassName(const std::string& className) {
     return className;
 }
 
-bool TypeChecker::expandArguments(std::vector<std::unique_ptr<ASTNode>>& args, int kind, const std::string& owner,
-                                  const std::string& name, int line) {
+CallReport TypeChecker::callReport() {
     auto& table = CodeGenerator::getInstance().symbolTable;
     CallReport report;
     report.error = [this](const std::string& message) { reportError(message); };
@@ -1345,7 +1349,12 @@ bool TypeChecker::expandArguments(std::vector<std::unique_ptr<ASTNode>>& args, i
         Symbol* visible = table.lookup(id);
         return visible && visible != table.lookupGlobal(id);
     };
-    return expandCallArguments(args, static_cast<CallTarget>(kind), owner, name, line > 0 ? line : currentLine, report);
+    return report;
+}
+
+bool TypeChecker::expandArguments(std::vector<std::unique_ptr<ASTNode>>& args, CallTarget kind, const std::string& owner,
+                                  const std::string& name, int line, ASTNode* receiver) {
+    return expandCallArguments(args, kind, owner, name, line > 0 ? line : currentLine, callReport(), receiver);
 }
 
 void TypeChecker::visitExpecting(ASTNode* node, const Type* expected) {
@@ -1846,7 +1855,6 @@ void TypeChecker::visit(MethodCallNode& node) {
         auto& table = CodeGenerator::getInstance().symbolTable;
         CallTarget kind = CallTarget::None;
         std::string owner;
-        const std::string receiver = identifierName(node.object.get());
         auto* objectId = dynamic_cast<IdentifierNode*>(node.object.get());
         Symbol* named = objectId ? table.lookup(objectId->value) : nullptr;
         if (named && named->symbolType == SymbolType::NAMESPACE) {
@@ -1863,13 +1871,13 @@ void TypeChecker::visit(MethodCallNode& node) {
         }
         else if (node.object) {
             auto receiverType = stripBorrow(node.object->getType());
-            if (receiverType && receiverType->getKind() == Type::Kind::CLASS && !isInterfaceType(receiverType.get())) {
+            // A class, or an interface (calls through it take the interface's declaration).
+            if (receiverType && receiverType->getKind() == Type::Kind::CLASS) {
                 kind = CallTarget::Method;
-                owner = declaredClassName(receiverType->getName());
+                owner = isInterfaceType(receiverType.get()) ? receiverType->getName() : declaredClassName(receiverType->getName());
             }
         }
-        (void)receiver;
-        if (!expandArguments(node.arguments, static_cast<int>(kind), owner, node.methodName, node.line)) return;
+        if (!expandArguments(node.arguments, kind, owner, node.methodName, node.line, node.object.get())) return;
     }
     {
         // Parameter types, when every overload of the method with this arity agrees on them.
@@ -2013,7 +2021,7 @@ void TypeChecker::visit(FunctionCallNode& node) {
                 }
             }
         }
-        if (!expandArguments(node.arguments, static_cast<int>(kind), owner, node.functionName, node.line)) return;
+        if (!expandArguments(node.arguments, kind, owner, node.functionName, node.line)) return;
     }
     if (auto* symbol = cg.symbolTable.lookup(node.functionName)) {
         if (auto* funcType = dynamic_cast<FunctionType*>(symbol->type.get())) {
@@ -2259,7 +2267,7 @@ void TypeChecker::visit(AccessFieldNode& node) {
 }
 
 void TypeChecker::visit(ClassInstanceCreationNode& node) {
-    if (!expandArguments(node.arguments, static_cast<int>(CallTarget::Constructor), node.className, "", node.line)) return;
+    if (!expandArguments(node.arguments, CallTarget::Constructor, node.className, "", node.line)) return;
     if (!node.templateArgs.empty()) {
         std::vector<const Type*> arguments;
         for (const auto& a : node.templateArgs) arguments.push_back(a.get());

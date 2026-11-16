@@ -1,0 +1,7 @@
+// A Float literal has the same value in both compilers: 0.1f is the float nearest 0.1.
+def main(): Int {
+    val d: Double = 0.1f;
+    val f: Float = 0.1f;
+    if (d > 0.1 && f > 0.09f) { return 42; }
+    return 1;
+}

@@ -10,6 +10,7 @@ external def csec_expand_imports(path: String): String;
 external def csec_string_builder_new_file(path: String): Long;
 external def csec_lex_quoted(source: String, index: Int): Int;
 external def csec_lex_number(source: String, index: Int): Int;
+external def csec_lex_float_text(text: String): String;
 external def csec_lex_identifier(source: String, index: Int): Int;
 external def csec_digit_value(ch: Char): Int;
 external def csec_lex_line_comment(source: String, index: Int): Int;
@@ -241,13 +242,12 @@ def tokenizeSlow(source: String): String {
             end = lexNumber(source, cursor);
             text = slice(source, cursor, end);
             if (text.contains(".") or text.contains("e") or text.contains("E")) {
-                appendTokenTo(builder, kindFloat(), text);
-                // `1.5f`: the Float suffix; the token text stays the number.
-                if (end < source.length and (source.charAt(end) == 'f' or source.charAt(end) == 'F')) {
-                    if (end + 1 >= source.length or !isIdentifierPart(source.charAt(end + 1))) {
-                        end = end + 1;
-                    }
+                // `1.5f`: a Float literal (the number scan includes the suffix). The token is the value
+                // rounded to float precision, the value csec++ gives the literal.
+                if (text.endsWith("f") or text.endsWith("F")) {
+                    text = csec_lex_float_text(text.substring(0, text.length - 1));
                 }
+                appendTokenTo(builder, kindFloat(), text);
             }
             else {
                 appendTokenTo(builder, kindInteger(), text);

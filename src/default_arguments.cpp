@@ -14,6 +14,7 @@
 #include "default_arguments.h"
 
 #include "ast_walk.h"
+#include "interfaces.h"
 #include "source_map.h"
 
 #include <functional>
@@ -40,8 +41,10 @@ struct SignatureIndex {
     std::map<std::string, std::vector<Signature>> functions;     // top-level (and template) `def f`
     std::map<std::string, std::vector<Signature>> namespaced;    // `Obj.f` (object members)
     std::map<std::string, std::vector<Signature>> constructors;  // `new C(...)`
-    std::map<std::string, std::vector<Signature>> classMethods;  // `C#m`
+    std::map<std::string, std::vector<Signature>> classMethods;  // `C#m` (also `Interface#m`)
     std::map<std::string, std::string> superClass;               // class -> parent
+    std::map<std::string, std::set<std::string>> fields;         // class -> its constructor parameters and fields
+    std::map<std::string, bool> keepsThis;                       // methodMayKeepThis results, by `C#m`
 };
 
 SignatureIndex& index() {
@@ -60,8 +63,12 @@ std::vector<ParameterNode*> parametersOf(std::vector<std::unique_ptr<ASTNode>>& 
 void indexClass(SignatureIndex& table, ClassDeclarationNode& cls) {
     table.constructors[cls.name].push_back({"new " + cls.name, parametersOf(cls.constructorParams)});
     if (!cls.superClassName.empty()) table.superClass[cls.name] = cls.superClassName;
+    for (auto* p : parametersOf(cls.constructorParams)) table.fields[cls.name].insert(p->name);
     auto* body = dynamic_cast<ClassBodyNode*>(cls.body.get());
     if (!body) return;
+    for (auto& fieldNode : body->fields) {
+        if (auto* field = dynamic_cast<VariableDeclarationNode*>(fieldNode.get())) table.fields[cls.name].insert(field->name);
+    }
     for (auto& m : body->methods) {
         auto* method = dynamic_cast<FunctionDeclarationNode*>(m.get());
         if (!method) continue;
@@ -204,7 +211,39 @@ void indexCallSignatures(ASTNode* root) {
     auto* program = dynamic_cast<ProgramNode*>(root);
     if (!program) return;
     for (auto& statement : program->statements) indexTopLevel(table, statement.get());
+    // Calls through an interface value use the interface's declaration of the method.
+    forEachInterfaceMethod([&](const std::string& interfaceName, FunctionDeclarationNode* method) {
+        table.classMethods[interfaceName + "#" + method->name].push_back(
+            {interfaceName + "." + method->name, parametersOf(method->parameters), method});
+    });
 }
+
+namespace {
+// Whether `name` is a constructor parameter or field of `className` or a parent.
+bool isFieldOf(const std::string& className, const std::string& name) {
+    auto& table = index();
+    std::set<std::string> seen;
+    for (std::string cls = className; !cls.empty() && seen.insert(cls).second; ) {
+        auto it = table.fields.find(cls);
+        if (it != table.fields.end() && it->second.count(name)) return true;
+        auto parent = table.superClass.find(cls);
+        cls = parent == table.superClass.end() ? std::string() : parent->second;
+    }
+    return false;
+}
+
+// Whether `cls` is `ancestor` or derives from it.
+bool derivesFrom(const std::string& cls, const std::string& ancestor) {
+    auto& table = index();
+    std::set<std::string> seen;
+    for (std::string c = cls; !c.empty() && seen.insert(c).second; ) {
+        if (c == ancestor) return true;
+        auto parent = table.superClass.find(c);
+        c = parent == table.superClass.end() ? std::string() : parent->second;
+    }
+    return false;
+}
+}  // namespace
 
 bool hasNamedArguments(const std::vector<std::unique_ptr<ASTNode>>& args) {
     for (const auto& a : args) {
@@ -242,6 +281,13 @@ bool mayKeepThis(const std::string& className, const std::string& method, std::s
         cls = parent == table.superClass.end() ? std::string() : parent->second;
     }
     if (declarations.empty()) return true;
+    // An override in a subclass runs when the object is of that subclass.
+    for (const auto& entry : table.classMethods) {
+        const auto hash = entry.first.find('#');
+        const std::string cls = entry.first.substr(0, hash);
+        if (entry.first.substr(hash + 1) != method || cls == className || !derivesFrom(cls, className)) continue;
+        for (const auto& sig : entry.second) if (sig.declaration) declarations.push_back(sig.declaration);
+    }
     if (!visiting.insert(className + "#" + method).second) return false;  // recursion: judged by the other uses
     for (FunctionDeclarationNode* fn : declarations) {
         bool keeps = false;
@@ -267,10 +313,11 @@ bool mayKeepThis(const std::string& className, const std::string& method, std::s
                 }
             }
             if (dynamic_cast<LambdaExpressionNode*>(node)) {
-                // A lambda that mentions `this` or a field could outlive the call.
+                // A lambda that mentions `this` or a field (by its bare name too) could outlive the call.
                 ast_walk::walk(node, nullptr, [&](ASTNode* n, std::unique_ptr<ASTNode>*) {
                     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
-                        if (id->value == "this" || id->value.rfind("this.", 0) == 0) keeps = true;
+                        const std::string base = id->value.substr(0, id->value.find('.'));
+                        if (base == "this" || base == "super" || isFieldOf(className, base)) keeps = true;
                     }
                     return !keeps;
                 });
@@ -286,12 +333,18 @@ bool mayKeepThis(const std::string& className, const std::string& method, std::s
 }  // namespace
 
 bool methodMayKeepThis(const std::string& className, const std::string& method) {
+    auto& cache = index().keepsThis;
+    const std::string key = className + "#" + method;
+    auto it = cache.find(key);
+    if (it != cache.end()) return it->second;
     std::set<std::string> visiting;
-    return mayKeepThis(className, method, visiting);
+    const bool keeps = mayKeepThis(className, method, visiting);
+    cache[key] = keeps;
+    return keeps;
 }
 
 bool expandCallArguments(std::vector<std::unique_ptr<ASTNode>>& args, CallTarget kind, const std::string& owner,
-                         const std::string& name, int line, const CallReport& report) {
+                         const std::string& name, int line, const CallReport& report, ASTNode* receiver) {
     auto& table = index();
     std::vector<const Signature*> candidates;
     std::string callee = name;
@@ -369,6 +422,10 @@ bool expandCallArguments(std::vector<std::unique_ptr<ASTNode>>& args, CallTarget
         }
     }
     const Signature* chosen = viable.front();
+    // The class whose fields a method default may name: they are read from the receiver.
+    const std::string fieldOwner = kind == CallTarget::Method ? owner : std::string();
+    const std::string receiverText = receiverName(receiver);
+    std::vector<size_t> defaulted;
     // A default is evaluated at the call site: a name in it must mean the same there as at the
     // declaration, i.e. not be shadowed by a local of the caller.
     for (size_t k = 0; k < chosen->parameters.size(); ++k) {
@@ -382,15 +439,27 @@ bool expandCallArguments(std::vector<std::unique_ptr<ASTNode>>& args, CallTarget
             else if (positional++ == k) supplied = true;
         }
         if (supplied) continue;
+        defaulted.push_back(k);
         bool shadowed = false;
+        bool needsReceiver = false;
         std::string shadowedName;
         ast_walk::walk(param->defaultValue.get(), nullptr, [&](ASTNode* n, std::unique_ptr<ASTNode>*) {
             if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
                 const std::string base = id->value.substr(0, id->value.find('.'));
+                if (!fieldOwner.empty() && isFieldOf(fieldOwner, base)) {
+                    // A field of the receiver: `this` inside the class, `r.field` for a named receiver.
+                    if (receiver && receiverText.empty()) { needsReceiver = true; shadowedName = base; }
+                    return true;
+                }
                 if (!shadowed && report.isShadowed(base)) { shadowed = true; shadowedName = base; }
             }
             return true;
         });
+        if (needsReceiver) {
+            fail("the default value of parameter '" + param->name + "' of '" + chosen->display + "' reads the field '" +
+                 shadowedName + "'; call the method on a named value or pass the argument");
+            return false;
+        }
         if (shadowed) {
             fail("the default value of parameter '" + param->name + "' of '" + chosen->display + "' refers to '" +
                          shadowedName + "', which is a different variable at this call; pass the argument");
@@ -399,6 +468,122 @@ bool expandCallArguments(std::vector<std::unique_ptr<ASTNode>>& args, CallTarget
     }
     std::vector<std::unique_ptr<ASTNode>> rewritten;
     bindArguments(args, *chosen, &rewritten, nullptr);
+    if (!fieldOwner.empty() && !receiverText.empty() && receiverText != "this" && receiverText != "super") {
+        for (size_t k : defaulted) {
+            ast_walk::walk(rewritten[k].get(), &rewritten[k], [&](ASTNode* n, std::unique_ptr<ASTNode>* slot) {
+                auto* id = dynamic_cast<IdentifierNode*>(n);
+                if (id && slot && id->value.find('.') == std::string::npos && isFieldOf(fieldOwner, id->value)) {
+                    *slot = std::make_unique<AccessFieldNode>(std::make_unique<IdentifierNode>(receiverText),
+                                                              std::make_unique<IdentifierNode>(id->value));
+                    return false;
+                }
+                return true;
+            });
+        }
+    }
     args = std::move(rewritten);
     return true;
+}
+
+namespace {
+// Template bodies are not type checked, so their calls are matched syntactically: functions and
+// constructors by name (unless a parameter or local of the body has that name), methods of
+// `this`/`super`, object functions, and a method declared by exactly one class.
+void expandInBody(ASTNode* body, const std::string& enclosingClass, const std::set<std::string>& locals,
+                  const CallReport& report, int& errors) {
+    CallReport local = report;
+    local.isShadowed = [&locals](const std::string& name) { return locals.count(name) > 0; };
+    local.error = [&](const std::string& message) { report.error(message); ++errors; };
+    auto& table = index();
+    int line = 0;
+    ast_walk::walk(body, nullptr, [&](ASTNode* node, std::unique_ptr<ASTNode>*) {
+        if (node->line > 0) line = node->line;
+        if (auto* call = dynamic_cast<FunctionCallNode*>(node)) {
+            if (!locals.count(call->functionName)) {
+                if (table.functions.count(call->functionName)) {
+                    expandCallArguments(call->arguments, CallTarget::Function, "", call->functionName, line, local);
+                }
+                else if (!enclosingClass.empty() && hasMethodSignatures(enclosingClass, call->functionName)) {
+                    expandCallArguments(call->arguments, CallTarget::Method, enclosingClass, call->functionName, line, local);
+                }
+            }
+        }
+        else if (auto* method = dynamic_cast<MethodCallNode*>(node)) {
+            const std::string object = receiverName(method->object.get());
+            if ((object == "this" || object == "super") && !enclosingClass.empty()) {
+                std::string cls = enclosingClass;
+                if (object == "super") {
+                    auto parent = table.superClass.find(cls);
+                    cls = parent == table.superClass.end() ? std::string() : parent->second;
+                }
+                if (!cls.empty()) {
+                    expandCallArguments(method->arguments, CallTarget::Method, cls, method->methodName, line, local,
+                                        method->object.get());
+                }
+            }
+            else if (!object.empty() && !locals.count(object) && table.namespaced.count(object + "." + method->methodName)) {
+                expandCallArguments(method->arguments, CallTarget::Namespaced, object, method->methodName, line, local);
+            }
+            else {
+                std::string only;
+                int declaring = 0;
+                for (const auto& entry : table.classMethods) {
+                    const auto hash = entry.first.find('#');
+                    if (entry.first.substr(hash + 1) == method->methodName) {
+                        ++declaring;
+                        only = entry.first.substr(0, hash);
+                    }
+                }
+                if (declaring == 1) {
+                    expandCallArguments(method->arguments, CallTarget::Method, only, method->methodName, line, local,
+                                        method->object.get());
+                }
+            }
+        }
+        else if (auto* creation = dynamic_cast<ClassInstanceCreationNode*>(node)) {
+            expandCallArguments(creation->arguments, CallTarget::Constructor, creation->className, "", line, local);
+        }
+        return true;
+    });
+}
+
+std::set<std::string> namesDeclaredIn(FunctionDeclarationNode& fn) {
+    std::set<std::string> names;
+    for (auto* p : parametersOf(fn.parameters)) names.insert(p->name);
+    ast_walk::walk(fn.body.get(), nullptr, [&](ASTNode* n, std::unique_ptr<ASTNode>*) {
+        if (auto* decl = dynamic_cast<VariableDeclarationNode*>(n)) names.insert(decl->name);
+        else if (auto* lambda = dynamic_cast<LambdaExpressionNode*>(n)) {
+            for (auto* p : parametersOf(lambda->arguments)) names.insert(p->name);
+        }
+        else if (auto* loop = dynamic_cast<ForStatementNode*>(n)) {
+            names.insert(loop->variable);
+            if (!loop->tokenValue.empty()) names.insert(loop->tokenValue);
+        }
+        return true;
+    });
+    return names;
+}
+}  // namespace
+
+bool expandTemplateBodies(ASTNode* root, const CallReport& report) {
+    auto* program = dynamic_cast<ProgramNode*>(root);
+    if (!program) return true;
+    int errors = 0;
+    for (auto& statement : program->statements) {
+        auto* tmpl = dynamic_cast<TemplateDeclarationNode*>(statement.get());
+        if (!tmpl) continue;
+        if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(tmpl->declaration.get())) {
+            expandInBody(fn->body.get(), "", namesDeclaredIn(*fn), report, errors);
+        }
+        else if (auto* cls = dynamic_cast<ClassDeclarationNode*>(tmpl->declaration.get())) {
+            auto* body = dynamic_cast<ClassBodyNode*>(cls->body.get());
+            if (!body) continue;
+            for (auto& m : body->methods) {
+                if (auto* method = dynamic_cast<FunctionDeclarationNode*>(m.get())) {
+                    expandInBody(method->body.get(), cls->name, namesDeclaredIn(*method), report, errors);
+                }
+            }
+        }
+    }
+    return errors == 0;
 }

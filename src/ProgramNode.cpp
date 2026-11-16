@@ -2,6 +2,7 @@
 #include "ASTVisitor.h"
 #include "FunctionDeclarationNode.h"
 #include "ClassDeclarationNode.h"
+#include "AttributeNode.h"
 
 void ProgramNode::accept(ASTVisitor& visitor) {
     visitor.visit(*this);
@@ -36,6 +37,13 @@ llvm::Value* ProgramNode::codegen() {
     for (auto& stmt : statements) {
         if (auto* function = dynamic_cast<FunctionDeclarationNode*>(stmt.get())) {
             function->declarePrototype();
+            continue;
+        }
+        // `[@Inline] def f(...)` too; an attributed `external def` gets its symbol from the attribute.
+        ASTNode* target = stmt.get();
+        while (auto* attribute = dynamic_cast<AttributeNode*>(target)) target = attribute->target.get();
+        if (auto* function = dynamic_cast<FunctionDeclarationNode*>(target)) {
+            if (!function->isExternal) function->declarePrototype();
         }
     }
 
