@@ -1,0 +1,27 @@
+// A default that passes a named argument whose name is also a field; named arguments on a template
+// body's locals of a known class; Float/Double literals beyond the range are infinite.
+def twice(start: Int): Int = start * 2
+
+class C(start: Int) {
+    def m(x: Int = twice(start = 4)): Int = x       // `start` names twice's parameter, not the field
+}
+
+class Cache(v: Int) {
+    def get(i: Int, d: Int = v): Int = i + d
+}
+
+template<typename T>
+def lookup(x: T, c: Cache): Int {
+    val local: Cache = new Cache(10);
+    val made = new Cache(20);
+    return c.get(1) + c.get(i = 2, d = 3) + local.get(1, d = 1) + made.get(i = 1);   // 6 + 5 + 2 + 21
+}
+
+def main(): Int {
+    if (new C(1).m() != 8) { return 1; }
+    if (lookup<Int>(0, new Cache(5)) != 34) { return 2; }
+    val big: Float = 1e39f;
+    if (!(big > 1e38f) || big != big) { return 3; }
+    if (!(1e400 > 1e300)) { return 4; }
+    return 0;
+}

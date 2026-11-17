@@ -1344,12 +1344,10 @@ static std::string declaredClassName(const std::string& className) {
 CallReport TypeChecker::callReport() {
     auto& table = CodeGenerator::getInstance().symbolTable;
     CallReport report;
-    // A template body is checked by the syntactic pass and again in each instance: report once.
+    // A template body is checked by the syntactic pass and again in each instance: report a call's
+    // error once. The message carries the call's location, so equal errors at other calls stay.
     report.error = [this](const std::string& message) {
-        static std::set<std::string> reported;
-        const auto colon = message.find(": ");
-        const std::string text = colon == std::string::npos ? message : message.substr(colon + 2);
-        if (reported.insert(text).second) reportError(message);
+        if (reportedCallErrors.insert(message).second) reportError(message);
         else ++errorCount;
     };
     report.isShadowed = [&table](const std::string& id) {

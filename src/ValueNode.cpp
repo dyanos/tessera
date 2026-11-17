@@ -33,15 +33,17 @@ llvm::Value* ValueNode::codegen() {
 				: llvm::Type::getInt32Ty(cg.context), parsed, true);
 		}
 		else if (valueType == TokenType::FLOAT_LITERAL) {
-			return llvm::ConstantFP::get(llvm::Type::getFloatTy(cg.context), std::stof(value));
+			// strtof/strtod, not std::stof/stod: a literal beyond the range is +-inf (or 0 / a denormal
+			// below it) as IEEE rounding gives and the self-host compiler emits; stof throws instead.
+			return llvm::ConstantFP::get(llvm::Type::getFloatTy(cg.context), std::strtof(value.c_str(), nullptr));
 		}
 		else if (valueType == TokenType::EXPONENTIAL_LITERAL) {
 			// A decimal literal is a Double unless the type checker narrowed it to Float (`x * 0.5`
 			// with a Float `x`, `val f: Float = 0.5`).
 			if (type && type->isFloatTy()) {
-				return llvm::ConstantFP::get(llvm::Type::getFloatTy(cg.context), std::stof(value));
+				return llvm::ConstantFP::get(llvm::Type::getFloatTy(cg.context), std::strtof(value.c_str(), nullptr));
 			}
-			return llvm::ConstantFP::get(llvm::Type::getDoubleTy(cg.context), std::stod(value));
+			return llvm::ConstantFP::get(llvm::Type::getDoubleTy(cg.context), std::strtod(value.c_str(), nullptr));
 		}
 		else if (valueType == TokenType::BINARY_LITERAL) {
 			return llvm::ConstantInt::get(llvm::Type::getInt32Ty(cg.context), std::stoi(value.substr(2), nullptr, 2));
