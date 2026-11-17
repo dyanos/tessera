@@ -385,3 +385,4 @@ tests/stdlib/positive/27_math_algebra.csec 0 0
 tests/stdlib/positive/28_logic.csec 0 0
 tests/stdlib/positive/29_random.csec 0 0
 tests/stdlib/positive/30_autodiff.csec 0 0
+tests/stdlib/positive/31_dataframe_npy.csec 0 0
