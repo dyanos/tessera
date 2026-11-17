@@ -1,0 +1,24 @@
+// An object whose method returns a closure reading one of its fields stays alive.
+class Account(balance: Int) {
+    def reader(): () => Int { return [=]() -> { return balance; }; }
+}
+
+def makeReader(): () => Int {
+    val acct = new Account(41);
+    return acct.reader();
+}
+
+def scribble(): Int {
+    val a = new Account(1);
+    val b = new Account(2);
+    val fa = a.reader();
+    val fb = b.reader();
+    return fa() + fb();
+}
+
+def main(): Int {
+    val r = makeReader();
+    val noise = scribble();
+    if (r() != 41 || noise != 3) { return 1; }
+    return 0;
+}

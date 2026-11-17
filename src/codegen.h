@@ -7,6 +7,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include "llvm_compat.h"
+#include <sstream>
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
@@ -66,6 +67,13 @@ public:
     // A code-generation error that must fail the compilation (printed now, counted for main).
     int errorCount = 0;
     void reportError(const std::string& message);
+    // reportError of the concatenated parts (strings, numbers, ...).
+    template <class... Parts>
+    void error(const Parts&... parts) {
+        std::ostringstream text;
+        (text << ... << parts);
+        reportError(text.str());
+    }
     // A stack slot in the entry block of the current function, so code in a loop does not allocate
     // a new one on every iteration.
     llvm::AllocaInst* createEntryAlloca(llvm::Type* type, const std::string& name);

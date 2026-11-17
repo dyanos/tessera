@@ -1,0 +1,40 @@
+// Field names in defaults: the declaring class's fields only, read through the receiver; member
+// and argument names in a default are not fields; a template class calls the global function.
+val limit = 10;
+
+class Base(v: Int) {
+    def m(x: Int = limit): Int = x                    // the global: Base has no field `limit`
+}
+
+class Derived(limit: Int) extends Base { }
+
+class Counter(start: Int) {
+    def next(step: Int = start): Int = step + 1
+    def shifted(start: Int): Int = this.next()        // the field, not the parameter
+}
+
+class Point(start: Int) { }
+
+def twice(start: Int): Int = start * 2
+
+class Pair(start: Int, other: Point) {
+    def m(x: Int = other.start + twice(start = 4)): Int = x
+}
+
+def size(a: Int, b: Int = 1): Int = a + b
+
+template<typename T>
+class Box(v: T) {
+    def get(): Int = size(7)                          // the global function: 7 + 1
+}
+
+def main(): Int {
+    if (new Derived(99).m() != 10) { return 1; }
+    if (new Counter(3).shifted(100) != 4) { return 2; }
+    val c = new Counter(5);
+    if (c.next() != 6) { return 3; }
+    val p = new Pair(100, new Point(3));
+    if (p.m() != 11) { return 4; }
+    if (new Box<Int>(1).get() != 8) { return 5; }
+    return 0;
+}

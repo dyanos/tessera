@@ -12,6 +12,7 @@
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalVariable.h>
+#include <functional>
 #include <map>
 
 namespace {
@@ -64,6 +65,12 @@ std::string signatureText(const std::string& name, const std::vector<const Type*
     return text + "): " + typeText(ret);
 }
 
+// The removed interface declarations (their method parameters are used by calls).
+std::vector<std::unique_ptr<ASTNode>>& interfaceDeclarations() {
+    static std::vector<std::unique_ptr<ASTNode>> declarations;
+    return declarations;
+}
+
 // Default method bodies, by interface.
 std::map<std::string, std::vector<std::unique_ptr<FunctionDeclarationNode>>>& defaultMethods() {
     static std::map<std::string, std::vector<std::unique_ptr<FunctionDeclarationNode>>> table;
@@ -111,6 +118,14 @@ int InterfaceInfo::methodIndex(const std::string& methodName, size_t arity) cons
 const InterfaceInfo* findInterface(const std::string& name) {
     auto it = interfaces().find(name);
     return it == interfaces().end() ? nullptr : &it->second;
+}
+
+void forEachInterfaceMethod(const std::function<void(const std::string&, FunctionDeclarationNode*)>& visit) {
+    for (auto& node : interfaceDeclarations()) {
+        auto* decl = dynamic_cast<InterfaceDeclarationNode*>(node.get());
+        if (!decl) continue;
+        for (auto& m : decl->methods) if (m) visit(decl->name, m.get());
+    }
 }
 
 bool isInterfaceType(const Type* type) {
@@ -179,9 +194,11 @@ bool lowerInterfaces(ASTNode* root) {
                 }
             }
             info.methods.push_back(std::move(method));
-            if (m->body) defaultMethods()[decl->name].push_back(std::move(m));
+            if (m->body) defaultMethods()[decl->name].push_back(std::make_unique<FunctionDeclarationNode>(*m));
         }
         interfaces()[decl->name] = std::move(info);
+        // The declaration stays alive: calls through interface values take its parameters (defaults).
+        interfaceDeclarations().push_back(std::move(statement));
     }
     program->statements = std::move(kept);
 
@@ -378,7 +395,7 @@ llvm::Value* codegenInterfaceCall(MethodCallNode& call) {
     const InterfaceInfo* info = receiverType ? findInterface(receiverType->getName()) : nullptr;
     const int index = info ? info->methodIndex(call.methodName, call.arguments.size()) : -1;
     if (index < 0) {
-        { std::ostringstream os_; os_ << "interface has no method '" << call.methodName << "'"; CodeGenerator::getInstance().reportError(os_.str()); }
+        CodeGenerator::getInstance().error("interface has no method '", call.methodName, "'");
         return nullptr;
     }
     const InterfaceMethod& method = info->methods[static_cast<size_t>(index)];

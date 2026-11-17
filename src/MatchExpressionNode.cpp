@@ -106,7 +106,7 @@ bool emitPatternTest(CodeGenerator& cg, PatternNode& pattern, const ValueRef& re
             BinaryExpressionNode equal(ref(), "==", pattern.literal->clone());
             llvm::Value* condition = toCondition(cg, equal.codegen());
             if (!condition) {
-                { std::ostringstream os_; os_ << "cannot compare the matched value with a pattern"; CodeGenerator::getInstance().reportError(os_.str()); }
+                CodeGenerator::getInstance().error("cannot compare the matched value with a pattern");
                 return false;
             }
             branchOn(condition);
@@ -155,7 +155,7 @@ llvm::Value* MatchExpressionNode::codegenResolved() {
     static int counter = 0;
     auto valueType = expression ? stripBorrow(expression->getType()) : nullptr;
     if (!valueType || valueType->getKind() == Type::Kind::UNKNOWN) {
-        { std::ostringstream os_; os_ << "cannot determine the type of the matched value"; CodeGenerator::getInstance().reportError(os_.str()); }
+        CodeGenerator::getInstance().error("cannot determine the type of the matched value");
         return nullptr;
     }
     const std::string name = "__match_" + std::to_string(counter++);
@@ -198,7 +198,7 @@ llvm::Value* MatchExpressionNode::codegenResolved() {
         if (guards[i]) {
             llvm::Value* condition = toCondition(cg, guards[i]->codegen());
             if (!condition) {
-                { std::ostringstream os_; os_ << "a match guard must be a Boolean"; CodeGenerator::getInstance().reportError(os_.str()); }
+                CodeGenerator::getInstance().error("a match guard must be a Boolean");
                 cg.symbolTable.exitScope();
                 return nullptr;
             }
@@ -211,7 +211,7 @@ llvm::Value* MatchExpressionNode::codegenResolved() {
             if (resultLLVMType) {
                 result = coerceValueToLLVMType(result, resultLLVMType);
                 if (!result || result->getType() != resultLLVMType) {
-                    { std::ostringstream os_; os_ << "match case result has an unexpected type"; CodeGenerator::getInstance().reportError(os_.str()); }
+                    CodeGenerator::getInstance().error("match case result has an unexpected type");
                     cg.symbolTable.exitScope();
                     return nullptr;
                 }

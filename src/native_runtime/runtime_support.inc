@@ -464,6 +464,19 @@ int csec_lex_quoted(const char* source, int index) {
     return source[cursor] == quote ? cursor + 1 : cursor;
 }
 
+// The text of a Float literal (`0.1f`): its value rounded to float precision, written so a double
+// parse gives that float exactly ("0.100000001"), the same value csec++ uses for the literal.
+char* csec_lex_float_text(const char* text) {
+    const float value = std::strtof(text ? text : "0", nullptr);
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), "%.9g", static_cast<double>(value));
+    std::string result = buffer;
+    if (result.find_first_of(".eEn") == std::string::npos) result += ".0";  // keep it a decimal literal
+    char* copy = static_cast<char*>(std::malloc(result.size() + 1));
+    std::memcpy(copy, result.c_str(), result.size() + 1);
+    return copy;
+}
+
 int csec_lex_number(const char* source, int index) {
     if (!source || index < 0) return index;
     int cursor = index;

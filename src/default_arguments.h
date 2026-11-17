@@ -35,5 +35,10 @@ bool methodMayKeepThis(const std::string& className, const std::string& method);
 // Rewrites `args` of a call of `name` (a function, `owner.name` of an object, a method of class
 // `owner`, or the constructor of class `owner`) into positional arguments. Reports through `report`
 // and returns false on an invalid call.
+// `receiver` is the object of a method call: a default that names one of the class's fields reads
+// it from that object.
 bool expandCallArguments(std::vector<std::unique_ptr<ASTNode>>& args, CallTarget kind, const std::string& owner,
-                         const std::string& name, int line, const CallReport& report);
+                         const std::string& name, int line, const CallReport& report, ASTNode* receiver = nullptr);
+
+// Template bodies are not type checked: expands their calls syntactically (see the .cpp).
+bool expandTemplateBodies(ASTNode* program, const CallReport& report);

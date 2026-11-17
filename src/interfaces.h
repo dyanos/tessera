@@ -14,6 +14,7 @@
 #include "ast.h"
 #include "FunctionDeclarationNode.h"
 
+#include <functional>
 #include <set>
 #include <string>
 #include <vector>
@@ -63,6 +64,8 @@ struct InterfaceInfo {
 };
 
 const InterfaceInfo* findInterface(const std::string& name);
+// Every method declaration of every interface (with its parameters and their defaults).
+void forEachInterfaceMethod(const std::function<void(const std::string&, FunctionDeclarationNode*)>& visit);
 bool isInterfaceType(const Type* type);
 // Whether values of `type` may be used as `interfaceName` (the class or a parent implements it).
 bool implementsInterface(const Type* type, const std::string& interfaceName);

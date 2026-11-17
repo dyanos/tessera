@@ -14,6 +14,7 @@
 #include "default_arguments.h"
 
 #include "ast_walk.h"
+#include "interfaces.h"
 #include "source_map.h"
 
 #include <functional>
@@ -34,14 +35,18 @@ struct Signature {
     std::string display;                     // for diagnostics
     std::vector<ParameterNode*> parameters;
     FunctionDeclarationNode* declaration = nullptr;
+    std::string ownerClass;                  // the class (or interface) declaring a method
 };
 
 struct SignatureIndex {
     std::map<std::string, std::vector<Signature>> functions;     // top-level (and template) `def f`
     std::map<std::string, std::vector<Signature>> namespaced;    // `Obj.f` (object members)
     std::map<std::string, std::vector<Signature>> constructors;  // `new C(...)`
-    std::map<std::string, std::vector<Signature>> classMethods;  // `C#m`
+    std::map<std::string, std::vector<Signature>> classMethods;  // `C#m` (also `Interface#m`)
     std::map<std::string, std::string> superClass;               // class -> parent
+    std::map<std::string, std::set<std::string>> fields;         // class -> its constructor parameters and fields
+    std::map<std::string, bool> keepsThis;                       // methodMayKeepThis results, by `C#m`
+    std::map<std::string, std::vector<std::string>> methodClasses;  // method name -> classes declaring it
 };
 
 SignatureIndex& index() {
@@ -60,13 +65,17 @@ std::vector<ParameterNode*> parametersOf(std::vector<std::unique_ptr<ASTNode>>& 
 void indexClass(SignatureIndex& table, ClassDeclarationNode& cls) {
     table.constructors[cls.name].push_back({"new " + cls.name, parametersOf(cls.constructorParams)});
     if (!cls.superClassName.empty()) table.superClass[cls.name] = cls.superClassName;
+    for (auto* p : parametersOf(cls.constructorParams)) table.fields[cls.name].insert(p->name);
     auto* body = dynamic_cast<ClassBodyNode*>(cls.body.get());
     if (!body) return;
+    for (auto& fieldNode : body->fields) {
+        if (auto* field = dynamic_cast<VariableDeclarationNode*>(fieldNode.get())) table.fields[cls.name].insert(field->name);
+    }
     for (auto& m : body->methods) {
         auto* method = dynamic_cast<FunctionDeclarationNode*>(m.get());
         if (!method) continue;
         table.classMethods[cls.name + "#" + method->name].push_back(
-            {cls.name + "." + method->name, parametersOf(method->parameters), method});
+            {cls.name + "." + method->name, parametersOf(method->parameters), method, cls.name});
     }
 }
 
@@ -204,7 +213,45 @@ void indexCallSignatures(ASTNode* root) {
     auto* program = dynamic_cast<ProgramNode*>(root);
     if (!program) return;
     for (auto& statement : program->statements) indexTopLevel(table, statement.get());
+    // Calls through an interface value use the interface's declaration of the method.
+    forEachInterfaceMethod([&](const std::string& interfaceName, FunctionDeclarationNode* method) {
+        table.classMethods[interfaceName + "#" + method->name].push_back(
+            {interfaceName + "." + method->name, parametersOf(method->parameters), method, interfaceName});
+    });
+    for (const auto& entry : table.classMethods) {
+        const auto hash = entry.first.find('#');
+        table.methodClasses[entry.first.substr(hash + 1)].push_back(entry.first.substr(0, hash));
+    }
 }
+
+namespace {
+// Calls visit(cls) for `className` and then each parent, until visit returns true (a cycle in the
+// declared parents ends the walk). Returns whether some visit returned true.
+template <class Visit>
+bool forEachAncestor(const std::string& className, Visit visit) {
+    auto& table = index();
+    std::set<std::string> seen;
+    for (std::string cls = className; !cls.empty() && seen.insert(cls).second; ) {
+        if (visit(cls)) return true;
+        auto parent = table.superClass.find(cls);
+        cls = parent == table.superClass.end() ? std::string() : parent->second;
+    }
+    return false;
+}
+
+// Whether `name` is a constructor parameter or field of `className` or a parent.
+bool isFieldOf(const std::string& className, const std::string& name) {
+    return forEachAncestor(className, [&](const std::string& cls) {
+        auto it = index().fields.find(cls);
+        return it != index().fields.end() && it->second.count(name) > 0;
+    });
+}
+
+// Whether `cls` is `ancestor` or derives from it.
+bool derivesFrom(const std::string& cls, const std::string& ancestor) {
+    return forEachAncestor(cls, [&](const std::string& c) { return c == ancestor; });
+}
+}  // namespace
 
 bool hasNamedArguments(const std::vector<std::unique_ptr<ASTNode>>& args) {
     for (const auto& a : args) {
@@ -215,14 +262,9 @@ bool hasNamedArguments(const std::vector<std::unique_ptr<ASTNode>>& args) {
 }
 
 bool hasMethodSignatures(const std::string& className, const std::string& method) {
-    auto& table = index();
-    std::set<std::string> seen;
-    for (std::string cls = className; !cls.empty() && seen.insert(cls).second; ) {
-        if (table.classMethods.count(cls + "#" + method)) return true;
-        auto parent = table.superClass.find(cls);
-        cls = parent == table.superClass.end() ? std::string() : parent->second;
-    }
-    return false;
+    return forEachAncestor(className, [&](const std::string& cls) {
+        return index().classMethods.count(cls + "#" + method) > 0;
+    });
 }
 
 namespace {
@@ -230,20 +272,26 @@ namespace {
 // the methods it calls on `this`). Unknown methods may.
 bool mayKeepThis(const std::string& className, const std::string& method, std::set<std::string>& visiting) {
     auto& table = index();
-    std::vector<FunctionDeclarationNode*> declarations;
-    std::set<std::string> seen;
-    for (std::string cls = className; !cls.empty() && seen.insert(cls).second; ) {
+    std::vector<const Signature*> declarations;  // each with the class that declares it
+    forEachAncestor(className, [&](const std::string& cls) {
         auto it = table.classMethods.find(cls + "#" + method);
-        if (it != table.classMethods.end()) {
-            for (const auto& sig : it->second) if (sig.declaration) declarations.push_back(sig.declaration);
-            break;
-        }
-        auto parent = table.superClass.find(cls);
-        cls = parent == table.superClass.end() ? std::string() : parent->second;
-    }
+        if (it == table.classMethods.end()) return false;
+        for (const auto& sig : it->second) if (sig.declaration) declarations.push_back(&sig);
+        return true;
+    });
     if (declarations.empty()) return true;
+    // An override in a subclass runs when the object is of that subclass.
+    auto classes = table.methodClasses.find(method);
+    if (classes != table.methodClasses.end()) {
+        for (const auto& cls : classes->second) {
+            if (cls == className || !derivesFrom(cls, className)) continue;
+            for (const auto& sig : table.classMethods[cls + "#" + method]) if (sig.declaration) declarations.push_back(&sig);
+        }
+    }
     if (!visiting.insert(className + "#" + method).second) return false;  // recursion: judged by the other uses
-    for (FunctionDeclarationNode* fn : declarations) {
+    for (const Signature* declared : declarations) {
+        FunctionDeclarationNode* fn = declared->declaration;
+        const std::string& declaringClass = declared->ownerClass.empty() ? className : declared->ownerClass;
         bool keeps = false;
         std::function<void(ASTNode*, ASTNode*)> scan = [&](ASTNode* node, ASTNode* parent) {
             if (!node || keeps) return;
@@ -261,16 +309,18 @@ bool mayKeepThis(const std::string& className, const std::string& method, std::s
             }
             if (auto* call = dynamic_cast<FunctionCallNode*>(node)) {
                 // A method called without `this.` receives this object too.
-                if (hasMethodSignatures(className, call->functionName) && mayKeepThis(className, call->functionName, visiting)) {
+                if (hasMethodSignatures(declaringClass, call->functionName) &&
+                    mayKeepThis(className, call->functionName, visiting)) {
                     keeps = true;
                     return;
                 }
             }
             if (dynamic_cast<LambdaExpressionNode*>(node)) {
-                // A lambda that mentions `this` or a field could outlive the call.
+                // A lambda that mentions `this` or a field (by its bare name too) could outlive the call.
                 ast_walk::walk(node, nullptr, [&](ASTNode* n, std::unique_ptr<ASTNode>*) {
                     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
-                        if (id->value == "this" || id->value.rfind("this.", 0) == 0) keeps = true;
+                        const std::string base = id->value.substr(0, id->value.find('.'));
+                        if (base == "this" || base == "super" || isFieldOf(declaringClass, base)) keeps = true;
                     }
                     return !keeps;
                 });
@@ -286,12 +336,60 @@ bool mayKeepThis(const std::string& className, const std::string& method, std::s
 }  // namespace
 
 bool methodMayKeepThis(const std::string& className, const std::string& method) {
+    auto& cache = index().keepsThis;
+    const std::string key = className + "#" + method;
+    auto it = cache.find(key);
+    if (it != cache.end()) return it->second;
     std::set<std::string> visiting;
-    return mayKeepThis(className, method, visiting);
+    const bool keeps = mayKeepThis(className, method, visiting);
+    cache[key] = keeps;
+    return keeps;
 }
 
+namespace {
+// `field` and `field.member` in expression positions of `slot` become reads through `receiver`.
+// Member names (`x.field`) and argument names (`g(field = 1)`) are not expressions and stay.
+void rewriteFieldReads(std::unique_ptr<ASTNode>& slot, const std::string& fieldOwner, const std::string& receiver) {
+    if (!slot) return;
+    if (auto* id = dynamic_cast<IdentifierNode*>(slot.get())) {
+        const auto dot = id->value.find('.');
+        const std::string head = id->value.substr(0, dot);
+        if (head == "this" || head == "super" || !isFieldOf(fieldOwner, head)) return;
+        std::unique_ptr<ASTNode> chain = std::make_unique<AccessFieldNode>(std::make_unique<IdentifierNode>(receiver),
+                                                                           std::make_unique<IdentifierNode>(head));
+        size_t start = dot;
+        while (start != std::string::npos) {
+            const size_t next = id->value.find('.', start + 1);
+            const std::string member = id->value.substr(start + 1, next == std::string::npos ? std::string::npos : next - start - 1);
+            chain = std::make_unique<AccessFieldNode>(std::move(chain), std::make_unique<IdentifierNode>(member));
+            start = next;
+        }
+        slot = std::move(chain);
+        return;
+    }
+    if (auto* access = dynamic_cast<AccessFieldNode*>(slot.get())) {
+        rewriteFieldReads(access->base, fieldOwner, receiver);  // not the member name
+        return;
+    }
+    if (auto* named = dynamic_cast<AssignmentExpressionNode*>(slot.get())) {
+        if (named->isNamedArgument) {
+            rewriteFieldReads(named->right, fieldOwner, receiver);  // not the parameter name
+            return;
+        }
+    }
+    if (auto* method = dynamic_cast<MethodCallNode*>(slot.get())) {
+        rewriteFieldReads(method->object, fieldOwner, receiver);
+        for (auto& a : method->arguments) rewriteFieldReads(a, fieldOwner, receiver);
+        return;
+    }
+    ast_walk::forEachChild(slot.get(), [&](ASTNode*, std::unique_ptr<ASTNode>* child) {
+        if (child) rewriteFieldReads(*child, fieldOwner, receiver);
+    });
+}
+}  // namespace
+
 bool expandCallArguments(std::vector<std::unique_ptr<ASTNode>>& args, CallTarget kind, const std::string& owner,
-                         const std::string& name, int line, const CallReport& report) {
+                         const std::string& name, int line, const CallReport& report, ASTNode* receiver) {
     auto& table = index();
     std::vector<const Signature*> candidates;
     std::string callee = name;
@@ -309,13 +407,10 @@ bool expandCallArguments(std::vector<std::unique_ptr<ASTNode>>& args, CallTarget
             break;
         case CallTarget::Method: {
             // The most derived class that declares the method: its overloads override the parents'.
-            std::set<std::string> seen;
-            for (std::string cls = owner; !cls.empty() && seen.insert(cls).second; ) {
+            forEachAncestor(owner, [&](const std::string& cls) {
                 collect(candidates, table.classMethods, cls + "#" + name);
-                if (!candidates.empty()) break;
-                auto parent = table.superClass.find(cls);
-                cls = parent == table.superClass.end() ? std::string() : parent->second;
-            }
+                return !candidates.empty();
+            });
             callee = owner + "." + name;
             break;
         }
@@ -369,6 +464,11 @@ bool expandCallArguments(std::vector<std::unique_ptr<ASTNode>>& args, CallTarget
         }
     }
     const Signature* chosen = viable.front();
+    // The class whose fields a method default may name (the class declaring the method): they are
+    // read from the receiver.
+    const std::string fieldOwner = kind == CallTarget::Method ? chosen->ownerClass : std::string();
+    const std::string receiverText = receiverName(receiver);
+    std::vector<size_t> defaulted;
     // A default is evaluated at the call site: a name in it must mean the same there as at the
     // declaration, i.e. not be shadowed by a local of the caller.
     for (size_t k = 0; k < chosen->parameters.size(); ++k) {
@@ -382,15 +482,27 @@ bool expandCallArguments(std::vector<std::unique_ptr<ASTNode>>& args, CallTarget
             else if (positional++ == k) supplied = true;
         }
         if (supplied) continue;
+        defaulted.push_back(k);
         bool shadowed = false;
+        bool needsReceiver = false;
         std::string shadowedName;
         ast_walk::walk(param->defaultValue.get(), nullptr, [&](ASTNode* n, std::unique_ptr<ASTNode>*) {
             if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
                 const std::string base = id->value.substr(0, id->value.find('.'));
+                if (!fieldOwner.empty() && isFieldOf(fieldOwner, base)) {
+                    // A field of the receiver: `this` inside the class, `r.field` for a named receiver.
+                    if (receiver && receiverText.empty()) { needsReceiver = true; shadowedName = base; }
+                    return true;
+                }
                 if (!shadowed && report.isShadowed(base)) { shadowed = true; shadowedName = base; }
             }
             return true;
         });
+        if (needsReceiver) {
+            fail("the default value of parameter '" + param->name + "' of '" + chosen->display + "' reads the field '" +
+                 shadowedName + "'; call the method on a named value or pass the argument");
+            return false;
+        }
         if (shadowed) {
             fail("the default value of parameter '" + param->name + "' of '" + chosen->display + "' refers to '" +
                          shadowedName + "', which is a different variable at this call; pass the argument");
@@ -399,6 +511,123 @@ bool expandCallArguments(std::vector<std::unique_ptr<ASTNode>>& args, CallTarget
     }
     std::vector<std::unique_ptr<ASTNode>> rewritten;
     bindArguments(args, *chosen, &rewritten, nullptr);
+    if (!fieldOwner.empty()) {
+        // A field named in a copied default is read from the receiver: `r.field` for a named one,
+        // `this.field` for `this`/`super` or a call without a receiver (so no local of the calling
+        // method can stand in for it).
+        const bool named = !receiverText.empty() && receiverText != "this" && receiverText != "super";
+        const std::string base = named ? receiverText : std::string("this");
+        for (size_t k : defaulted) rewriteFieldReads(rewritten[k], fieldOwner, base);
+    }
     args = std::move(rewritten);
     return true;
+}
+
+namespace {
+// Template bodies are not type checked, so their calls are matched syntactically: functions and
+// constructors by name (unless a parameter or local of the body has that name), methods of
+// `this`/`super`, object functions, and a method declared by exactly one class.
+void expandInBody(ASTNode* body, int startLine, const std::string& enclosingClass, const std::set<std::string>& locals,
+                  const CallReport& report, int& errors) {
+    CallReport local = report;
+    local.isShadowed = [&locals](const std::string& name) { return locals.count(name) > 0; };
+    local.error = [&](const std::string& message) { report.error(message); ++errors; };
+    auto& table = index();
+    int line = startLine;
+    ast_walk::walk(body, nullptr, [&](ASTNode* node, std::unique_ptr<ASTNode>*) {
+        if (node->line > 0) line = node->line;
+        auto unresolved = [&](const std::vector<std::unique_ptr<ASTNode>>& args, const std::string& callee) {
+            if (hasNamedArguments(args)) {
+                local.error("Error" + where(line) + ": named arguments in a template body need a function, a "
+                            "constructor, an object function or a method of this/super; '" + callee + "' is none");
+            }
+        };
+        if (auto* call = dynamic_cast<FunctionCallNode*>(node)) {
+            if (locals.count(call->functionName)) {
+                unresolved(call->arguments, call->functionName);
+            }
+            // A bare call names a global function before a method of the class (as code generation
+            // resolves it); a method is the target only when no function has the name.
+            else if (table.functions.count(call->functionName)) {
+                expandCallArguments(call->arguments, CallTarget::Function, "", call->functionName, line, local);
+            }
+            else if (!enclosingClass.empty() && hasMethodSignatures(enclosingClass, call->functionName)) {
+                expandCallArguments(call->arguments, CallTarget::Method, enclosingClass, call->functionName, line, local);
+            }
+            else {
+                unresolved(call->arguments, call->functionName);
+            }
+        }
+        else if (auto* method = dynamic_cast<MethodCallNode*>(node)) {
+            const std::string object = receiverName(method->object.get());
+            if ((object == "this" || object == "super") && !enclosingClass.empty()) {
+                std::string cls = enclosingClass;
+                if (object == "super") {
+                    auto parent = table.superClass.find(cls);
+                    cls = parent == table.superClass.end() ? std::string() : parent->second;
+                }
+                if (!cls.empty()) {
+                    expandCallArguments(method->arguments, CallTarget::Method, cls, method->methodName, line, local,
+                                        method->object.get());
+                }
+            }
+            else if (!object.empty() && !locals.count(object) && table.namespaced.count(object + "." + method->methodName)) {
+                expandCallArguments(method->arguments, CallTarget::Namespaced, object, method->methodName, line, local);
+            }
+            else {
+                // The receiver's type is not known in a template body.
+                unresolved(method->arguments, method->methodName);
+            }
+        }
+        else if (auto* creation = dynamic_cast<ClassInstanceCreationNode*>(node)) {
+            expandCallArguments(creation->arguments, CallTarget::Constructor, creation->className, "", line, local);
+        }
+        return true;
+    });
+}
+
+std::set<std::string> namesDeclaredIn(FunctionDeclarationNode& fn) {
+    std::set<std::string> names;
+    for (auto* p : parametersOf(fn.parameters)) names.insert(p->name);
+    ast_walk::walk(fn.body.get(), nullptr, [&](ASTNode* n, std::unique_ptr<ASTNode>*) {
+        if (auto* decl = dynamic_cast<VariableDeclarationNode*>(n)) names.insert(decl->name);
+        else if (auto* lambda = dynamic_cast<LambdaExpressionNode*>(n)) {
+            for (auto* p : parametersOf(lambda->arguments)) names.insert(p->name);
+        }
+        else if (auto* loop = dynamic_cast<ForStatementNode*>(n)) {
+            names.insert(loop->variable);
+            if (!loop->tokenValue.empty()) names.insert(loop->tokenValue);
+        }
+        return true;
+    });
+    return names;
+}
+}  // namespace
+
+bool expandTemplateBodies(ASTNode* root, const CallReport& report) {
+    auto* program = dynamic_cast<ProgramNode*>(root);
+    if (!program) return true;
+    int errors = 0;
+    for (auto& statement : program->statements) {
+        auto* tmpl = dynamic_cast<TemplateDeclarationNode*>(statement.get());
+        if (!tmpl) continue;
+        if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(tmpl->declaration.get())) {
+            expandInBody(fn->body.get(), fn->line, "", namesDeclaredIn(*fn), report, errors);
+        }
+        else if (auto* cls = dynamic_cast<ClassDeclarationNode*>(tmpl->declaration.get())) {
+            auto* body = dynamic_cast<ClassBodyNode*>(cls->body.get());
+            if (!body) continue;
+            for (auto& m : body->methods) {
+                if (auto* method = dynamic_cast<FunctionDeclarationNode*>(m.get())) {
+                    std::set<std::string> names = namesDeclaredIn(*method);
+                    for (auto* p : parametersOf(cls->constructorParams)) names.insert(p->name);
+                    for (auto& fieldNode : body->fields) {
+                        if (auto* field = dynamic_cast<VariableDeclarationNode*>(fieldNode.get())) names.insert(field->name);
+                    }
+                    expandInBody(method->body.get(), method->line, cls->name, names, report, errors);
+                }
+            }
+        }
+    }
+    return errors == 0;
 }

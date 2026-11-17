@@ -43,7 +43,7 @@ EnumDeclarationNode::EnumDeclarationNode(const EnumDeclarationNode& other)
 void EnumDeclarationNode::accept(ASTVisitor& visitor) { visitor.visit(*this); }
 
 llvm::Value* EnumDeclarationNode::codegen() {
-    { std::ostringstream os_; os_ << "enum '" << name << "' was not lowered"; CodeGenerator::getInstance().reportError(os_.str()); }
+    CodeGenerator::getInstance().error("enum '", name, "' was not lowered");
     return nullptr;
 }
 
@@ -80,7 +80,7 @@ llvm::Value* EnumConstructNode::codegen() {
     const EnumInfo* info = findEnum(enumName);
     const EnumVariantInfo* variant = info ? info->variant(variantName) : nullptr;
     if (!info || !variant) {
-        { std::ostringstream os_; os_ << "unknown enum variant " << enumName << "." << variantName; CodeGenerator::getInstance().reportError(os_.str()); }
+        CodeGenerator::getInstance().error("unknown enum variant ", enumName, ".", variantName);
         return nullptr;
     }
     const std::string className = instanceName();
@@ -96,7 +96,7 @@ llvm::Value* EnumConstructNode::codegen() {
         structType = symbol ? llvm::dyn_cast_or_null<llvm::StructType>(symbol->classType) : nullptr;
     }
     if (!symbol || !structType || structType->isOpaque()) {
-        { std::ostringstream os_; os_ << "enum class '" << className << "' is not generated"; CodeGenerator::getInstance().reportError(os_.str()); }
+        CodeGenerator::getInstance().error("enum class '", className, "' is not generated");
         return nullptr;
     }
 
@@ -127,7 +127,7 @@ llvm::Value* EnumConstructNode::codegen() {
     };
     const int tagIndex = fieldIndex(enumTagField());
     if (tagIndex < 0) {
-        { std::ostringstream os_; os_ << "enum class '" << className << "' has no tag field"; CodeGenerator::getInstance().reportError(os_.str()); }
+        CodeGenerator::getInstance().error("enum class '", className, "' has no tag field");
         return nullptr;
     }
     cg.builder.CreateStore(llvm::ConstantInt::get(llvm::Type::getInt32Ty(cg.context), variant->tag),
@@ -137,14 +137,13 @@ llvm::Value* EnumConstructNode::codegen() {
         const int index = fieldIndex(field);
         auto param = symbol->constructorParams.find(field);
         if (index < 0 || param == symbol->constructorParams.end() || !param->second) {
-            { std::ostringstream os_; os_ << "enum class '" << className << "' has no field '" << field << "'"; CodeGenerator::getInstance().reportError(os_.str()); }
+            CodeGenerator::getInstance().error("enum class '", className, "' has no field '", field, "'");
             return nullptr;
         }
         llvm::Type* storage = getABIStorageType(param->second->type.get());
         llvm::Value* v = coerceValueToLLVMType(values[k], storage);
         if (!v || v->getType() != storage) {
-            { std::ostringstream os_; os_ << "value for " << enumName << "." << variantName << " field '"
-                      << variant->fieldNames[k] << "' has an incompatible type"; CodeGenerator::getInstance().reportError(os_.str()); }
+            CodeGenerator::getInstance().error("value for ", enumName, ".", variantName, " field '", variant->fieldNames[k], "' has an incompatible type");
             return nullptr;
         }
         cg.builder.CreateStore(v, cg.builder.CreateStructGEP(structType, instance, static_cast<unsigned>(index), field + ".ptr"));
@@ -199,7 +198,7 @@ llvm::Value* TryNode::codegen() {
     std::vector<std::unique_ptr<Type>> returnArgs;
     const EnumInfo* returnInfo = enumOfType(functionReturnType.get(), &returnArgs);
     if (!info || !returnInfo) {
-        { std::ostringstream os_; os_ << "'?' needs an Option or Result value in a function returning one"; CodeGenerator::getInstance().reportError(os_.str()); }
+        CodeGenerator::getInstance().error("'?' needs an Option or Result value in a function returning one");
         return nullptr;
     }
     const bool isOption = info->name == "Option";

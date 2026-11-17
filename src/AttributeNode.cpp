@@ -95,7 +95,9 @@ llvm::Value* AttributeNode::codegen() {
     // Node가 IdentifierNode이라고 하더라도 FunctionCall로 취급
     switch (this->expr->nodeType) {
     case ASTNodeType::FUNCTION_CALL:
-        return this->expr->codegen();
+        // An attribute with arguments the compiler does not know (`[@native("fast")]`) has no effect;
+        // the declaration it annotates is still compiled (it used to be dropped).
+        break;
 
     case ASTNodeType::IDENTIFIER:
     {

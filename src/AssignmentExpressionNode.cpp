@@ -15,6 +15,15 @@ void AssignmentExpressionNode::accept(ASTVisitor& visitor) {
 }
 
 llvm::Value* AssignmentExpressionNode::codegen() {
+    if (isNamedArgument) {
+        // Every named argument is rewritten into a positional one before code generation; one left
+        // here belongs to a call whose parameters were never matched.
+        CodeGenerator::getInstance().error("named argument '",
+            dynamic_cast<IdentifierNode*>(left.get()) ? static_cast<IdentifierNode*>(left.get())->value : std::string("?"),
+            "' could not be matched to a parameter",
+            line > 0 ? " (line " + std::to_string(line) + ")" : std::string());
+        return nullptr;
+    }
     // `d[key] = value` (and `d[key] op= value`) stores into a dictionary; the left side is not an
     // address, so it must not be evaluated as a read (which would raise KeyError for a new key).
     if (auto* access = dynamic_cast<ArrayAccessNode*>(left.get())) {

@@ -14,7 +14,7 @@ void LoopControlNode::accept(ASTVisitor& visitor) {
 llvm::Value* LoopControlNode::codegen() {
     auto& cg = CodeGenerator::getInstance();
     if (cg.loopTargets.empty()) {
-        { std::ostringstream os_; os_ << "'" << (isBreak ? "break" : "continue") << "' outside a loop"; CodeGenerator::getInstance().reportError(os_.str()); }
+        CodeGenerator::getInstance().error("'", (isBreak ? "break" : "continue"), "' outside a loop");
         return nullptr;
     }
     auto* block = cg.builder.GetInsertBlock();

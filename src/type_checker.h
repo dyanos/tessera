@@ -6,6 +6,7 @@
 
 #include "ASTVisitor.h"
 #include "enum_nodes.h"
+#include "default_arguments.h"
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -146,8 +147,9 @@ public:
 	// Template arguments must implement the interfaces their parameter is bounded by.
 	void checkTemplateBounds(const std::string& templateName, const std::vector<const Type*>& arguments);
 	// Default and named arguments of a call whose target is now known (default_arguments.cpp).
-	bool expandArguments(std::vector<std::unique_ptr<ASTNode>>& args, int kind, const std::string& owner,
-	                     const std::string& name, int line);
+	bool expandArguments(std::vector<std::unique_ptr<ASTNode>>& args, CallTarget kind, const std::string& owner,
+	                     const std::string& name, int line, ASTNode* receiver = nullptr);
+	CallReport callReport();
 
 private:
     struct OwnershipState {

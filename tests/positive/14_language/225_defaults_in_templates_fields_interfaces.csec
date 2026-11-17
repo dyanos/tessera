@@ -1,0 +1,38 @@
+// Default and named arguments inside template bodies, defaults that read the receiver's fields,
+// defaults declared by an interface, and a forward call of an attributed function.
+def g(a: Int, b: Int = 5): Int = a + b
+
+template<typename T>
+def twice(x: T): Int = g(1) + g(1, b = 2)            // 6 + 3
+
+template<typename T>
+class Box(v: T) {
+    def get(): Int = g(7)                             // 12
+}
+
+class Counter(start: Int) {
+    def next(step: Int = start): Int = step + 1
+    def again(): Int = this.next()
+}
+
+interface Shape {
+    def area(scale: Double = 1.0): Double;
+}
+
+class Square(s: Double) implements Shape {
+    def area(scale: Double): Double = s * s * scale
+}
+
+def main(): Int {
+    if (twice<Int>(0) != 9) { return 1; }
+    if (new Box<Int>(1).get() != 12) { return 2; }
+    val c = new Counter(3);
+    if (c.next() != 4 || new Counter(7).again() != 8 || c.next(step = 10) != 11) { return 3; }
+    val sq: Shape = new Square(2.0);
+    if (sq.area() != 4.0 || sq.area(scale = 0.5) != 2.0) { return 4; }
+    if (later(1) != 3) { return 5; }
+    return 0;
+}
+
+[@Inline]
+def later(x: Int, y: Int = 2): Int = x + y

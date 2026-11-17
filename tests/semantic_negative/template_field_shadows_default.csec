@@ -1,0 +1,9 @@
+val k = 1;
+def g(a: Int = k): Int = a
+
+template<typename T>
+class Box(k: Int) {
+    def get(): Int = g()   // the default `k` would read the field k
+}
+
+def main(): Int { return new Box<Int>(5).get(); }
