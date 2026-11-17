@@ -1,0 +1,93 @@
+import std.dataframe
+
+def dir(): String = "tests/stdlib/data/npy/"
+
+def checkPlain(): Int {
+    val m = dfReadNpy(dir() + "f64_2d.npy");
+    if (m == 0) {
+        println(dfLastError());
+        return 1;
+    }
+    if (dfRows(m) != 4 or dfColumns(m) != 3) { return 2; }
+    if (dfColumnName(m, 2) != "column_2") { return 3; }
+    if (dfColumnType(m, "column_0") != "double") { return 4; }
+    if (dfGetDouble(m, "column_1", 2) != 3.5e0) { return 5; }
+    if (dfSum(m, "column_2") != 13.0e0) { return 6; }
+
+    val f = dfReadNpy(dir() + "i32_fortran_be.npy");
+    if (f == 0) { return 7; }
+    if (dfRows(f) != 3 or dfColumns(f) != 2) { return 8; }
+    if (dfColumnType(f, "column_1") != "long") { return 9; }
+    if (dfGetLong(f, "column_0", 2) != 5) { return 10; }
+    if (dfGetLong(f, "column_1", 1) != -4) { return 11; }
+
+    val u = dfReadNpy(dir() + "u8.npy");
+    if (u == 0 or dfColumns(u) != 1 or dfGetLong(u, "column_0", 1) != 255) { return 12; }
+
+    val v2 = dfReadNpy(dir() + "i64_v2.npy");
+    if (v2 == 0 or dfGetLong(v2, "column_0", 0) != -4611686018427387904) { return 13; }
+
+    val s = dfReadNpy(dir() + "scalar.npy");
+    if (s == 0 or dfRows(s) != 1 or dfGetDouble(s, "column_0", 0) != 3.5e0) { return 14; }
+
+    val b = dfReadNpy(dir() + "bool.npy");
+    if (b == 0 or dfColumnType(b, "column_0") != "bool" or dfSum(b, "column_0") != 2.0e0) { return 15; }
+
+    val h = dfReadNpy(dir() + "f16.npy");
+    if (h == 0 or dfGetDouble(h, "column_0", 1) != -0.25e0 or dfGetDouble(h, "column_0", 2) != 65504.0e0) { return 16; }
+
+    val g = dfReadNpy(dir() + "f32.npy");
+    if (g == 0 or dfGetDouble(g, "column_0", 0) != 1.5e0) { return 17; }
+    return 0;
+}
+
+def checkStructured(): Int {
+    val r = dfReadNpy(dir() + "structured.npy");
+    if (r == 0) {
+        println(dfLastError());
+        return 1;
+    }
+    if (dfRows(r) != 3 or dfColumns(r) != 6) { return 2; }
+    if (dfColumnName(r, 0) != "id" or dfColumnName(r, 5) != "when") { return 3; }
+    if (dfColumnType(r, "flag") != "bool" or dfColumnType(r, "score") != "double") { return 4; }
+    if (dfColumnType(r, "name") != "string" or dfColumnType(r, "when") != "long") { return 5; }
+    if (dfSum(r, "id") != 6.0e0) { return 6; }
+    if (dfGetDouble(r, "score", 1) != -1.25e0) { return 7; }
+    if (dfGetString(r, "name", 0) != "alice") { return 8; }
+    if (dfGetString(r, "name", 2) != "") { return 10; }
+    if (dfGetString(r, "tag", 0) != "ab" or dfGetString(r, "tag", 1) != "xyz") { return 11; }
+    if (dfGetLong(r, "when", 0) != 10) { return 12; }
+    if (!dfIsNull(r, "when", 1)) { return 13; }
+    if (dfNullCount(r, "when") != 1) { return 14; }
+
+    val be = dfReadNpy(dir() + "big_endian_rec.npy");
+    if (be == 0 or dfGetLong(be, "a", 0) != 7 or dfGetDouble(be, "b", 0) != 1.0e0) { return 15; }
+
+    val df = readNpy(dir() + "structured.npy");
+    if (df.height() != 3 or df.width() != 6) { return 16; }
+    val chars = df.select(col("name").str().lenChars());
+    if (chars.getLong("name", 0) != 5 or chars.getLong("name", 1) != 2) { return 17; }
+    val bytes = df.select(col("name").str().lenBytes());
+    if (bytes.getLong("name", 1) != 6) { return 18; }
+    return 0;
+}
+
+def checkErrors(): Int {
+    if (dfReadNpy(dir() + "u64_overflow.npy") != 0) { return 1; }
+    if (dfReadNpy(dir() + "object.npy") != 0) { return 2; }
+    if (dfReadNpy(dir() + "cube.npy") != 0) { return 3; }
+    if (dfReadNpy(dir() + "complex.npy") != 0) { return 4; }
+    if (dfReadNpy(dir() + "missing.npy") != 0) { return 5; }
+    if (dfReadNpy("tests/stdlib/data/types.parquet") != 0) { return 6; }
+    return 0;
+}
+
+def main(): Int {
+    var r: Int = checkPlain();
+    if (r != 0) { return 100 + r; }
+    r = checkStructured();
+    if (r != 0) { return 130 + r; }
+    r = checkErrors();
+    if (r != 0) { return 160 + r; }
+    return 0;
+}

@@ -419,6 +419,7 @@ CSEC_NATIVE_API long long csec_df_read_csv(const char* path);
 CSEC_NATIVE_API long long csec_df_from_csv_text(const char* text);
 CSEC_NATIVE_API int csec_df_write_csv(long long handle, const char* path);
 CSEC_NATIVE_API char* csec_df_to_csv_text(long long handle);
+CSEC_NATIVE_API long long csec_df_read_npy(const char* path);
 CSEC_NATIVE_API void csec_df_free(long long handle);
 CSEC_NATIVE_API long long csec_df_rows(long long handle);
 CSEC_NATIVE_API int csec_df_columns(long long handle);
