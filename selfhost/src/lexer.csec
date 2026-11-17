@@ -241,7 +241,9 @@ def tokenizeSlow(source: String): String {
         else if (isDigit(ch)) {
             end = lexNumber(source, cursor);
             text = slice(source, cursor, end);
-            if (text.contains(".") or text.contains("e") or text.contains("E")) {
+            // A hexadecimal literal is an integer even when its digits include E (`0xEF`).
+            if (!(text.startsWith("0x") or text.startsWith("0X")) and
+                (text.contains(".") or text.contains("e") or text.contains("E"))) {
                 // `1.5f`: a Float literal (the number scan includes the suffix). The token is the value
                 // rounded to float precision, the value csec++ gives the literal.
                 if (text.endsWith("f") or text.endsWith("F")) {

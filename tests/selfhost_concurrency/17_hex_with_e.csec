@@ -1,0 +1,5 @@
+// A hexadecimal literal whose digits include E is an integer in both compilers.
+def main(): Int {
+    val h = 0xEF;
+    return h - 197;
+}

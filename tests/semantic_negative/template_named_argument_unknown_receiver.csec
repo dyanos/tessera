@@ -1,0 +1,6 @@
+class Cache(v: Int) { def get(i: Int, d: Int = 0): Int = i + d }
+
+template<typename T>
+def f(x: T): Int = x.get(1, d = 2)   // the type of x is not known in a template body
+
+def main(): Int { return f<Cache>(new Cache(1)); }

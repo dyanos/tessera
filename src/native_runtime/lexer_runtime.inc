@@ -980,11 +980,12 @@ char* csec_tokenize_source(const char* sourceText) {
         } else if (csec_lex_is_digit(ch)) {
             size_t end = csec_lex_number_end(source, cursor);
             std::string text = csec_lex_slice(source, cursor, end);
-            char kind = (text.find('.') != std::string::npos || text.find('e') != std::string::npos ||
-                         text.find('E') != std::string::npos) ? 'F' : 'N';
+            // A hexadecimal literal is an integer even when its digits include E (`0xEF`).
+            const bool hexadecimal = text.size() > 1 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X');
+            char kind = !hexadecimal && (text.find('.') != std::string::npos || text.find('e') != std::string::npos ||
+                                         text.find('E') != std::string::npos) ? 'F' : 'N';
             // `1.5f`: a Float literal (the number scan includes the suffix). The token is the value
             // rounded to float precision, the value csec++ gives the literal.
-            const bool hexadecimal = text.size() > 1 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X');
             if (kind == 'F' && !hexadecimal && text.size() > 1 && (text.back() == 'f' || text.back() == 'F')) {
                 char* rounded = csec_lex_float_text(text.substr(0, text.size() - 1).c_str());
                 text = rounded;
