@@ -78,7 +78,7 @@ name that no imported module declared is an ordinary unresolved call (an error).
 | --- | --- |
 | `std.microthread` | Erlang-style processes (§2) |
 | `std.thread` | OS threads, mutexes, atomics, channels |
-| `std.dataframe` | Polars-style DataFrame / LazyFrame / expressions; Parquet and CSV (§8) |
+| `std.dataframe` | Polars-style DataFrame / LazyFrame / expressions; Parquet, CSV, and .npy (§8) |
 | `std.process` | running OS processes (`runCommand`, `commandOutput`, `startProcess`, `waitProcess`, ...) |
 | `std.math.natural` | `Nat` division/modulo/power/gcd/lcm/isqrt, primality, factorial, binomial, Fibonacci |
 | `std.math.real` | constants and real-number helpers |
@@ -312,7 +312,7 @@ def main(): Int {
 - `lastScanInfo()` reports what the last scan read (`row_groups=1/3 columns=2/6`).
 
 **Input and output.** `readParquet(path[, "a,b"])`, `readCsv(path)`, `readCsvString(text)`,
-`scanParquet`, `scanCsv`, and `concat(a, b)`.
+`readNpy(path)`, `scanParquet`, `scanCsv`, and `concat(a, b)`.
 - Parquet: the reader handles flat schemas, data pages v1 and v2, and the PLAIN, dictionary, RLE,
   DELTA_*, and BYTE_STREAM_SPLIT encodings.
 - Compression: UNCOMPRESSED, SNAPPY, GZIP, and LZ4_RAW are built in. ZSTD, which Polars writes by
@@ -324,6 +324,12 @@ def main(): Int {
 - Parallelism: columns are decoded in parallel, and `take`-style operations (filter, sort, join)
   gather columns in parallel.
 - `writeParquet` writes uncompressed PLAIN files.
+- NumPy `.npy` (format versions 1-3, either byte order, C or Fortran order): a 0-D, 1-D, or 2-D
+  array becomes columns `column_0`, `column_1`, ...; a 1-D structured array becomes one column per
+  field (unnamed padding fields are skipped). `bool` becomes `bool`; signed and unsigned integers
+  (a `uint64` above the `i64` range is an error) and `datetime64`/`timedelta64` (raw ticks; NaT is
+  null) become `i64`; `float16/32/64` become `f64`; `S` and `U` strings become `str` with trailing
+  NULs removed. Object (pickled), complex, sub-array, and 3-D or higher arrays are rejected.
 
 **Errors.** Like a Polars exception, a failing operation prints `DataFrame error: ...` and exits
 with status 1. After `setRaiseErrors(false)` it instead returns an invalid frame (`isValid()` is
