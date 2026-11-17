@@ -698,12 +698,14 @@ function of an `object`, the constructor of `new C(...)`, or a method of the rec
 the most derived class that declares it, including enum methods; for an interface-typed receiver,
 the interface's declaration. Calls in template bodies, which are not type checked, are matched by
 name where the target is certain: functions (before methods of the class, as calls resolve) and
-constructors unless a local or field of the template has the name, methods of `this`/`super`, and
-object functions; a named argument in any other call there is an error. Named arguments move to
+constructors unless a local or field of the template has the name, methods of `this`/`super`,
+methods of a parameter or local whose every declaration in the body names one non-template class
+or interface (`c: Cache`, `val c = new Cache(...)`), and object functions; a named argument in any
+other call there is an error. Named arguments move to
 their parameter's position and each omitted one becomes a copy of its default, evaluated at the
 call site (in parameter order). A field of the class declaring the method, named in its default,
 is read from the receiver (`c.m()` uses `c.k`, `this.m()` uses `this.k`; a default naming a field
-needs a named receiver or `this`); any other name the call site shadows with a local is an error. A named argument that is never matched fails the
+needs a named receiver or `this`; an argument name inside a default, `g(k = 1)`, is not a read); any other name the call site shadows with a local is an error. A named argument that is never matched fails the
 compilation. When several overloads accept the call they must agree on parameter names and defaults.
 A named argument to anything else is an error.
 

@@ -325,6 +325,7 @@ tests/positive/14_language/224_call_resolution_and_drop.csec 0 0
 tests/positive/14_language/225_defaults_in_templates_fields_interfaces.csec 0 0
 tests/positive/14_language/226_drop_keeps_captured_objects.csec 0 0
 tests/positive/14_language/227_default_field_resolution.csec 0 0
+tests/positive/14_language/228_named_defaults_and_float_range.csec 0 0
 tests/selfhost_concurrency/01_spawn_named.csec 0 42
 tests/selfhost_concurrency/02_async_go.csec 0 42
 tests/selfhost_concurrency/03_thread_atomic.csec 0 42

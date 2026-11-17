@@ -288,6 +288,10 @@ bool mayKeepThis(const std::string& className, const std::string& method, std::s
             for (const auto& sig : table.classMethods[cls + "#" + method]) if (sig.declaration) declarations.push_back(&sig);
         }
     }
+    // A declaration without a body (an interface method) runs some implementation not seen here.
+    for (const Signature* declared : declarations) {
+        if (!declared->declaration->body) return true;
+    }
     if (!visiting.insert(className + "#" + method).second) return false;  // recursion: judged by the other uses
     for (const Signature* declared : declarations) {
         FunctionDeclarationNode* fn = declared->declaration;
@@ -347,44 +351,53 @@ bool methodMayKeepThis(const std::string& className, const std::string& method) 
 }
 
 namespace {
-// `field` and `field.member` in expression positions of `slot` become reads through `receiver`.
-// Member names (`x.field`) and argument names (`g(field = 1)`) are not expressions and stay.
-void rewriteFieldReads(std::unique_ptr<ASTNode>& slot, const std::string& fieldOwner, const std::string& receiver) {
+// Calls visit(slot, id) for each identifier of `slot` in an expression position. Member names
+// (`x.field`) and argument names (`g(field = 1)`) are not expressions and are skipped.
+template <class Visit>
+void forEachExpressionName(std::unique_ptr<ASTNode>& slot, Visit& visit) {
     if (!slot) return;
     if (auto* id = dynamic_cast<IdentifierNode*>(slot.get())) {
-        const auto dot = id->value.find('.');
-        const std::string head = id->value.substr(0, dot);
+        visit(slot, *id);
+        return;
+    }
+    if (auto* access = dynamic_cast<AccessFieldNode*>(slot.get())) {
+        forEachExpressionName(access->base, visit);  // not the member name
+        return;
+    }
+    if (auto* named = dynamic_cast<AssignmentExpressionNode*>(slot.get())) {
+        if (named->isNamedArgument) {
+            forEachExpressionName(named->right, visit);  // not the parameter name
+            return;
+        }
+    }
+    if (auto* method = dynamic_cast<MethodCallNode*>(slot.get())) {
+        forEachExpressionName(method->object, visit);
+        for (auto& a : method->arguments) forEachExpressionName(a, visit);
+        return;
+    }
+    ast_walk::forEachChild(slot.get(), [&](ASTNode*, std::unique_ptr<ASTNode>* child) {
+        if (child) forEachExpressionName(*child, visit);
+    });
+}
+
+// `field` and `field.member` in expression positions of `slot` become reads through `receiver`.
+void rewriteFieldReads(std::unique_ptr<ASTNode>& slot, const std::string& fieldOwner, const std::string& receiver) {
+    auto rewrite = [&](std::unique_ptr<ASTNode>& at, IdentifierNode& id) {
+        const auto dot = id.value.find('.');
+        const std::string head = id.value.substr(0, dot);
         if (head == "this" || head == "super" || !isFieldOf(fieldOwner, head)) return;
         std::unique_ptr<ASTNode> chain = std::make_unique<AccessFieldNode>(std::make_unique<IdentifierNode>(receiver),
                                                                            std::make_unique<IdentifierNode>(head));
         size_t start = dot;
         while (start != std::string::npos) {
-            const size_t next = id->value.find('.', start + 1);
-            const std::string member = id->value.substr(start + 1, next == std::string::npos ? std::string::npos : next - start - 1);
+            const size_t next = id.value.find('.', start + 1);
+            const std::string member = id.value.substr(start + 1, next == std::string::npos ? std::string::npos : next - start - 1);
             chain = std::make_unique<AccessFieldNode>(std::move(chain), std::make_unique<IdentifierNode>(member));
             start = next;
         }
-        slot = std::move(chain);
-        return;
-    }
-    if (auto* access = dynamic_cast<AccessFieldNode*>(slot.get())) {
-        rewriteFieldReads(access->base, fieldOwner, receiver);  // not the member name
-        return;
-    }
-    if (auto* named = dynamic_cast<AssignmentExpressionNode*>(slot.get())) {
-        if (named->isNamedArgument) {
-            rewriteFieldReads(named->right, fieldOwner, receiver);  // not the parameter name
-            return;
-        }
-    }
-    if (auto* method = dynamic_cast<MethodCallNode*>(slot.get())) {
-        rewriteFieldReads(method->object, fieldOwner, receiver);
-        for (auto& a : method->arguments) rewriteFieldReads(a, fieldOwner, receiver);
-        return;
-    }
-    ast_walk::forEachChild(slot.get(), [&](ASTNode*, std::unique_ptr<ASTNode>* child) {
-        if (child) rewriteFieldReads(*child, fieldOwner, receiver);
-    });
+        at = std::move(chain);  // destroys `id`; it is not used after this
+    };
+    forEachExpressionName(slot, rewrite);
 }
 }  // namespace
 
@@ -486,18 +499,17 @@ bool expandCallArguments(std::vector<std::unique_ptr<ASTNode>>& args, CallTarget
         bool shadowed = false;
         bool needsReceiver = false;
         std::string shadowedName;
-        ast_walk::walk(param->defaultValue.get(), nullptr, [&](ASTNode* n, std::unique_ptr<ASTNode>*) {
-            if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
-                const std::string base = id->value.substr(0, id->value.find('.'));
-                if (!fieldOwner.empty() && isFieldOf(fieldOwner, base)) {
-                    // A field of the receiver: `this` inside the class, `r.field` for a named receiver.
-                    if (receiver && receiverText.empty()) { needsReceiver = true; shadowedName = base; }
-                    return true;
-                }
-                if (!shadowed && report.isShadowed(base)) { shadowed = true; shadowedName = base; }
+        // The same names rewriteFieldReads rewrites: not member or argument names.
+        auto check = [&](std::unique_ptr<ASTNode>&, IdentifierNode& id) {
+            const std::string base = id.value.substr(0, id.value.find('.'));
+            if (!fieldOwner.empty() && isFieldOf(fieldOwner, base)) {
+                // A field of the receiver: `this` inside the class, `r.field` for a named receiver.
+                if (receiver && receiverText.empty()) { needsReceiver = true; shadowedName = base; }
+                return;
             }
-            return true;
-        });
+            if (!shadowed && report.isShadowed(base)) { shadowed = true; shadowedName = base; }
+        };
+        forEachExpressionName(param->defaultValue, check);
         if (needsReceiver) {
             fail("the default value of parameter '" + param->name + "' of '" + chosen->display + "' reads the field '" +
                  shadowedName + "'; call the method on a named value or pass the argument");
@@ -524,11 +536,20 @@ bool expandCallArguments(std::vector<std::unique_ptr<ASTNode>>& args, CallTarget
 }
 
 namespace {
+// The names a template body declares, and for those whose every declaration names one concrete
+// class (`val c: Cache = ...`, `val c = new Cache(...)`, a parameter `c: Cache`) that class: a
+// method call on them has a certain target although the body is not type checked.
+struct BodyNames {
+    std::set<std::string> all;
+    std::map<std::string, std::string> classOf;
+};
+
 // Template bodies are not type checked, so their calls are matched syntactically: functions and
 // constructors by name (unless a parameter or local of the body has that name), methods of
-// `this`/`super`, object functions, and a method declared by exactly one class.
-void expandInBody(ASTNode* body, int startLine, const std::string& enclosingClass, const std::set<std::string>& locals,
+// `this`/`super` or of a local of a known class, and object functions.
+void expandInBody(ASTNode* body, int startLine, const std::string& enclosingClass, const BodyNames& names,
                   const CallReport& report, int& errors) {
+    const std::set<std::string>& locals = names.all;
     CallReport local = report;
     local.isShadowed = [&locals](const std::string& name) { return locals.count(name) > 0; };
     local.error = [&](const std::string& message) { report.error(message); ++errors; };
@@ -539,7 +560,8 @@ void expandInBody(ASTNode* body, int startLine, const std::string& enclosingClas
         auto unresolved = [&](const std::vector<std::unique_ptr<ASTNode>>& args, const std::string& callee) {
             if (hasNamedArguments(args)) {
                 local.error("Error" + where(line) + ": named arguments in a template body need a function, a "
-                            "constructor, an object function or a method of this/super; '" + callee + "' is none");
+                            "constructor, an object function, a method of this/super or of a local whose class "
+                            "is declared; '" + callee + "' is none");
             }
         };
         if (auto* call = dynamic_cast<FunctionCallNode*>(node)) {
@@ -560,6 +582,7 @@ void expandInBody(ASTNode* body, int startLine, const std::string& enclosingClas
         }
         else if (auto* method = dynamic_cast<MethodCallNode*>(node)) {
             const std::string object = receiverName(method->object.get());
+            auto known = names.classOf.find(object);
             if ((object == "this" || object == "super") && !enclosingClass.empty()) {
                 std::string cls = enclosingClass;
                 if (object == "super") {
@@ -570,6 +593,10 @@ void expandInBody(ASTNode* body, int startLine, const std::string& enclosingClas
                     expandCallArguments(method->arguments, CallTarget::Method, cls, method->methodName, line, local,
                                         method->object.get());
                 }
+            }
+            else if (known != names.classOf.end() && hasMethodSignatures(known->second, method->methodName)) {
+                expandCallArguments(method->arguments, CallTarget::Method, known->second, method->methodName, line,
+                                    local, method->object.get());
             }
             else if (!object.empty() && !locals.count(object) && table.namespaced.count(object + "." + method->methodName)) {
                 expandCallArguments(method->arguments, CallTarget::Namespaced, object, method->methodName, line, local);
@@ -586,20 +613,41 @@ void expandInBody(ASTNode* body, int startLine, const std::string& enclosingClas
     });
 }
 
-std::set<std::string> namesDeclaredIn(FunctionDeclarationNode& fn) {
-    std::set<std::string> names;
-    for (auto* p : parametersOf(fn.parameters)) names.insert(p->name);
+// `notConcrete`: the template's type parameters and the program's template classes, whose
+// members depend on the instance.
+BodyNames namesDeclaredIn(FunctionDeclarationNode& fn, const std::set<std::string>& notConcrete) {
+    auto& table = index();
+    BodyNames names;
+    std::set<std::string> unknown;
+    auto declare = [&](const std::string& name, const std::string& cls) {
+        names.all.insert(name);
+        const bool concrete = !cls.empty() && !notConcrete.count(cls) &&
+                              (table.constructors.count(cls) > 0 || findInterface(cls) != nullptr);
+        if (!concrete) { unknown.insert(name); return; }
+        auto entry = names.classOf.emplace(name, cls);
+        if (!entry.second && entry.first->second != cls) unknown.insert(name);
+    };
+    auto typeName = [](const std::unique_ptr<Type>& type) { return type ? type->getName() : std::string(); };
+    for (auto* p : parametersOf(fn.parameters)) declare(p->name, typeName(p->type));
     ast_walk::walk(fn.body.get(), nullptr, [&](ASTNode* n, std::unique_ptr<ASTNode>*) {
-        if (auto* decl = dynamic_cast<VariableDeclarationNode*>(n)) names.insert(decl->name);
+        if (auto* decl = dynamic_cast<VariableDeclarationNode*>(n)) {
+            std::string cls;
+            if (decl->hasExplicitType) cls = typeName(decl->type);
+            else if (auto* creation = dynamic_cast<ClassInstanceCreationNode*>(decl->initializer.get())) {
+                if (creation->templateArgs.empty()) cls = creation->className;
+            }
+            declare(decl->name, cls);
+        }
         else if (auto* lambda = dynamic_cast<LambdaExpressionNode*>(n)) {
-            for (auto* p : parametersOf(lambda->arguments)) names.insert(p->name);
+            for (auto* p : parametersOf(lambda->arguments)) declare(p->name, "");
         }
         else if (auto* loop = dynamic_cast<ForStatementNode*>(n)) {
-            names.insert(loop->variable);
-            if (!loop->tokenValue.empty()) names.insert(loop->tokenValue);
+            declare(loop->variable, "");
+            if (!loop->tokenValue.empty()) declare(loop->tokenValue, "");
         }
         return true;
     });
+    for (const auto& name : unknown) names.classOf.erase(name);
     return names;
 }
 }  // namespace
@@ -607,22 +655,37 @@ std::set<std::string> namesDeclaredIn(FunctionDeclarationNode& fn) {
 bool expandTemplateBodies(ASTNode* root, const CallReport& report) {
     auto* program = dynamic_cast<ProgramNode*>(root);
     if (!program) return true;
+    std::set<std::string> templateClasses;
+    for (auto& statement : program->statements) {
+        if (auto* tmpl = dynamic_cast<TemplateDeclarationNode*>(statement.get())) {
+            if (auto* cls = dynamic_cast<ClassDeclarationNode*>(tmpl->declaration.get())) templateClasses.insert(cls->name);
+        }
+    }
     int errors = 0;
     for (auto& statement : program->statements) {
         auto* tmpl = dynamic_cast<TemplateDeclarationNode*>(statement.get());
         if (!tmpl) continue;
+        std::set<std::string> notConcrete = templateClasses;
+        notConcrete.insert(tmpl->typeParameters.begin(), tmpl->typeParameters.end());
+        for (const auto& p : tmpl->templateParams) notConcrete.insert(p.name);
         if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(tmpl->declaration.get())) {
-            expandInBody(fn->body.get(), fn->line, "", namesDeclaredIn(*fn), report, errors);
+            expandInBody(fn->body.get(), fn->line, "", namesDeclaredIn(*fn, notConcrete), report, errors);
         }
         else if (auto* cls = dynamic_cast<ClassDeclarationNode*>(tmpl->declaration.get())) {
             auto* body = dynamic_cast<ClassBodyNode*>(cls->body.get());
             if (!body) continue;
             for (auto& m : body->methods) {
                 if (auto* method = dynamic_cast<FunctionDeclarationNode*>(m.get())) {
-                    std::set<std::string> names = namesDeclaredIn(*method);
-                    for (auto* p : parametersOf(cls->constructorParams)) names.insert(p->name);
+                    BodyNames names = namesDeclaredIn(*method, notConcrete);
+                    // The class's fields are in scope too: they shadow a default's global names, and a
+                    // local of the same name does not give them a known class.
+                    auto addField = [&](const std::string& name) {
+                        names.all.insert(name);
+                        names.classOf.erase(name);
+                    };
+                    for (auto* p : parametersOf(cls->constructorParams)) addField(p->name);
                     for (auto& fieldNode : body->fields) {
-                        if (auto* field = dynamic_cast<VariableDeclarationNode*>(fieldNode.get())) names.insert(field->name);
+                        if (auto* field = dynamic_cast<VariableDeclarationNode*>(fieldNode.get())) addField(field->name);
                     }
                     expandInBody(method->body.get(), method->line, cls->name, names, report, errors);
                 }

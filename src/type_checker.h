@@ -7,6 +7,7 @@
 #include "ASTVisitor.h"
 #include "enum_nodes.h"
 #include "default_arguments.h"
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -160,6 +161,7 @@ private:
     };
 
     int errorCount = 0;
+    std::set<std::string> reportedCallErrors;  // callReport(): each message (with its location) once
     int unsafeContextDepth = 0;
     int loopDepth = 0;
     const Type* currentReturnType = nullptr;  // declared return type of the function being checked
