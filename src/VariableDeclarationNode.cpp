@@ -233,7 +233,9 @@ llvm::Value* VariableDeclarationNode::codegen() {
         cg.symbolTable.addSymbol(
             name,
             std::make_unique<Symbol>(name, type->clone(), initValue, isMutable, SymbolType::VARIABLE));
+        const bool moveInitializer = prefixInitializer && prefixInitializer->op == "<-";
         if (type->getKind() == Type::Kind::BOX) {
+            if (moveInitializer) cg.forgetCleanup(initValue);
             cg.registerCleanup(initValue);
         }
         else if (autoDrop && type->getKind() == Type::Kind::CLASS && !declaredStructClass) {
@@ -245,7 +247,7 @@ llvm::Value* VariableDeclarationNode::codegen() {
                 // obligation to this binding instead of keeping two stale registrations.
                 cg.forgetCleanup(initValue);
             }
-            cg.registerTensorCleanup(initValue);
+            if (autoDrop) cg.registerTensorCleanup(initValue);
         }
         // Reference-class instances and array/vector locals are intentionally NOT auto-registered for
         // scope-exit free — the attempt to do so was unsafe and is disabled pending a proper ownership

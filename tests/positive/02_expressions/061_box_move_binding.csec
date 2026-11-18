@@ -1,0 +1,17 @@
+def moveTwice(): Int {
+    val s: box Int = 5;
+    val t: box Int = <- s;
+    val u: box Int = <- t;
+    return 0;
+}
+
+def main(): Int {
+    var i: Int = 0;
+    while (i < 100) {
+        val n = moveTwice();
+        i = i + 1;
+    }
+    val a: box Int = 7;
+    val b: box Int = <- a;
+    return 0;
+}

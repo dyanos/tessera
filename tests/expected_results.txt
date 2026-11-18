@@ -56,6 +56,7 @@ tests/positive/02_expressions/048_box_early_return_drop.csec 0 1
 tests/positive/02_expressions/048_class_reference_passing.csec 0 14
 tests/positive/02_expressions/059_box_move_assignment.csec 0 0
 tests/positive/02_expressions/060_nat_arbitrary_precision.csec 0 0
+tests/positive/02_expressions/061_box_move_binding.csec 0 0
 tests/positive/03_control_flow/030_if_else_blocks.csec 0 1
 tests/positive/03_control_flow/031_constexpr_if.csec 0 1
 tests/positive/03_control_flow/032_for_ranges.csec 0 25
@@ -299,6 +300,7 @@ tests/positive/11_tensor/120_fortran_slice_assignment.csec 0 0
 tests/positive/11_tensor/121_tensor_reductions_and_dtypes.csec 0 0
 tests/positive/11_tensor/122_tensor_temporary_drops.csec 0 0
 tests/positive/11_tensor/123_tensor_val_escape.csec 0 0
+tests/positive/11_tensor/124_tensor_ownership_escape.csec 0 0
 tests/positive/12_native/120_stdout_functions.csec 0 0
 tests/positive/12_native/121_stdin_functions.csec 0 0
 tests/positive/12_native/122_math_functions.csec 0 0
