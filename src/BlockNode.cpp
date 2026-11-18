@@ -94,7 +94,9 @@ llvm::Value* BlockNode::codegen() {
             }
         }
         if (stmt->line > 0) debuginfo::setLine(stmt->line);
+        cg.enterTemporaryFrame();
         last = stmt->codegen();
+        cg.exitTemporaryFrame();
     }
 
     auto* currentBlock = cg.builder.GetInsertBlock();

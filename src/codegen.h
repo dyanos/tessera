@@ -119,6 +119,15 @@ public:
     };
     std::vector<LoopTarget> loopTargets;
 
+    void markFreshTensor(llvm::Value* tensor);
+    bool isFreshTensor(llvm::Value* tensor) const;
+    static void clearFreshTensor(llvm::Value* tensor);
+    void stripFreshTensorMarks();
+    void dropTemporary(llvm::Value* tensor, llvm::Value* result = nullptr);
+    void enterTemporaryFrame();
+    void exitTemporaryFrame();
+    void emitTemporaryDropsAbove(size_t depth);
+
     llvm::Function* mallocFunction; // non-owning, owned by module
     llvm::Function* freeFunction;  // non-owning, owned by module
 
@@ -131,4 +140,13 @@ private:
     std::unordered_map<llvm::Value*, llvm::Value*> dropFlags;  // owned pointer -> its i1 drop flag
     std::vector<std::vector<std::pair<llvm::Value*, CleanupKind>>> cleanupScopes;
     void emitCleanupEntry(llvm::Value* pointer, CleanupKind kind, llvm::Value* retainedPointer);
+
+    struct TemporaryFrame {
+        llvm::Function* function;
+        size_t cleanupDepth;
+        std::vector<llvm::AllocaInst*> slots;
+    };
+    std::vector<TemporaryFrame> temporaryFrames;
+    llvm::Function* getTensorDropFunction();
+    void emitTemporarySlotDrop(llvm::AllocaInst* slot);
 };

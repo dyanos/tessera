@@ -900,15 +900,22 @@ llvm::Value* BinaryExpressionNode::codegen() {
 
     const bool leftIsTensor = TensorRuntime::isTensorTypeName(leftTypeName);
     const bool rightIsTensor = TensorRuntime::isTensorTypeName(rightTypeName);
+    auto borrowTensorOperands = [&](llvm::Value* result) {
+        if (result) {
+            cg.dropTemporary(leftValue, result);
+            cg.dropTemporary(rightValue, result);
+        }
+        return result;
+    };
     if (isTensorArithmeticOperator(op) && (leftIsTensor || rightIsTensor)) {
         if (leftIsTensor && rightIsTensor) {
-            return TensorRuntime::elementwiseTensorTensor(cg, leftValue, rightValue, op);
+            return borrowTensorOperands(TensorRuntime::elementwiseTensorTensor(cg, leftValue, rightValue, op));
         }
         if (leftIsTensor && isNumericTypeName(rightTypeName)) {
-            return TensorRuntime::elementwiseTensorScalar(cg, leftValue, rightValue, op, true);
+            return borrowTensorOperands(TensorRuntime::elementwiseTensorScalar(cg, leftValue, rightValue, op, true));
         }
         if (rightIsTensor && isNumericTypeName(leftTypeName)) {
-            return TensorRuntime::elementwiseTensorScalar(cg, rightValue, leftValue, op, false);
+            return borrowTensorOperands(TensorRuntime::elementwiseTensorScalar(cg, rightValue, leftValue, op, false));
         }
         std::cerr << "Type error: Tensor arithmetic requires tensor or numeric operands" << std::endl;
         return nullptr;
@@ -920,13 +927,13 @@ llvm::Value* BinaryExpressionNode::codegen() {
             return nullptr;
         }
         if (op == "inner") {
-            return TensorRuntime::innerProduct(cg, leftValue, rightValue);
+            return borrowTensorOperands(TensorRuntime::innerProduct(cg, leftValue, rightValue));
         }
         if (op == "outer" || op == "tensor") {
-            return TensorRuntime::outerProduct(cg, leftValue, rightValue);
+            return borrowTensorOperands(TensorRuntime::outerProduct(cg, leftValue, rightValue));
         }
         if (op == "@") {
-            return TensorRuntime::matrixProduct(cg, leftValue, rightValue);
+            return borrowTensorOperands(TensorRuntime::matrixProduct(cg, leftValue, rightValue));
         }
     }
 

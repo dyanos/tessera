@@ -1,0 +1,53 @@
+def affine(x: Tensor<Double, 1, 3>, w: Tensor<Double, 3, 2>, b: Tensor<Double, 1, 2>): Tensor<Double, 1, 2> {
+    return (x @ w) + b;
+}
+
+def aliasReturn(x: Tensor<Double, 1, 3>, w: Tensor<Double, 3, 2>): Tensor<Double, 1, 2> {
+    val y = x @ w;
+    val p = y;
+    return p;
+}
+
+def earlyReturn(x: Tensor<Double, 1, 3>, w: Tensor<Double, 3, 2>, flag: Bool): Double {
+    val y = (x @ w) * 2.0;
+    if (flag) {
+        return sum(transpose(x @ w));
+    }
+    return y[0, 1];
+}
+
+def main(): Int {
+    val x: Tensor<Double, 1, 3> = new Tensor<Double, 1, 3>(1.0);
+    val w: Tensor<Double, 3, 2> = new Tensor<Double, 3, 2>(0.5);
+    val b: Tensor<Double, 1, 2> = new Tensor<Double, 1, 2>(0.25);
+    val z = affine(x, w, b);
+    if (z[0, 0] != 1.75) { return 1; }
+    val a = aliasReturn(x, w);
+    if (a[0, 1] != 1.5) { return 2; }
+    if (earlyReturn(x, w, true) != 3.0) { return 3; }
+    if (earlyReturn(x, w, false) != 3.0) { return 4; }
+    var i: Int = 0;
+    var total: Double = 0.0;
+    while (sum(x @ w) + (x @ w)[0, 0] < 100.0 and i < 50) {
+        if (sum((x @ w) - b) > 100.0) { break; }
+        i = i + 1;
+        if (i % 2 == 0) { continue; }
+        total = total + mean(relu(x @ w));
+    }
+    if (i != 50 or total != 37.5) { return 5; }
+    var j: Int = 0;
+    while (true) {
+        j = j + 1;
+        if ((x @ w)[0, 0] * j > 6.0) { break; }
+    }
+    if (j != 5) { return 6; }
+    val c = i > 0 or sum(x @ w) > 0.0;
+    if (!c) { return 7; }
+    val n = norm(softmax(x @ w) - (x @ w));
+    if (n < 0.0) { return 8; }
+    val k: Long = argmax(x @ w);
+    if (k != 0) { return 9; }
+    val r: Tensor<Double, 2> = (x @ w)[0, :];
+    if (r[1] != 1.5) { return 10; }
+    return 0;
+}

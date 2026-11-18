@@ -103,11 +103,15 @@ llvm::Value* codegenTensorBuiltin(FunctionCallNode& node, bool* handled) {
     llvm::Value* tensor = node.arguments[0]->codegen();
     if (!tensor) return nullptr;
     auto toDouble = [&](llvm::Value* v) { return coerceValueToLLVMType(v, f64); };
+    auto borrowed = [&](llvm::Value* result) {
+        cg.dropTemporary(tensor, result);
+        return result;
+    };
 
     const int op = reductionOp(name);
     if (op >= 0 && node.arguments.size() == 1) {
-        return cg.builder.CreateCall(runtime(cg, "csec_tensor_reduce_all", f64, {ptrTy, i32}),
-                                     {tensor, llvm::ConstantInt::get(i32, op)}, name + ".all");
+        return borrowed(cg.builder.CreateCall(runtime(cg, "csec_tensor_reduce_all", f64, {ptrTy, i32}),
+                                              {tensor, llvm::ConstantInt::get(i32, op)}, name + ".all"));
     }
     if (op >= 0) {
         long long axis = 0;
@@ -115,17 +119,17 @@ llvm::Value* codegenTensorBuiltin(FunctionCallNode& node, bool* handled) {
         llvm::Value* result = cg.builder.CreateCall(runtime(cg, "csec_tensor_reduce_axis", ptrTy, {ptrTy, i64, i32}),
                                                     {tensor, llvm::ConstantInt::get(i64, axis, true), llvm::ConstantInt::get(i32, op)},
                                                     name + ".axis");
-        return result;
+        return borrowed(result);
     }
     if (name == "argmax" || name == "argmin") {
-        return cg.builder.CreateCall(runtime(cg, "csec_tensor_argext", i64, {ptrTy, i32}),
-                                     {tensor, llvm::ConstantInt::get(i32, name == "argmax" ? 1 : 0)}, name);
+        return borrowed(cg.builder.CreateCall(runtime(cg, "csec_tensor_argext", i64, {ptrTy, i32}),
+                                              {tensor, llvm::ConstantInt::get(i32, name == "argmax" ? 1 : 0)}, name));
     }
     if (name == "zerosLike" || name == "onesLike" || name == "fullLike") {
         llvm::Value* value = name == "zerosLike" ? llvm::ConstantFP::get(f64, 0.0)
                            : name == "onesLike"  ? llvm::ConstantFP::get(f64, 1.0)
                                                  : toDouble(node.arguments[1]->codegen());
-        return cg.builder.CreateCall(runtime(cg, "csec_tensor_full_like", ptrTy, {ptrTy, f64}), {tensor, value}, name);
+        return borrowed(cg.builder.CreateCall(runtime(cg, "csec_tensor_full_like", ptrTy, {ptrTy, f64}), {tensor, value}, name));
     }
     // fillUniform / fillNormal
     llvm::Value* a = toDouble(node.arguments[1]->codegen());

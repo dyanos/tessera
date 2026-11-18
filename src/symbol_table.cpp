@@ -1,6 +1,7 @@
 // symbol_table.cpp
 
 #include "symbol_table.h"
+#include "codegen.h"
 #include "ast.h"
 #include "type_utils.h"
 #include "utils.h"
@@ -189,6 +190,7 @@ bool SymbolTable::addSymbol(const std::string& name, std::unique_ptr<Symbol> sym
     }
 
     Symbol* rawSymbol = symbol.get();
+    CodeGenerator::clearFreshTensor(rawSymbol->value);
     auto& ctxt = Context::getInstance();
     auto current = ctxt.getCurrentNamespace();
 

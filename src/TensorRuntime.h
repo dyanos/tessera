@@ -140,6 +140,7 @@ inline llvm::Value* allocateTensor(CodeGenerator& cg, llvm::Value* rank, llvm::V
     cg.builder.CreateStore(dims, tensorField(cg, tensor, 1, "tensor.dims.slot"));
     cg.builder.CreateStore(count, tensorField(cg, tensor, 2, "tensor.count.slot"));
     cg.builder.CreateStore(data, tensorField(cg, tensor, 3, "tensor.data.slot"));
+    cg.markFreshTensor(tensor);
     return tensor;
 }
 
