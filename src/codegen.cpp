@@ -302,6 +302,7 @@ const char* const freshTensorKind = "csec.fresh.tensor";
 void CodeGenerator::markFreshTensor(llvm::Value* tensor) {
     if (auto* inst = llvm::dyn_cast_or_null<llvm::Instruction>(tensor)) {
         inst->setMetadata(freshTensorKind, llvm::MDNode::get(context, {}));
+        freshTensorMarks.emplace_back(inst);
     }
 }
 
@@ -317,13 +318,18 @@ void CodeGenerator::clearFreshTensor(llvm::Value* tensor) {
 }
 
 void CodeGenerator::stripFreshTensorMarks() {
-    for (auto& fn : *module) {
-        for (auto& block : fn) {
-            for (auto& inst : block) {
-                inst.setMetadata(freshTensorKind, nullptr);
-            }
-        }
+    for (auto& mark : freshTensorMarks) {
+        clearFreshTensor(mark);
     }
+    freshTensorMarks.clear();
+}
+
+llvm::Value* CodeGenerator::borrowTensors(const std::vector<llvm::Value*>& operands, llvm::Value* result) {
+    if (!result) return result;
+    for (llvm::Value* operand : operands) {
+        dropTemporary(operand, result);
+    }
+    return result;
 }
 
 llvm::Function* CodeGenerator::getTensorDropFunction() {

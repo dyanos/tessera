@@ -119,7 +119,7 @@ llvm::Value* ArrayAccessNode::codegen() {
         }
 
         llvm::Value* element = TensorRuntime::sliceTensor(cg, arrayValue, isSlice, starts, ends, steps);
-        if (element) cg.dropTemporary(arrayValue, element);
+        cg.borrowTensors({ arrayValue }, element);
         // Elements are stored as doubles; an element of a Tensor<Int, ...>, Tensor<Long, ...> or
         // Tensor<Float, ...> reads as a value of that type.
         auto* tensorType = dynamic_cast<GenericType*>(arrayTypeInfo.get());

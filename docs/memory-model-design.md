@@ -122,7 +122,8 @@ are skipped.
 Tensor temporaries are owned too. A fresh tensor result (`x @ w`, element-wise ops, `transpose`,
 `relu`, `softmax`, slices, `new Tensor`) that is only borrowed by another tensor operation lives in a
 compiler-owned slot and is dropped at the end of its full expression (statement or loop condition),
-or earlier on `return`/`break`/`continue`. A fresh result bound with `val` is owned by that binding.
+or earlier on `return`/`break`/`continue`. A fresh result bound with `val` is owned by that binding
+when every later use only borrows it.
 **[impl, direct compiler]**
 
 ---
@@ -447,11 +448,17 @@ Milestones (each ends green on all suites + a byte-identical self-host fixed poi
   Drops run at statement end (`BlockNode`), on `return` (`emitAllCleanupsExcept`), and on
   `break`/`continue` for frames inside the loop (`emitCleanupsAbove`); a slot written again by a
   re-evaluated loop condition drops its previous value first. `val y = <fresh tensor>` binds `y`
-  directly and registers the existing `TensorFree` cleanup; `val p = y` binds `p` to the same value so
-  `return p` keeps the allocation alive. Not covered: tensor results of user function calls (the
+  directly and registers the existing `TensorFree` cleanup only when `BlockNode` proves every later
+  use of `y` borrows it (`onlyBorrowingTensorUses`): an operand of a binary operator or a tensor
+  builtin, the base of an index/slice, a `.x/.y/.z/.w` component, or `return y`. Any other use (an
+  alias `var q = y`, an assignment, a field store, a user-function argument, a lambda capture, the
+  block's result value) leaves `y` unowned, because the backend has no escape analysis yet. A store
+  through `=` also clears the fresh mark, so an assignment expression's value is never dropped as a
+  temporary. Not covered: tensor results of user function calls (the
   callee may return an alias of a parameter), fresh tensors passed to user functions (treated as
   moved into the callee, which does not drop parameters), `var` tensors, expression-bodied lambdas,
-  and the self-host emitter. Test `positive/11_tensor/122_tensor_temporary_drops`.
+  and the self-host emitter. Tests `positive/11_tensor/122_tensor_temporary_drops`,
+  `123_tensor_val_escape`.
 - **M5 — Multiple return (done). [impl]** Parser `return a,b` / `a,b = f()` / `(A,B,C)` return type;
   `TupleType` → LLVM aggregate (sret/registers); `TupleExpressionNode`/`DestructuringAssignmentNode`;
   seven-step protocol; ownership transfer of box elements; `_` ignore; duplicate-move and

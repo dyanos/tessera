@@ -157,6 +157,7 @@ llvm::Value* AssignmentExpressionNode::codegen() {
         else rightValue = CodeGenerator::getInstance().builder.CreateSRem(oldValue, rightValue, "assign.next");
     }
     CodeGenerator::getInstance().builder.CreateStore(rightValue, targetPtr);
+    CodeGenerator::clearFreshTensor(rightValue);
     return rightValue;
 }
 

@@ -900,13 +900,7 @@ llvm::Value* BinaryExpressionNode::codegen() {
 
     const bool leftIsTensor = TensorRuntime::isTensorTypeName(leftTypeName);
     const bool rightIsTensor = TensorRuntime::isTensorTypeName(rightTypeName);
-    auto borrowTensorOperands = [&](llvm::Value* result) {
-        if (result) {
-            cg.dropTemporary(leftValue, result);
-            cg.dropTemporary(rightValue, result);
-        }
-        return result;
-    };
+    auto borrowTensorOperands = [&](llvm::Value* result) { return cg.borrowTensors({ leftValue, rightValue }, result); };
     if (isTensorArithmeticOperator(op) && (leftIsTensor || rightIsTensor)) {
         if (leftIsTensor && rightIsTensor) {
             return borrowTensorOperands(TensorRuntime::elementwiseTensorTensor(cg, leftValue, rightValue, op));

@@ -12,7 +12,6 @@
 #include "FilterStatementNode.h"
 #include "PMapStatementNode.h"
 #include "PrefixExpressionNode.h"
-#include "IdentifierNode.h"
 #include "type_utils.h"
 #include "dict_support.h"
 #include "ArrayAccessNode.h"
@@ -208,11 +207,8 @@ llvm::Value* VariableDeclarationNode::codegen() {
     const bool tensorMoveInitializer = type && type->getName() == "Tensor" &&
         prefixInitializer && prefixInitializer->op == "<-";
     llvm::BasicBlock* declBlock = cg.builder.GetInsertBlock();
-    const bool freshTensorInitializer = type && type->getName() == "Tensor" && !isMutable &&
+    const bool freshTensorInitializer = autoDrop && type && type->getName() == "Tensor" &&
         cg.isFreshTensor(initValue) && declBlock && declBlock->getParent() != cg.mainFunction;
-    const bool tensorAliasInitializer = type && type->getName() == "Tensor" && !isMutable &&
-        dynamic_cast<IdentifierNode*>(initializer.get()) != nullptr &&
-        declBlock && declBlock->getParent() != cg.mainFunction;
 
     const bool bindPointerBackedValueDirectly =
         initValue &&
@@ -231,7 +227,7 @@ llvm::Value* VariableDeclarationNode::codegen() {
          (type->getKind() == Type::Kind::CLASS && !declaredStructClass) ||
          type->getKind() == Type::Kind::BOX ||
          (type->getKind() == Type::Kind::GENERIC && (type->getName() == "Shared" || type->getName() == "Weak")) ||
-         arrayVectorFromCall || tensorMoveInitializer || freshTensorInitializer || tensorAliasInitializer);
+         arrayVectorFromCall || tensorMoveInitializer || freshTensorInitializer);
 
     if (bindPointerBackedValueDirectly) {
         cg.symbolTable.addSymbol(
@@ -243,7 +239,7 @@ llvm::Value* VariableDeclarationNode::codegen() {
         else if (autoDrop && type->getKind() == Type::Kind::CLASS && !declaredStructClass) {
             cg.registerFlaggedCleanup(initValue);
         }
-        else if (type->getName() == "Tensor" && !tensorAliasInitializer) {
+        else if (type->getName() == "Tensor") {
             if (tensorMoveInitializer) {
                 // The source and destination denote the same allocation. Transfer its one drop
                 // obligation to this binding instead of keeping two stale registrations.
