@@ -264,6 +264,7 @@ void CodeGenerator::emitAllCleanupsExcept(llvm::Value* retainedPointer) {
     // `if (c) { return 1; } return 0;` freed the box only on the `then` path). A single runtime path
     // reaches either a return or its block's normal scope-exit cleanup, never both, so leaving the
     // entries in place frees each local exactly once per path (M4 per-path drop elaboration).
+    emitTemporaryDropsAbove(0);
     for (auto scopeIt = cleanupScopes.rbegin(); scopeIt != cleanupScopes.rend(); ++scopeIt) {
         auto& cleanups = *scopeIt;
         for (auto it = cleanups.rbegin(); it != cleanups.rend(); ++it) {
@@ -285,10 +286,120 @@ llvm::AllocaInst* CodeGenerator::createEntryAlloca(llvm::Type* type, const std::
 }
 
 void CodeGenerator::emitCleanupsAbove(size_t depth) {
+    emitTemporaryDropsAbove(depth);
     for (size_t i = cleanupScopes.size(); i > depth; --i) {
         auto& cleanups = cleanupScopes[i - 1];
         for (auto it = cleanups.rbegin(); it != cleanups.rend(); ++it) {
             emitCleanupEntry(it->first, it->second, nullptr);
+        }
+    }
+}
+
+namespace {
+const char* const freshTensorKind = "csec.fresh.tensor";
+}
+
+void CodeGenerator::markFreshTensor(llvm::Value* tensor) {
+    if (auto* inst = llvm::dyn_cast_or_null<llvm::Instruction>(tensor)) {
+        inst->setMetadata(freshTensorKind, llvm::MDNode::get(context, {}));
+    }
+}
+
+bool CodeGenerator::isFreshTensor(llvm::Value* tensor) const {
+    auto* inst = llvm::dyn_cast_or_null<llvm::Instruction>(tensor);
+    return inst && inst->getMetadata(freshTensorKind) != nullptr;
+}
+
+void CodeGenerator::clearFreshTensor(llvm::Value* tensor) {
+    if (auto* inst = llvm::dyn_cast_or_null<llvm::Instruction>(tensor)) {
+        inst->setMetadata(freshTensorKind, nullptr);
+    }
+}
+
+void CodeGenerator::stripFreshTensorMarks() {
+    for (auto& fn : *module) {
+        for (auto& block : fn) {
+            for (auto& inst : block) {
+                inst.setMetadata(freshTensorKind, nullptr);
+            }
+        }
+    }
+}
+
+llvm::Function* CodeGenerator::getTensorDropFunction() {
+    const char* name = "csec.tensor.drop";
+    if (llvm::Function* existing = module->getFunction(name)) return existing;
+    auto* ptrTy = llvm::PointerType::getUnqual(context);
+    auto* fnTy = llvm::FunctionType::get(llvm::Type::getVoidTy(context), { ptrTy }, false);
+    auto* fn = llvm::Function::Create(fnTy, llvm::Function::InternalLinkage, name, module.get());
+    llvm::IRBuilderBase::InsertPointGuard guard(builder);
+    builder.SetCurrentDebugLocation(llvm::DebugLoc());
+    auto* entryBB = llvm::BasicBlock::Create(context, "entry", fn);
+    auto* freeBB = llvm::BasicBlock::Create(context, "free", fn);
+    auto* doneBB = llvm::BasicBlock::Create(context, "done", fn);
+    llvm::Value* tensor = fn->getArg(0);
+    builder.SetInsertPoint(entryBB);
+    builder.CreateCondBr(builder.CreateIsNull(tensor, "tensor.null"), doneBB, freeBB);
+    builder.SetInsertPoint(freeBB);
+    llvm::Value* data = TensorRuntime::loadData(*this, tensor);
+    llvm::Value* dims = TensorRuntime::loadDims(*this, tensor);
+    builder.CreateCall(freeFunction, { data });
+    builder.CreateCall(freeFunction, { dims });
+    builder.CreateCall(freeFunction, { tensor });
+    builder.CreateBr(doneBB);
+    builder.SetInsertPoint(doneBB);
+    builder.CreateRetVoid();
+    return fn;
+}
+
+void CodeGenerator::emitTemporarySlotDrop(llvm::AllocaInst* slot) {
+    auto* ptrTy = llvm::PointerType::getUnqual(context);
+    llvm::Value* held = builder.CreateLoad(ptrTy, slot, "tmp.tensor.held");
+    builder.CreateCall(getTensorDropFunction(), { held });
+    builder.CreateStore(llvm::ConstantPointerNull::get(ptrTy), slot);
+}
+
+void CodeGenerator::dropTemporary(llvm::Value* tensor, llvm::Value* result) {
+    if (!tensor || tensor == result || !isFreshTensor(tensor) || temporaryFrames.empty()) return;
+    llvm::BasicBlock* block = builder.GetInsertBlock();
+    if (!block || csec_llvm::terminatorOrNull(block)) return;
+    TemporaryFrame& frame = temporaryFrames.back();
+    if (frame.function != block->getParent()) return;
+    clearFreshTensor(tensor);
+    auto* ptrTy = llvm::PointerType::getUnqual(context);
+    llvm::AllocaInst* slot = createEntryAlloca(ptrTy, "tmp.tensor.slot");
+    llvm::IRBuilder<> init(slot->getParent(), std::next(slot->getIterator()));
+    init.CreateStore(llvm::ConstantPointerNull::get(ptrTy), slot);
+    llvm::Value* previous = builder.CreateLoad(ptrTy, slot, "tmp.tensor.previous");
+    builder.CreateCall(getTensorDropFunction(), { previous });
+    builder.CreateStore(tensor, slot);
+    frame.slots.push_back(slot);
+}
+
+void CodeGenerator::enterTemporaryFrame() {
+    llvm::BasicBlock* block = builder.GetInsertBlock();
+    temporaryFrames.push_back({ block ? block->getParent() : nullptr, cleanupScopes.size(), {} });
+}
+
+void CodeGenerator::exitTemporaryFrame() {
+    if (temporaryFrames.empty()) return;
+    TemporaryFrame frame = std::move(temporaryFrames.back());
+    temporaryFrames.pop_back();
+    llvm::BasicBlock* block = builder.GetInsertBlock();
+    if (!block || csec_llvm::terminatorOrNull(block) || block->getParent() != frame.function) return;
+    for (auto it = frame.slots.rbegin(); it != frame.slots.rend(); ++it) {
+        emitTemporarySlotDrop(*it);
+    }
+}
+
+void CodeGenerator::emitTemporaryDropsAbove(size_t depth) {
+    llvm::BasicBlock* block = builder.GetInsertBlock();
+    if (!block || csec_llvm::terminatorOrNull(block)) return;
+    llvm::Function* fn = block->getParent();
+    for (auto frameIt = temporaryFrames.rbegin(); frameIt != temporaryFrames.rend(); ++frameIt) {
+        if (frameIt->function != fn || frameIt->cleanupDepth < depth) continue;
+        for (auto it = frameIt->slots.rbegin(); it != frameIt->slots.rend(); ++it) {
+            emitTemporarySlotDrop(*it);
         }
     }
 }

@@ -1683,6 +1683,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    codeGen.stripFreshTensorMarks();
     debuginfo::finalize();
     if (llvm::verifyModule(*codeGen.module, &llvm::errs())) {
         std::cerr << "Generated LLVM IR is invalid. Aborting execution." << std::endl;

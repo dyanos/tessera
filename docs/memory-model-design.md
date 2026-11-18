@@ -119,6 +119,12 @@ reverse declaration order. Heap classes and arrays/vectors currently require exp
 their ownership-aware drop glue is under construction. `Moved`, `Copy`, and `Destroyed` bindings
 are skipped.
 
+Tensor temporaries are owned too. A fresh tensor result (`x @ w`, element-wise ops, `transpose`,
+`relu`, `softmax`, slices, `new Tensor`) that is only borrowed by another tensor operation lives in a
+compiler-owned slot and is dropped at the end of its full expression (statement or loop condition),
+or earlier on `return`/`break`/`continue`. A fresh result bound with `val` is owned by that binding.
+**[impl, direct compiler]**
+
 ---
 
 ## 3. Type-system design (source syntax)
@@ -270,6 +276,7 @@ AST
       5 Closure/async capture analysis       [partial]
       6 Partial-init / partial-move          [plan / deferred]
  └─ Drop elaboration (insert dtor calls per path) [impl for box → generalize]
+      tensor temporaries: per-statement owned slots   [impl]
  └─ Multiple-return lowering                 [plan]
  └─ ABI lowering (sret/registers)            [impl in backend]
  └─ Diagnostics                              [impl / extend]
@@ -429,6 +436,22 @@ Milestones (each ends green on all suites + a byte-identical self-host fixed poi
   and every later path leaked (`codegen.cpp`; test `positive/048_box_early_return_drop`). Remaining:
   drops for non-box owned locals (only reachable in strict mode, and needs per-type destructors) and
   unwind-edge drops (moot until the language has exceptions).
+  *Tensor temporaries [impl, direct compiler]:* each tensor result produced by `allocateTensor` is
+  marked fresh (instruction metadata, cleared when the value is bound to a name and stripped before
+  verification). A borrowing tensor operation (`@`, `inner`/`outer`, element-wise ops, `transpose`/
+  `adjoint`/`conjugate`/`relu`/`softmax`/`sum`/`mean`/`norm`/`mse`, axis reductions, `argmax`/`argmin`,
+  `*Like`, element reads and slices) moves each fresh operand into an owned slot of the current
+  statement's frame (`CodeGenerator::dropTemporary`). The slot is an entry-block `ptr` alloca set to
+  null; null is the drop flag, so a temporary made on only one side of a join (`and`/`or` right-hand
+  side, a branch) is still dropped exactly once, through `csec.tensor.drop`, which ignores null.
+  Drops run at statement end (`BlockNode`), on `return` (`emitAllCleanupsExcept`), and on
+  `break`/`continue` for frames inside the loop (`emitCleanupsAbove`); a slot written again by a
+  re-evaluated loop condition drops its previous value first. `val y = <fresh tensor>` binds `y`
+  directly and registers the existing `TensorFree` cleanup; `val p = y` binds `p` to the same value so
+  `return p` keeps the allocation alive. Not covered: tensor results of user function calls (the
+  callee may return an alias of a parameter), fresh tensors passed to user functions (treated as
+  moved into the callee, which does not drop parameters), `var` tensors, expression-bodied lambdas,
+  and the self-host emitter. Test `positive/11_tensor/122_tensor_temporary_drops`.
 - **M5 — Multiple return (done). [impl]** Parser `return a,b` / `a,b = f()` / `(A,B,C)` return type;
   `TupleType` → LLVM aggregate (sret/registers); `TupleExpressionNode`/`DestructuringAssignmentNode`;
   seven-step protocol; ownership transfer of box elements; `_` ignore; duplicate-move and

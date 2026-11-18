@@ -2462,15 +2462,21 @@ llvm::Value* FunctionCallNode::codegen() {
         }
         else {
             if (isMathFallbackFunction(functionName)) {
+                auto borrowTensorArgs = [&](llvm::Value* result) {
+                    if (result) {
+                        for (llvm::Value* arg : argValues) cg.dropTemporary(arg, result);
+                    }
+                    return result;
+                };
                 if (functionName == "transpose" || functionName == "conjugate" || functionName == "adjoint") {
                     if (argValues.size() != 1 || argTypes.empty() || !TensorRuntime::isTensorTypeName(argTypes[0]->getName())) {
                         std::cerr << "Error: Tensor fallback '" << functionName << "' requires one tensor argument" << std::endl;
                         return nullptr;
                     }
                     if (functionName == "transpose" || functionName == "adjoint") {
-                        return TensorRuntime::transposeTensor(cg, argValues[0]);
+                        return borrowTensorArgs(TensorRuntime::transposeTensor(cg, argValues[0]));
                     }
-                    return TensorRuntime::cloneTensor(cg, argValues[0]);
+                    return borrowTensorArgs(TensorRuntime::cloneTensor(cg, argValues[0]));
                 }
                 if (functionName == "relu" || functionName == "softmax") {
                     if (argValues.size() != 1 || argTypes.empty() || !TensorRuntime::isTensorTypeName(argTypes[0]->getName())) {
@@ -2478,18 +2484,18 @@ llvm::Value* FunctionCallNode::codegen() {
                         return nullptr;
                     }
                     if (functionName == "relu") {
-                        return TensorRuntime::mapTensor(cg, argValues[0], "relu");
+                        return borrowTensorArgs(TensorRuntime::mapTensor(cg, argValues[0], "relu"));
                     }
-                    return TensorRuntime::softmaxTensor(cg, argValues[0]);
+                    return borrowTensorArgs(TensorRuntime::softmaxTensor(cg, argValues[0]));
                 }
                 if (functionName == "sum" || functionName == "mean" || functionName == "norm") {
                     if (argValues.size() != 1 || argTypes.empty() || !TensorRuntime::isTensorTypeName(argTypes[0]->getName())) {
                         std::cerr << "Error: Tensor fallback '" << functionName << "' requires one tensor argument" << std::endl;
                         return nullptr;
                     }
-                    if (functionName == "sum") return TensorRuntime::sumTensor(cg, argValues[0]);
-                    if (functionName == "mean") return TensorRuntime::meanTensor(cg, argValues[0]);
-                    return TensorRuntime::normTensor(cg, argValues[0]);
+                    if (functionName == "sum") return borrowTensorArgs(TensorRuntime::sumTensor(cg, argValues[0]));
+                    if (functionName == "mean") return borrowTensorArgs(TensorRuntime::meanTensor(cg, argValues[0]));
+                    return borrowTensorArgs(TensorRuntime::normTensor(cg, argValues[0]));
                 }
                 if (functionName == "mse") {
                     if (argValues.size() != 2 ||
@@ -2499,7 +2505,7 @@ llvm::Value* FunctionCallNode::codegen() {
                         std::cerr << "Error: Tensor fallback 'mse' requires two tensor arguments" << std::endl;
                         return nullptr;
                     }
-                    return TensorRuntime::mseTensor(cg, argValues[0], argValues[1]);
+                    return borrowTensorArgs(TensorRuntime::mseTensor(cg, argValues[0], argValues[1]));
                 }
                 if (functionName == "innerProduct" || functionName == "outerProduct" || functionName == "tensorProduct") {
                     if (argValues.size() != 2 ||
@@ -2510,9 +2516,9 @@ llvm::Value* FunctionCallNode::codegen() {
                         return nullptr;
                     }
                     if (functionName == "innerProduct") {
-                        return TensorRuntime::innerProduct(cg, argValues[0], argValues[1]);
+                        return borrowTensorArgs(TensorRuntime::innerProduct(cg, argValues[0], argValues[1]));
                     }
-                    return TensorRuntime::outerProduct(cg, argValues[0], argValues[1]);
+                    return borrowTensorArgs(TensorRuntime::outerProduct(cg, argValues[0], argValues[1]));
                 }
                 if (isNativeScalarMathFunction(functionName)) {
                     return codegenNativeScalarMathCall(functionName, argValues, argTypes);
