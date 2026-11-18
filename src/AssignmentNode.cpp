@@ -41,6 +41,7 @@ llvm::Value* AssignmentNode::codegen() {
     }
 
     CodeGenerator::getInstance().builder.CreateStore(exprValue, symbol->value);
+    CodeGenerator::clearFreshTensor(exprValue);
 
     return exprValue;
 }

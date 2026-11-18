@@ -2462,12 +2462,7 @@ llvm::Value* FunctionCallNode::codegen() {
         }
         else {
             if (isMathFallbackFunction(functionName)) {
-                auto borrowTensorArgs = [&](llvm::Value* result) {
-                    if (result) {
-                        for (llvm::Value* arg : argValues) cg.dropTemporary(arg, result);
-                    }
-                    return result;
-                };
+                auto borrowTensorArgs = [&](llvm::Value* result) { return cg.borrowTensors(argValues, result); };
                 if (functionName == "transpose" || functionName == "conjugate" || functionName == "adjoint") {
                     if (argValues.size() != 1 || argTypes.empty() || !TensorRuntime::isTensorTypeName(argTypes[0]->getName())) {
                         std::cerr << "Error: Tensor fallback '" << functionName << "' requires one tensor argument" << std::endl;

@@ -4,6 +4,8 @@
 #include "ASTVisitor.h"
 #include "ast_walk.h"
 #include <functional>
+#include <set>
+#include "ArrayAccessNode.h"
 #include "enums.h"
 #include "type_checker.h"
 #include "type_utils.h"
@@ -64,6 +66,56 @@ bool onlyOwningUses(const std::string& name, const std::string& className,
     }
     return safe;
 }
+bool isTensorBorrowingBuiltin(const std::string& functionName) {
+    static const std::set<std::string> names = {
+        "transpose", "conjugate", "adjoint", "relu", "softmax", "sum", "mean", "norm", "mse",
+        "innerProduct", "outerProduct", "tensorProduct", "argmax", "argmin", "min", "max", "prod",
+        "zerosLike", "onesLike", "fullLike", "print", "println", "free"};
+    if (!names.count(functionName)) return false;
+    auto& cg = CodeGenerator::getInstance();
+    if (cg.module->getFunction(functionName)) return false;
+    Symbol* symbol = cg.symbolTable.lookup(functionName);
+    return symbol == nullptr || symbol->symbolType != SymbolType::FUNCTION;
+}
+
+bool onlyBorrowingTensorUses(const std::string& name, std::vector<std::unique_ptr<ASTNode>>& statements, size_t from) {
+    bool safe = true;
+    std::function<void(ASTNode*, ASTNode*)> visit = [&](ASTNode* node, ASTNode* parent) {
+        if (!node || !safe) return;
+        if (auto* id = dynamic_cast<IdentifierNode*>(node)) {
+            if (id->value.rfind(name + ".", 0) == 0) {
+                const std::string component = id->value.substr(name.size() + 1);
+                if (component != "x" && component != "y" && component != "z" && component != "w") safe = false;
+                return;
+            }
+            if (id->value != name) return;
+            if (dynamic_cast<BinaryExpressionNode*>(parent)) return;
+            if (auto* call = dynamic_cast<FunctionCallNode*>(parent)) {
+                if (isTensorBorrowingBuiltin(call->functionName)) return;
+            }
+            if (auto* access = dynamic_cast<ArrayAccessNode*>(parent)) {
+                if (access->array.get() == node) return;
+            }
+            if (auto* ret = dynamic_cast<ReturnStatementNode*>(parent)) {
+                if (ret->expression.get() == node) return;
+            }
+            safe = false;
+            return;
+        }
+        if (dynamic_cast<LambdaExpressionNode*>(node)) {
+            ast_walk::walk(node, nullptr, [&](ASTNode* n, std::unique_ptr<ASTNode>*) {
+                if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
+                    if (id->value == name || id->value.rfind(name + ".", 0) == 0) safe = false;
+                }
+                return safe;
+            });
+            return;
+        }
+        ast_walk::forEachChild(node, [&](ASTNode* child, std::unique_ptr<ASTNode>*) { visit(child, node); });
+    };
+    for (size_t i = from; i < statements.size() && safe; ++i) visit(statements[i].get(), nullptr);
+    return safe;
+}
 }  // namespace
 
 
@@ -90,6 +142,12 @@ llvm::Value* BlockNode::codegen() {
                     std::string templateName;
                     if (templateInstanceArguments(className, &templateName, nullptr)) className = templateName;
                     decl->autoDrop = onlyOwningUses(decl->name, className, statements, i + 1);
+                }
+            }
+            else if (!decl->isMutable && decl->initializer) {
+                auto declType = decl->getType();
+                if (declType && declType->getName() == "Tensor") {
+                    decl->autoDrop = onlyBorrowingTensorUses(decl->name, statements, i + 1);
                 }
             }
         }

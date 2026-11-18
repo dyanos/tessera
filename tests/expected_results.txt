@@ -298,6 +298,7 @@ tests/positive/11_tensor/119_vector_componentwise.csec 0 0
 tests/positive/11_tensor/120_fortran_slice_assignment.csec 0 0
 tests/positive/11_tensor/121_tensor_reductions_and_dtypes.csec 0 0
 tests/positive/11_tensor/122_tensor_temporary_drops.csec 0 0
+tests/positive/11_tensor/123_tensor_val_escape.csec 0 0
 tests/positive/12_native/120_stdout_functions.csec 0 0
 tests/positive/12_native/121_stdin_functions.csec 0 0
 tests/positive/12_native/122_math_functions.csec 0 0

@@ -103,10 +103,7 @@ llvm::Value* codegenTensorBuiltin(FunctionCallNode& node, bool* handled) {
     llvm::Value* tensor = node.arguments[0]->codegen();
     if (!tensor) return nullptr;
     auto toDouble = [&](llvm::Value* v) { return coerceValueToLLVMType(v, f64); };
-    auto borrowed = [&](llvm::Value* result) {
-        cg.dropTemporary(tensor, result);
-        return result;
-    };
+    auto borrowed = [&](llvm::Value* result) { return cg.borrowTensors({ tensor }, result); };
 
     const int op = reductionOp(name);
     if (op >= 0 && node.arguments.size() == 1) {

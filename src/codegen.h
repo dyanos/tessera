@@ -6,6 +6,7 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/ValueHandle.h>
 #include "llvm_compat.h"
 #include <sstream>
 #include <vector>
@@ -124,6 +125,7 @@ public:
     static void clearFreshTensor(llvm::Value* tensor);
     void stripFreshTensorMarks();
     void dropTemporary(llvm::Value* tensor, llvm::Value* result = nullptr);
+    llvm::Value* borrowTensors(const std::vector<llvm::Value*>& operands, llvm::Value* result);
     void enterTemporaryFrame();
     void exitTemporaryFrame();
     void emitTemporaryDropsAbove(size_t depth);
@@ -147,6 +149,7 @@ private:
         std::vector<llvm::AllocaInst*> slots;
     };
     std::vector<TemporaryFrame> temporaryFrames;
+    std::vector<llvm::WeakTrackingVH> freshTensorMarks;
     llvm::Function* getTensorDropFunction();
     void emitTemporarySlotDrop(llvm::AllocaInst* slot);
 };
