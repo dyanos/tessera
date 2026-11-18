@@ -449,8 +449,12 @@ Milestones (each ends green on all suites + a byte-identical self-host fixed poi
   `break`/`continue` for frames inside the loop (`emitCleanupsAbove`); a slot written again by a
   re-evaluated loop condition drops its previous value first. `val y = <fresh tensor>` binds `y`
   directly and registers the existing `TensorFree` cleanup only when `BlockNode` proves every later
-  use of `y` borrows it (`onlyBorrowingTensorUses`): an operand of a binary operator or a tensor
-  builtin, the base of an index/slice, a `.x/.y/.z/.w` component, or `return y`. Any other use (an
+  use of `y` borrows it (`onlyBorrowingTensorUses`): the left operand of a binary operator, the right
+  operand when the left one is known to be a Tensor or a number (a class on the left would dispatch
+  a user `operator`, which may store `y`), an argument of a tensor builtin, the base of an
+  index/slice, a `.x/.y/.z/.w` component, or `return y`. The same check applies to every tensor `val`
+  initializer (`new Tensor(...)`, `<- other`, a fresh result); a `<-` initializer always takes the
+  source's drop obligation away. Any other use (an
   alias `var q = y`, an assignment, a field store, a user-function argument, a lambda capture, the
   block's result value) leaves `y` unowned, because the backend has no escape analysis yet. A store
   through `=` also clears the fresh mark, so an assignment expression's value is never dropped as a

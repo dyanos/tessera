@@ -78,6 +78,71 @@ bool isTensorBorrowingBuiltin(const std::string& functionName) {
     return symbol == nullptr || symbol->symbolType != SymbolType::FUNCTION;
 }
 
+bool isIntegerText(const std::string& text) {
+    if (text.empty()) return false;
+    size_t start = text[0] == '-' ? 1 : 0;
+    if (start == text.size()) return false;
+    for (size_t i = start; i < text.size(); ++i) {
+        if (text[i] < '0' || text[i] > '9') return false;
+    }
+    return true;
+}
+
+bool isTensorOrNumericType(const Type* type) {
+    if (!type) return false;
+    static const std::set<std::string> numeric = {
+        "Int", "Long", "Short", "Byte", "Double", "Float", "Real", "Natural", "Integer"};
+    return type->getName() == "Tensor" || numeric.count(type->getName()) != 0;
+}
+
+VariableDeclarationNode* findLaterDeclaration(const std::string& name,
+                                              std::vector<std::unique_ptr<ASTNode>>& statements, size_t from) {
+    VariableDeclarationNode* found = nullptr;
+    for (size_t i = from; i < statements.size() && !found; ++i) {
+        ast_walk::walk(statements[i].get(), nullptr, [&](ASTNode* n, std::unique_ptr<ASTNode>*) {
+            if (auto* decl = dynamic_cast<VariableDeclarationNode*>(n)) {
+                if (decl->name == name) found = decl;
+            }
+            return found == nullptr;
+        });
+    }
+    return found;
+}
+
+bool identifiersResolve(ASTNode* node) {
+    bool resolved = true;
+    auto& cg = CodeGenerator::getInstance();
+    ast_walk::walk(node, nullptr, [&](ASTNode* n, std::unique_ptr<ASTNode>*) {
+        if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
+            const std::string base = id->value.substr(0, id->value.find('.'));
+            if (base != "true" && base != "false" && !isIntegerText(base) && !cg.symbolTable.lookup(base)) {
+                resolved = false;
+            }
+        }
+        return resolved;
+    });
+    return resolved;
+}
+
+bool cannotDispatchClassOperator(ASTNode* left, std::vector<std::unique_ptr<ASTNode>>& statements, size_t from) {
+    if (!left) return false;
+    if (auto* id = dynamic_cast<IdentifierNode*>(left)) {
+        if (id->value.find('.') == std::string::npos) {
+            if (Symbol* symbol = CodeGenerator::getInstance().symbolTable.lookup(id->value)) {
+                return isTensorOrNumericType(symbol->type.get());
+            }
+            if (auto* decl = findLaterDeclaration(id->value, statements, from)) {
+                auto declType = decl->getType();
+                return isTensorOrNumericType(declType.get());
+            }
+            return isIntegerText(id->value);
+        }
+    }
+    if (!identifiersResolve(left)) return false;
+    auto leftType = left->getType();
+    return isTensorOrNumericType(leftType.get());
+}
+
 bool onlyBorrowingTensorUses(const std::string& name, std::vector<std::unique_ptr<ASTNode>>& statements, size_t from) {
     bool safe = true;
     std::function<void(ASTNode*, ASTNode*)> visit = [&](ASTNode* node, ASTNode* parent) {
@@ -89,7 +154,10 @@ bool onlyBorrowingTensorUses(const std::string& name, std::vector<std::unique_pt
                 return;
             }
             if (id->value != name) return;
-            if (dynamic_cast<BinaryExpressionNode*>(parent)) return;
+            if (auto* binary = dynamic_cast<BinaryExpressionNode*>(parent)) {
+                if (binary->left.get() == node) return;
+                if (binary->right.get() == node && cannotDispatchClassOperator(binary->left.get(), statements, from)) return;
+            }
             if (auto* call = dynamic_cast<FunctionCallNode*>(parent)) {
                 if (isTensorBorrowingBuiltin(call->functionName)) return;
             }
@@ -134,20 +202,17 @@ llvm::Value* BlockNode::codegen() {
         // Under strict ownership a local made by `new` owns its object: drop it at scope exit when
         // it is never shared.
         if (auto* decl = dynamic_cast<VariableDeclarationNode*>(stmt.get())) {
-            if (isStrictOwnership() && dynamic_cast<ClassInstanceCreationNode*>(decl->initializer.get())) {
-                auto declType = decl->getType();
+            auto declType = decl->initializer ? decl->getType() : nullptr;
+            if (declType && declType->getName() == "Tensor") {
+                decl->autoDrop = !decl->isMutable && onlyBorrowingTensorUses(decl->name, statements, i + 1);
+            }
+            else if (isStrictOwnership() && dynamic_cast<ClassInstanceCreationNode*>(decl->initializer.get())) {
                 if (declType && declType->getKind() == Type::Kind::CLASS && !isStructClassType(declType.get()) &&
                     !enumOfType(declType.get())) {
                     std::string className = declType->getName();
                     std::string templateName;
                     if (templateInstanceArguments(className, &templateName, nullptr)) className = templateName;
                     decl->autoDrop = onlyOwningUses(decl->name, className, statements, i + 1);
-                }
-            }
-            else if (!decl->isMutable && decl->initializer) {
-                auto declType = decl->getType();
-                if (declType && declType->getName() == "Tensor") {
-                    decl->autoDrop = onlyBorrowingTensorUses(decl->name, statements, i + 1);
                 }
             }
         }
