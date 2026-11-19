@@ -15,6 +15,7 @@
 #include <chrono>
 #include <deque>
 #include <memory>
+#include <mutex>
 #include <utility>
 
 #include "context_switch.inc"
@@ -401,37 +402,48 @@ int csec_process_join(void) {
 // compiler converts back to the awaited type. Awaiting blocks only the awaiting process.
 namespace csec_microthread {
 struct Future {
+    std::mutex mutex;
     bool done = false;
     long long value = 0;
-    std::vector<int> waiters; // pids blocked in await
+    Scheduler* owner = nullptr;
+    std::vector<int> waiters; // pids of `owner` blocked in await
 };
 }
 
 extern "C" {
 
 void* csec_future_new(void) {
-    return new csec_microthread::Future();
+    auto* future = new csec_microthread::Future();
+    future->owner = &csec_microthread::scheduler;
+    return future;
 }
 
 void csec_future_complete(void* handle, long long value) {
     using namespace csec_microthread;
     auto* future = static_cast<Future*>(handle);
-    if (!future || future->done) return;
-    future->done = true;
-    future->value = value;
-    for (int pid : future->waiters) {
+    if (!future) return;
+    std::vector<int> waiters;
+    {
+        std::lock_guard<std::mutex> lock(future->mutex);
+        if (future->done) return;
+        future->done = true;
+        future->value = value;
+        if (future->owner == &scheduler) waiters.swap(future->waiters);
+    }
+    for (int pid : waiters) {
         Process* waiter = findLive(pid);
         if (waiter && waiter->state == ProcState::Waiting) {
             clearDeadline(waiter);
             enqueue(waiter);
         }
     }
-    future->waiters.clear();
 }
 
 int csec_future_ready(void* handle) {
     auto* future = static_cast<csec_microthread::Future*>(handle);
-    return future && future->done ? 1 : 0;
+    if (!future) return 0;
+    std::lock_guard<std::mutex> lock(future->mutex);
+    return future->done ? 1 : 0;
 }
 
 long long csec_future_await(void* handle) {
@@ -439,13 +451,24 @@ long long csec_future_await(void* handle) {
     auto* future = static_cast<Future*>(handle);
     if (!future) return 0;
     auto& s = ensureScheduler();
-    while (!future->done) {
+    for (;;) {
         Process* self = s.current;
-        future->waiters.push_back(self->pid);
+        const bool local = future->owner == &s;
+        {
+            std::lock_guard<std::mutex> lock(future->mutex);
+            if (future->done) return future->value;
+            if (local) future->waiters.push_back(self->pid);
+        }
+        if (!local) {
+            self->timedOut = false;
+            self->deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1);
+            self->hasDeadline = true;
+            ++s.timedWaiters;
+        }
         self->state = ProcState::Waiting;
         switchTo(pickNext());
+        clearDeadline(self);
     }
-    return future->value;
 }
 
 // Start `code(env)` as a microthread (env copied, as for spawn) whose job is to fill `future`.

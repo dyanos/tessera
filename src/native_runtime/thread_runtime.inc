@@ -168,11 +168,17 @@ long long csec_thread_start(void* code, void* env, long long envSize) {
 
 // Wait for the thread and return the Int its body returned (-1 for an unknown handle).
 int csec_thread_join(long long handle) {
+    auto current = csec_threads::threads().get(handle);
+    if (!current || current->thread.get_id() == std::this_thread::get_id()) return -1;
     auto record = csec_threads::threads().take(handle);
     if (!record) return -1;
     // Let the other microthreads of this OS thread run while the joined thread finishes.
     while (!record->finished && csec_microthread::hasRunnableOthers()) csec_process_yield();
-    if (record->thread.joinable()) record->thread.join();
+    try {
+        if (record->thread.joinable()) record->thread.join();
+    } catch (...) {
+        return -1;
+    }
     return record->result;
 }
 

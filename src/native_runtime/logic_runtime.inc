@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstdint>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -66,10 +67,33 @@ std::unordered_map<std::string, long long>& interned() {
     return *table;
 }
 
-const Node& node(long long h) {
+Node node(long long h) {
+    std::lock_guard<std::recursive_mutex> lock(mutex());
     if (h < 1 || static_cast<size_t>(h) > nodes().size()) fail("invalid formula or term handle");
     return nodes()[static_cast<size_t>(h - 1)];
 }
+
+struct DepthGuard {
+    static int& depth() {
+        static thread_local int d = 0;
+        return d;
+    }
+    static uintptr_t& base() {
+        static thread_local uintptr_t b = 0;
+        return b;
+    }
+    DepthGuard() {
+        char here = 0;
+        const uintptr_t cur = reinterpret_cast<uintptr_t>(&here);
+        if (depth() == 0) base() = cur;
+        const uintptr_t used = base() > cur ? base() - cur : cur - base();
+        if (depth() >= 4000 || used > 384 * 1024) fail("formula is nested too deeply");
+        ++depth();
+    }
+    ~DepthGuard() { --depth(); }
+    DepthGuard(const DepthGuard&) = delete;
+    DepthGuard& operator=(const DepthGuard&) = delete;
+};
 
 bool isTerm(Kind k) { return k == Kind::IntVar || k == Kind::Num || k == Kind::Add || k == Kind::Sub || k == Kind::Mul || k == Kind::Neg; }
 
@@ -122,7 +146,8 @@ std::string child(long long h, int parent, bool parenEqual) {
 }
 
 std::string text(long long h) {
-    const Node& n = node(h);
+    DepthGuard guard;
+    const Node n = node(h);
     static const char* cmpText[] = {"==", "!=", "<", "<=", ">", ">="};
     switch (n.kind) {
         case Kind::True: return "true";
@@ -148,7 +173,8 @@ std::string text(long long h) {
 // ---- free variables and substitution ----
 
 void freeVars(long long h, std::set<std::string>& out, std::set<std::string>& bound) {
-    const Node& n = node(h);
+    DepthGuard guard;
+    const Node n = node(h);
     if (n.kind == Kind::IntVar) {
         if (!bound.count(n.name)) out.insert(n.name);
         return;
@@ -177,6 +203,7 @@ std::string freshName(const std::string& base, const std::set<std::string>& avoi
 
 // f[x := t], renaming bound variables that would capture a free variable of t.
 long long substitute(long long f, const std::string& x, long long t) {
+    DepthGuard guard;
     const Node n = node(f);
     if (n.kind == Kind::IntVar) return n.name == x ? t : f;
     if (n.kind == Kind::Forall || n.kind == Kind::Exists) {
@@ -203,6 +230,7 @@ long long substitute(long long f, const std::string& x, long long t) {
 // Replace every occurrence of term a by term b where no variable of a or b is bound.
 long long replace(long long f, long long a, long long b, const std::set<std::string>& guarded) {
     if (f == a) return b;
+    DepthGuard guard;
     const Node n = node(f);
     if (n.kind == Kind::Forall || n.kind == Kind::Exists) {
         if (guarded.count(n.name)) return f;
@@ -223,7 +251,8 @@ std::string symbol(const std::string& name) {
 }
 
 std::string smt(long long h) {
-    const Node& n = node(h);
+    DepthGuard guard;
+    const Node n = node(h);
     static const char* cmpSmt[] = {"=", "distinct", "<", "<=", ">", ">="};
     switch (n.kind) {
         case Kind::True: return "true";
@@ -251,7 +280,8 @@ std::string smt(long long h) {
 }
 
 void collectProps(long long h, std::set<std::string>& props) {
-    const Node& n = node(h);
+    DepthGuard guard;
+    const Node n = node(h);
     if (n.kind == Kind::Prop) props.insert(n.name);
     for (long long k : n.kids) collectProps(k, props);
 }
@@ -416,7 +446,8 @@ std::vector<Theorem>& theorems() {
     return *table;
 }
 
-const Theorem& thm(long long h) {
+Theorem thm(long long h) {
+    std::lock_guard<std::recursive_mutex> lock(mutex());
     if (h < 1 || static_cast<size_t>(h) > theorems().size()) fail("invalid theorem handle");
     return theorems()[static_cast<size_t>(h - 1)];
 }
@@ -441,8 +472,8 @@ std::vector<long long> without(const std::vector<long long>& a, long long f) {
     return out;
 }
 
-const Node& shape(long long thmHandle, Kind kind, const char* rule, const char* expected) {
-    const Node& n = node(thm(thmHandle).conclusion);
+Node shape(long long thmHandle, Kind kind, const char* rule, const char* expected) {
+    const Node n = node(thm(thmHandle).conclusion);
     if (n.kind != kind) {
         fail(std::string(rule) + " needs a theorem of the form " + expected + ", got " + text(thm(thmHandle).conclusion));
     }

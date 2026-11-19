@@ -172,28 +172,33 @@ void* csec_bigint_from_decimal(const char* text) {
     return csecBigIntAlloc(sign, std::move(mag));
 }
 
+static CsecBigInt* csecBigIntOrZero(void* handle) {
+    static CsecBigInt zero;
+    return handle ? static_cast<CsecBigInt*>(handle) : &zero;
+}
+
 void* csec_bigint_add(void* a, void* b) {
-    return csecBigIntAddSigned(static_cast<CsecBigInt*>(a), static_cast<CsecBigInt*>(b));
+    return csecBigIntAddSigned(csecBigIntOrZero(a), csecBigIntOrZero(b));
 }
 
 void* csec_bigint_sub(void* a, void* b) {
-    auto* bb = static_cast<CsecBigInt*>(b);
+    auto* bb = csecBigIntOrZero(b);
     CsecBigInt negated;                 // -b, without allocating
     negated.sign = -bb->sign;
     negated.mag = bb->mag;
-    return csecBigIntAddSigned(static_cast<CsecBigInt*>(a), &negated);
+    return csecBigIntAddSigned(csecBigIntOrZero(a), &negated);
 }
 
 void* csec_bigint_mul(void* a, void* b) {
-    auto* aa = static_cast<CsecBigInt*>(a);
-    auto* bb = static_cast<CsecBigInt*>(b);
+    auto* aa = csecBigIntOrZero(a);
+    auto* bb = csecBigIntOrZero(b);
     if (aa->sign == 0 || bb->sign == 0) return csecBigIntAlloc(0, {});
     return csecBigIntAlloc(aa->sign * bb->sign, csecMagMul(aa->mag, bb->mag));
 }
 
 int csec_bigint_cmp(void* a, void* b) {
-    auto* aa = static_cast<CsecBigInt*>(a);
-    auto* bb = static_cast<CsecBigInt*>(b);
+    auto* aa = csecBigIntOrZero(a);
+    auto* bb = csecBigIntOrZero(b);
     if (aa->sign != bb->sign) return aa->sign < bb->sign ? -1 : 1;
     if (aa->sign == 0) return 0;
     int c = csecMagCmp(aa->mag, bb->mag);

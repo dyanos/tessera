@@ -72,16 +72,30 @@ std::unordered_map<const char*, std::unordered_map<std::string, std::string>>& t
     return cache;
 }
 
+std::vector<std::vector<std::string>>& retiredTokenTexts() {
+    static auto* retired = new std::vector<std::vector<std::string>>();
+    return *retired;
+}
+
+void retireTokenTexts(std::vector<std::string>& texts) {
+    if (!texts.empty()) retiredTokenTexts().push_back(std::move(texts));
+}
+
 void clearTokenCachesFor(const char* tokens) {
     if (!tokens) return;
     tokenLineCache().erase(tokens);
-    tokenTextCache().erase(tokens);
+    auto texts = tokenTextCache().find(tokens);
+    if (texts != tokenTextCache().end()) {
+        retireTokenTexts(texts->second);
+        tokenTextCache().erase(texts);
+    }
     tokenFunctionRangeCache().erase(tokens);
     tokenFunctionReturnTypeCache().erase(tokens);
 }
 
 void clearAllTokenCaches() {
     tokenLineCache().clear();
+    for (auto& entry : tokenTextCache()) retireTokenTexts(entry.second);
     tokenTextCache().clear();
     tokenFunctionRangeCache().clear();
     tokenFunctionReturnTypeCache().clear();
@@ -118,7 +132,8 @@ const std::vector<std::string>& tokenTexts(const char* tokens) {
     std::vector<std::string> texts;
     texts.reserve(starts.size());
     for (int start : starts) {
-        int textStart = start + 2;
+        int textStart = start;
+        for (int k = 0; k < 2 && value[textStart] != '\0'; ++k) ++textStart;
         int end = textStart;
         while (value[end] != '\0' && value[end] != '\n') {
             ++end;
@@ -497,7 +512,7 @@ int csec_operator_length(const char* source, int index) {
     if (!source || index < 0 || source[index] == '\0') return 0;
     const char first = source[index];
     const char second = source[index + 1];
-    const char third = source[index + 2];
+    const char third = second ? source[index + 2] : '\0';
     if ((first == '<' || first == '>') && second == first && third == '|') return 3;
     if (first == '[' && second == '@') return 2;
     const bool pair =

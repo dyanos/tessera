@@ -17,13 +17,26 @@ struct CsecTensor {
     double* data;
 };
 
+[[noreturn]] void csecTensorOutOfMemory(long long count) {
+    std::fflush(stdout);
+    std::fprintf(stderr, "MemoryError: cannot allocate a tensor of %lld elements\n", count);
+    std::fflush(stderr);
+    std::exit(1);
+}
+
 CsecTensor* csecTensorAlloc(long long rank, long long count) {
+    const size_t maxElements = (std::numeric_limits<size_t>::max)() / sizeof(double);
+    if (count < 0 || static_cast<unsigned long long>(count) > maxElements ||
+        rank < 0 || static_cast<unsigned long long>(rank) > maxElements) {
+        csecTensorOutOfMemory(count);
+    }
     auto* t = static_cast<CsecTensor*>(std::malloc(sizeof(CsecTensor)));
-    if (!t) return nullptr;
+    if (!t) csecTensorOutOfMemory(count);
     t->rank = rank;
     t->count = count;
     t->dims = static_cast<long long*>(std::malloc(sizeof(long long) * static_cast<size_t>(rank > 0 ? rank : 1)));
     t->data = static_cast<double*>(std::malloc(sizeof(double) * static_cast<size_t>(count > 0 ? count : 1)));
+    if (!t->dims || !t->data) csecTensorOutOfMemory(count);
     return t;
 }
 
@@ -56,6 +69,7 @@ double csec_tensor_get(void* tp, long long i) {
 void* csec_tensor_new2(long long rows, long long cols, double fill) {
     if (rows < 0) rows = 0;
     if (cols < 0) cols = 0;
+    if (cols > 0 && rows > (std::numeric_limits<long long>::max)() / cols) csecTensorOutOfMemory(-1);
     long long count = rows * cols;
     CsecTensor* t = csecTensorAlloc(2, count);
     if (t->rank >= 2) { t->dims[0] = rows; t->dims[1] = cols; }

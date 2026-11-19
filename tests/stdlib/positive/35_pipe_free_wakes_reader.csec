@@ -1,0 +1,14 @@
+import std.pipe
+import std.thread
+// Freeing a pipe ends the input of a reader that is blocked on it.
+def main(): Int {
+    val p = pipeNew();
+    val t = threadStart([=]() -> {
+        if (pipeReadLine(p) != "") { return 1; }
+        return 0;
+    });
+    threadSleep(200);
+    pipeFree(p);
+    if (threadJoin(t) != 0) { return 1; }
+    return 0;
+}

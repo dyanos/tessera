@@ -1,0 +1,17 @@
+import std.thread
+// A thread joining its own handle gets -1 instead of aborting; its real joiner still works.
+def main(): Int {
+    val box = atomicNew(0);
+    val tried = atomicNew(0);
+    val t = threadStart([=]() -> {
+        while (atomicGet(box) == 0) { threadYield(); }
+        val code = threadJoin(atomicGet(box));
+        atomicSet(tried, 1);
+        if (code != -1) { return 1; }
+        return 7;
+    });
+    atomicSet(box, t);
+    while (atomicGet(tried) == 0) { threadYield(); }
+    if (threadJoin(t) != 7) { return 1; }
+    return 0;
+}
