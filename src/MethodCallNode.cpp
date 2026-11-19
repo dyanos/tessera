@@ -391,20 +391,21 @@ llvm::Value* MethodCallNode::codegen() {
                 objectValue, llvm::PointerType::getUnqual(blockType->getContext()), "shared.block");
             if (!isWeak && methodName == "clone") {
                 llvm::Value* strongPtr = cg.builder.CreateStructGEP(blockType, block, 0, "shared.strong.ptr");
-                llvm::Value* strong = cg.builder.CreateLoad(i64Ty, strongPtr, "shared.strong");
-                cg.builder.CreateStore(
-                    cg.builder.CreateAdd(strong, llvm::ConstantInt::get(i64Ty, 1), "shared.inc"), strongPtr);
+                cg.builder.CreateAtomicRMW(llvm::AtomicRMWInst::Add, strongPtr, llvm::ConstantInt::get(i64Ty, 1),
+                                           llvm::MaybeAlign(8), llvm::AtomicOrdering::Monotonic);
                 return objectValue;
             }
             if (methodName == "get") {
                 llvm::Value* payloadPtr = cg.builder.CreateStructGEP(blockType, block, 2, "shared.payload.ptr");
-                llvm::Value* payload = cg.builder.CreateLoad(payloadType, payloadPtr, "shared.get");
                 if (!isWeak) {
-                    return payload;
+                    return cg.builder.CreateLoad(payloadType, payloadPtr, "shared.get");
                 }
                 // Weak.get(): return the payload only while the value is alive, else a zero value.
-                llvm::Value* strong = cg.builder.CreateLoad(
+                auto* strong = cg.builder.CreateLoad(
                     i64Ty, cg.builder.CreateStructGEP(blockType, block, 0, "weak.strong.ptr"), "weak.strong");
+                strong->setAtomic(llvm::AtomicOrdering::Acquire);
+                strong->setAlignment(llvm::Align(8));
+                llvm::Value* payload = cg.builder.CreateLoad(payloadType, payloadPtr, "shared.get");
                 llvm::Value* alive = cg.builder.CreateICmpSGT(strong, llvm::ConstantInt::get(i64Ty, 0), "weak.alive");
                 llvm::Value* zero = llvm::Constant::getNullValue(payloadType);
                 return cg.builder.CreateSelect(alive, payload, zero, "weak.get");

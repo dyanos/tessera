@@ -75,6 +75,7 @@ llvm::Value* lowerConcurrentCall(FunctionCallNode* call, bool wantFuture) {
             return nullptr;
         }
         auto type = arg->getType();
+        value = cg.copyStackBufferToHeap(value);
         values.push_back(value);
         types.push_back(type ? type->clone() : std::make_unique<UnknownType>());
         fields.push_back(value->getType());
@@ -84,7 +85,7 @@ llvm::Value* lowerConcurrentCall(FunctionCallNode* call, bool wantFuture) {
     llvm::Value* future = wantFuture
         ? cg.builder.CreateCall(runtimeFunction(cg, "csec_future_new", ptrTy, {}), {}, "future")
         : static_cast<llvm::Value*>(llvm::ConstantPointerNull::get(ptrTy));
-    llvm::Value* env = cg.builder.CreateAlloca(envType, nullptr, "task.env");
+    llvm::Value* env = cg.createEntryAlloca(envType, "task.env");
     cg.builder.CreateStore(future, cg.builder.CreateStructGEP(envType, env, 0));
     for (size_t i = 0; i < values.size(); ++i) {
         cg.builder.CreateStore(values[i], cg.builder.CreateStructGEP(envType, env, static_cast<unsigned>(i + 1)));
@@ -108,10 +109,18 @@ llvm::Value* lowerConcurrentCall(FunctionCallNode* call, bool wantFuture) {
     }
     for (size_t i = 0; i < values.size(); ++i) {
         const std::string name = "__task_arg_" + std::to_string(i);
-        llvm::Value* slot = cg.builder.CreateAlloca(fields[i + 1], nullptr, name);
-        cg.builder.CreateStore(cg.builder.CreateLoad(fields[i + 1],
-            cg.builder.CreateStructGEP(envType, taskEnv, static_cast<unsigned>(i + 1))), slot);
-        cg.symbolTable.addSymbol(name, std::make_unique<Symbol>(name, types[i]->clone(), slot, false, SymbolType::VARIABLE));
+        llvm::Value* argument = cg.builder.CreateLoad(fields[i + 1],
+            cg.builder.CreateStructGEP(envType, taskEnv, static_cast<unsigned>(i + 1)), name + ".value");
+        const Type* argType = types[i].get();
+        const bool boundDirectly = argType && (argType->getName() == "Array" || argType->getName() == "Vector" ||
+                                               dynamic_cast<const ArrayType*>(argType) != nullptr ||
+                                               argType->getKind() == Type::Kind::FUNCTION);
+        llvm::Value* binding = argument;
+        if (!boundDirectly) {
+            binding = cg.builder.CreateAlloca(fields[i + 1], nullptr, name);
+            cg.builder.CreateStore(argument, binding);
+        }
+        cg.symbolTable.addSymbol(name, std::make_unique<Symbol>(name, types[i]->clone(), binding, false, SymbolType::VARIABLE));
         synthetic->arguments.push_back(std::make_unique<IdentifierNode>(name));
     }
     llvm::Value* result = synthetic->codegen();

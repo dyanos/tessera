@@ -1,0 +1,6 @@
+// An element write past the end stops the program (exit 1) instead of corrupting the heap.
+def main(): Int {
+    val t: Tensor<Double, 3> = new Tensor<Double, 3>(0.0);
+    t[100] = 1.0;
+    return 0;
+}

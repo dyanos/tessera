@@ -176,7 +176,12 @@ inline int cmpNode(Id a, Id b) {
     const Node& x = node(a);
     const Node& y = node(b);
     if (x.kind != y.kind) return x.kind < y.kind ? -1 : 1;
-    if (x.kind == K_NUM) return x.num < y.num ? -1 : (x.num > y.num ? 1 : 0);
+    if (x.kind == K_NUM) {
+        const bool xNan = std::isnan(x.num);
+        const bool yNan = std::isnan(y.num);
+        if (xNan || yNan) return xNan == yNan ? 0 : (xNan ? 1 : -1);
+        return x.num < y.num ? -1 : (x.num > y.num ? 1 : 0);
+    }
     if (x.kind == K_VAR || x.kind == K_FUNC) {
         int c = x.name.compare(y.name);
         if (c != 0) return c < 0 ? -1 : 1;

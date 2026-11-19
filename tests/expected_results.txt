@@ -285,6 +285,9 @@ tests/positive/10_integration/208_template_struct_tuple_tensor_execution.csec 0 
 tests/positive/10_integration/208_token_sugar_execution.csec 0 0
 tests/positive/10_integration/209_struct_operator_overloads_execution.csec 0 0
 tests/positive/10_integration/210_struct_unary_operator_execution.csec 0 0
+tests/positive/10_integration/211_box_move_ownership_execution.csec 0 0
+tests/positive/10_integration/212_shared_move_and_capture_execution.csec 0 0
+tests/positive/10_integration/213_array_escape_execution.csec 0 0
 tests/positive/11_tensor/110_tensor_types_and_creation.csec 0 0
 tests/positive/11_tensor/111_tensor_indexing.csec 0 9
 tests/positive/11_tensor/112_tensor_operations.csec 0 0
@@ -301,6 +304,10 @@ tests/positive/11_tensor/121_tensor_reductions_and_dtypes.csec 0 0
 tests/positive/11_tensor/122_tensor_temporary_drops.csec 0 0
 tests/positive/11_tensor/123_tensor_val_escape.csec 0 0
 tests/positive/11_tensor/124_tensor_ownership_escape.csec 0 0
+tests/positive/11_tensor/125_tensor_escape_shadowing.csec 0 0
+tests/positive/11_tensor/126_tensor_index_out_of_bounds.csec 0 1
+tests/positive/11_tensor/127_tensor_shape_mismatch.csec 0 1
+tests/positive/11_tensor/128_tensor_slice_out_of_range.csec 0 1
 tests/positive/12_native/120_stdout_functions.csec 0 0
 tests/positive/12_native/121_stdin_functions.csec 0 0
 tests/positive/12_native/122_math_functions.csec 0 0
@@ -390,3 +397,9 @@ tests/stdlib/positive/28_logic.csec 0 0
 tests/stdlib/positive/29_random.csec 0 0
 tests/stdlib/positive/30_autodiff.csec 0 0
 tests/stdlib/positive/31_dataframe_npy.csec 0 0
+tests/stdlib/positive/32_dict_key_lifetime.csec 0 0
+tests/stdlib/positive/33_dataframe_ragged_append.csec 0 0
+tests/stdlib/positive/34_logic_substitute_growth.csec 0 0
+tests/stdlib/positive/35_pipe_free_wakes_reader.csec 0 0
+tests/stdlib/positive/36_thread_self_join.csec 0 0
+tests/stdlib/positive/37_dataframe_npy_malformed.csec 0 0

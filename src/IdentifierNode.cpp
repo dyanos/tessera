@@ -158,6 +158,12 @@ llvm::Value* IdentifierNode::codegen() {
         if (symbol->type && (symbol->type->getName() == "Array" ||
             symbol->type->getName() == "Vector" ||
             dynamic_cast<ArrayType*>(symbol->type.get()) != nullptr)) {
+            auto* fieldSlot = llvm::dyn_cast<llvm::GetElementPtrInst>(symbol->value);
+            if (fieldSlot && fieldSlot->getSourceElementType()->isStructTy() &&
+                fieldSlot->getResultElementType()->isPointerTy()) {
+                auto& cg = CodeGenerator::getInstance();
+                return cg.builder.CreateLoad(llvm::PointerType::getUnqual(cg.context), symbol->value, value + ".buffer");
+            }
             return symbol->value;
         }
         // A lambda value is a { code, env } closure pointer bound directly; return the pointer

@@ -177,14 +177,43 @@ void SymbolTable::initializeBuiltInTypes(llvm::LLVMContext& context) {
 }
 
 SymbolTable::~SymbolTable() {
-    while (currentScopeLevel > 0) {
-        exitScope();
-	}
-
     this->currentScope = nullptr;
 }
 
+SymbolTable::SymbolTable(SymbolTable&& other) noexcept
+    : currentScope(other.currentScope),
+      currentScopeLevel(other.currentScopeLevel),
+      currentSymbol(other.currentSymbol),
+      ownedScopes(std::move(other.ownedScopes)),
+      symbolStack(std::move(other.symbolStack)),
+      rejectedSymbols(std::move(other.rejectedSymbols)) {
+    other.currentScope = nullptr;
+    other.currentScopeLevel = 0;
+    other.currentSymbol = nullptr;
+}
+
+SymbolTable& SymbolTable::operator=(SymbolTable&& other) noexcept {
+    if (this != &other) {
+        currentScope = other.currentScope;
+        currentScopeLevel = other.currentScopeLevel;
+        currentSymbol = other.currentSymbol;
+        ownedScopes = std::move(other.ownedScopes);
+        symbolStack = std::move(other.symbolStack);
+        rejectedSymbols = std::move(other.rejectedSymbols);
+        other.currentScope = nullptr;
+        other.currentScopeLevel = 0;
+        other.currentSymbol = nullptr;
+    }
+    return *this;
+}
+
 bool SymbolTable::addSymbol(const std::string& name, std::unique_ptr<Symbol> symbol) {
+    const bool added = insertSymbol(name, symbol);
+    if (symbol) rejectedSymbols.push_back(std::move(symbol));
+    return added;
+}
+
+bool SymbolTable::insertSymbol(const std::string& name, std::unique_ptr<Symbol>& symbol) {
     if (!symbol || !this->currentScope) {
         return false;
     }

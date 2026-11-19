@@ -251,11 +251,13 @@ void collectPMapCaptures(
 }
 
 llvm::Value* loadCapturedValue(CodeGenerator& cg, Symbol* symbol, llvm::Type* llvmType, const std::string& name) {
-    if (!symbol || !symbol->value) return nullptr;
-    if (symbol->value->getType()->isPointerTy()) {
-        return cg.builder.CreateLoad(llvmType, symbol->value, name + ".pmap.capture");
+    if (!symbol || !symbol->value || !llvmType) return nullptr;
+    IdentifierNode reference(name);
+    llvm::Value* value = reference.codegen();
+    if (value && value->getType() != llvmType && value->getType()->isPointerTy()) {
+        value = cg.builder.CreateLoad(llvmType, value, name + ".pmap.capture");
     }
-    return symbol->value;
+    return value;
 }
 
 llvm::Value* codegenOutlinedParallelPMap(

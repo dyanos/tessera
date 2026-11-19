@@ -1,0 +1,21 @@
+import std.logic
+// Substitution builds many new nodes; the variable name must survive the node table growing.
+def main(): Int {
+    val x = intVar("x");
+    val y = intVar("y");
+    var f = x > intVal(0);
+    var i = 1;
+    while (i < 100) {
+        f = f & (x + i > intVal(i));
+        i = i + 1;
+    }
+    val h = f.substitute(x, y + 1);
+    var g = y + 1 > intVal(0);
+    i = 1;
+    while (i < 100) {
+        g = g & (y + 1 + i > intVal(i));
+        i = i + 1;
+    }
+    if (!h.sameAs(g)) { return 1; }
+    return 0;
+}

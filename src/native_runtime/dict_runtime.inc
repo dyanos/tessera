@@ -117,6 +117,8 @@ struct Dict {
         Entry& entry = entries[static_cast<size_t>(at)];
         if (textKeys()) {
             textIndex.erase(text(entry.key));
+            std::free(reinterpret_cast<void*>(static_cast<intptr_t>(entry.key)));
+            entry.key = 0;
         }
         else {
             intIndex.erase(entry.key);
@@ -350,7 +352,16 @@ long long csec_dict_key_at(void* handle, long long index) {
         std::fprintf(stderr, "IndexError: dictionary index %lld out of range\n", index);
         std::exit(1);
     }
-    return entry->key;
+    if (!dict->textKeys()) return entry->key;
+    const std::string copy = csec_dict::Dict::text(entry->key);
+    char* owned = static_cast<char*>(std::malloc(copy.size() + 1));
+    if (!owned) {
+        std::fflush(stdout);
+        std::fprintf(stderr, "MemoryError: out of memory\n");
+        std::exit(1);
+    }
+    std::memcpy(owned, copy.c_str(), copy.size() + 1);
+    return static_cast<long long>(reinterpret_cast<intptr_t>(owned));
 }
 
 long long csec_dict_value_at(void* handle, long long index) {

@@ -1,0 +1,17 @@
+import std.dataframe
+// Appending to one column of a stored frame leaves the others short; operations pad them with nulls.
+def main(): Int {
+    val df = dfNew();
+    dfAddColumn(df, "a", "long");
+    dfAddColumn(df, "b", "long");
+    dfAppendLong(df, "a", 3);
+    dfAppendLong(df, "b", 30);
+    dfAppendLong(df, "a", 1);
+    dfAppendLong(df, "a", 2);
+    val sorted = dfSort(df, "a");
+    if (dfRows(sorted) != 3) { return 1; }
+    if (dfGetLong(sorted, "a", 0) != 1 or dfGetLong(sorted, "a", 2) != 3) { return 2; }
+    if (dfGetLong(sorted, "b", 2) != 30 or !dfIsNull(sorted, "b", 0) or !dfIsNull(sorted, "b", 1)) { return 3; }
+    if (dfRows(df) != 3 or !dfIsNull(df, "b", 2)) { return 4; }
+    return 0;
+}

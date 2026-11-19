@@ -35,18 +35,44 @@ csec_threads::HandleTable<InputFile>& inputFiles() {
 struct MappedFile {
     const char* data = nullptr;
     long long size = 0;
+    bool copied = false;
 #ifdef _WIN32
     HANDLE file = INVALID_HANDLE_VALUE;
     HANDLE mapping = nullptr;
 #endif
-    ~MappedFile() {
+    void unmap() {
 #ifdef _WIN32
         if (data && size > 0) UnmapViewOfFile(data);
-        if (mapping) CloseHandle(mapping);
-        if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
 #else
         if (data && size > 0) munmap(const_cast<char*>(data), static_cast<size_t>(size));
 #endif
+        data = nullptr;
+    }
+    ~MappedFile() {
+        if (copied) std::free(const_cast<char*>(data));
+        else unmap();
+#ifdef _WIN32
+        if (mapping) CloseHandle(mapping);
+        if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+#endif
+    }
+    bool terminate() {
+#ifdef _WIN32
+        SYSTEM_INFO info{};
+        GetSystemInfo(&info);
+        const long long page = static_cast<long long>(info.dwPageSize);
+#else
+        const long long page = static_cast<long long>(sysconf(_SC_PAGESIZE));
+#endif
+        if (size == 0 || page <= 0 || size % page != 0) return true;
+        char* copy = static_cast<char*>(std::malloc(static_cast<size_t>(size) + 1));
+        if (!copy) return false;
+        std::memcpy(copy, data, static_cast<size_t>(size));
+        copy[size] = 0;
+        unmap();
+        data = copy;
+        copied = true;
+        return true;
     }
 };
 
@@ -163,10 +189,11 @@ long long csec_io_map_open(const char* path) {
     }
     ::close(fd);
 #endif
+    if (!mapped->terminate()) return 0;
     return csec_io::mappedFiles().add(mapped);
 }
 
-// The mapped bytes (valid until csec_io_map_close). Not NUL-terminated: index below csec_io_map_size.
+// The mapped bytes (valid until csec_io_map_close), followed by a NUL; index below csec_io_map_size.
 char* csec_io_map_data(long long handle) {
     auto mapped = csec_io::mappedFiles().get(handle);
     return mapped ? const_cast<char*>(mapped->data) : nullptr;

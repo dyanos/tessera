@@ -1,0 +1,2 @@
+object Complex { def f(x: Int): Int = x }
+def main(): Int = 0

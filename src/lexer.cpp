@@ -136,7 +136,7 @@ std::vector<Token> Lexer::tokenize() {
 }
 
 void Lexer::advance(int steps) {
-    for (int i = 0; i < steps; ++i) {
+    for (int i = 0; i < steps && position < source.size(); ++i) {
         if (source[position] == '\n') {
             ++line;
             column = 1;

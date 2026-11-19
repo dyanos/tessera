@@ -204,6 +204,47 @@ bool checkDefaultParameters(ASTNode* program) {
         }
         return true;
     });
+    std::map<std::string, std::set<std::string>> defaultCalls;
+    std::map<std::string, int> ownerLines;
+    ast_walk::walk(program, nullptr, [&](ASTNode* node, std::unique_ptr<ASTNode>*) {
+        std::vector<ParameterNode*> params;
+        std::string owner;
+        if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(node)) {
+            params = parametersOf(fn->parameters);
+            owner = fn->name;
+        }
+        else if (auto* cls = dynamic_cast<ClassDeclarationNode*>(node)) {
+            params = parametersOf(cls->constructorParams);
+            owner = cls->name;
+        }
+        else return true;
+        for (auto* p : params) {
+            if (!p->defaultValue) continue;
+            ownerLines.emplace(owner, p->line);
+            ast_walk::walk(p->defaultValue.get(), nullptr, [&](ASTNode* n, std::unique_ptr<ASTNode>*) {
+                if (auto* call = dynamic_cast<FunctionCallNode*>(n)) defaultCalls[owner].insert(call->functionName);
+                if (auto* creation = dynamic_cast<ClassInstanceCreationNode*>(n)) defaultCalls[owner].insert(creation->className);
+                return true;
+            });
+        }
+        return true;
+    });
+    for (const auto& entry : defaultCalls) {
+        std::set<std::string> seen;
+        std::vector<std::string> pending(entry.second.begin(), entry.second.end());
+        while (!pending.empty()) {
+            const std::string callee = pending.back();
+            pending.pop_back();
+            if (callee == entry.first) {
+                error(ownerLines[entry.first], "a default value of a parameter of '" + entry.first +
+                                               "' calls '" + entry.first + "' again (directly or through another default value)");
+                break;
+            }
+            if (!seen.insert(callee).second) continue;
+            auto next = defaultCalls.find(callee);
+            if (next != defaultCalls.end()) pending.insert(pending.end(), next->second.begin(), next->second.end());
+        }
+    }
     return errors == 0;
 }
 

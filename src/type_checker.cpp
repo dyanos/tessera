@@ -93,7 +93,9 @@ FunctionSymbol* ensureFunctionSymbol(FunctionDeclarationNode& node) {
 
     auto symbol = std::make_unique<FunctionSymbol>(node.name, std::move(nodeType), nullptr, false, SymbolType::FUNCTION);
     auto* raw = symbol.get();
-    cg.symbolTable.addSymbol(node.name, std::move(symbol));
+    if (!cg.symbolTable.addSymbol(node.name, std::move(symbol))) {
+        cg.reportError("cannot declare function '" + node.name + "' here");
+    }
     return raw;
 }
 
@@ -134,7 +136,9 @@ TemplateSymbol* ensureTemplateSymbol(TemplateDeclarationNode& node) {
     symbol->declaration = node.declaration ? node.declaration->clone() : nullptr;
 
     auto* raw = symbol.get();
-    cg.symbolTable.addSymbol(symbolName, std::move(symbol));
+    if (!cg.symbolTable.addSymbol(symbolName, std::move(symbol))) {
+        cg.reportError("cannot declare template '" + symbolName + "' here");
+    }
     return raw;
 }
 
@@ -150,7 +154,9 @@ ClassSymbol* ensureClassSymbol(ClassDeclarationNode& node) {
     auto symbol = std::make_unique<ClassSymbol>(node.name, classType, node.superClassName);
     symbol->isStruct = node.isStruct;
     auto* raw = symbol.get();
-    cg.symbolTable.addSymbol(node.name, std::move(symbol));
+    if (!cg.symbolTable.addSymbol(node.name, std::move(symbol))) {
+        cg.reportError("cannot declare class '" + node.name + "' here");
+    }
     return raw;
 }
 
@@ -329,6 +335,23 @@ static bool containsLoopExit(ASTNode* node) {
         if (!found && containsLoopExit(child)) found = true;
     });
     return found;
+}
+
+static bool statementLeavesLoop(const ASTNode* stmt) {
+    if (!stmt) return false;
+    if (dynamic_cast<const ReturnStatementNode*>(stmt)) return true;
+    if (auto* control = dynamic_cast<const LoopControlNode*>(stmt)) return control->isBreak;
+    if (auto* block = dynamic_cast<const BlockNode*>(stmt)) {
+        for (const auto& s : block->statements) {
+            if (statementLeavesLoop(s.get())) return true;
+        }
+        return false;
+    }
+    if (auto* ifn = dynamic_cast<const IfStatementNode*>(stmt)) {
+        return ifn->thenBlock && ifn->elseBlock &&
+               statementLeavesLoop(ifn->thenBlock.get()) && statementLeavesLoop(ifn->elseBlock.get());
+    }
+    return false;
 }
 
 // A decimal literal is a Double. Where a Float is expected -- a Float variable, parameter, return value,
@@ -1092,7 +1115,10 @@ void TypeChecker::visit(IfStatementNode& node) {
         node.thenBlock->accept(*this);
     }
     const bool thenDiverges = node.thenBlock && statementDiverges(node.thenBlock.get());
+    const bool thenBreaks = !thenDiverges && loopDepth > 0 && !loopExitStates.empty() &&
+                            node.thenBlock && statementLeavesLoop(node.thenBlock.get());
     const auto afterThen = ownershipScopes;
+    if (thenBreaks) loopExitStates.back().push_back(afterThen);
 
     // The else arm runs on the false path, from the pre-branch state — not the then arm's state.
     ownershipScopes = before;
@@ -1100,19 +1126,45 @@ void TypeChecker::visit(IfStatementNode& node) {
         node.elseBlock->accept(*this);
     }
     const bool elseDiverges = node.elseBlock && statementDiverges(node.elseBlock.get());
+    const bool elseBreaks = !elseDiverges && loopDepth > 0 && !loopExitStates.empty() &&
+                            node.elseBlock && statementLeavesLoop(node.elseBlock.get());
     const auto afterElse = ownershipScopes;
+    if (elseBreaks) loopExitStates.back().push_back(afterElse);
 
     // Join the surviving paths. With no else arm, the false path falls through with `before` (no
     // extra moves), which is exactly what starting from `before` and skipping the else merge gives.
     ownershipScopes = before;
-    if (!thenDiverges) {
+    if (!thenDiverges && !thenBreaks) {
         mergeMovedFrom(afterThen);
     }
-    if (!elseDiverges) {
+    if (!elseDiverges && !elseBreaks) {
         mergeMovedFrom(afterElse);
     }
 
     node.type = node.getType();
+}
+
+void TypeChecker::visitLoopBody(ASTNode* body, size_t outerScopes) {
+    const auto beforeBody = ownershipScopes;
+    loopExitStates.emplace_back();
+    ++loopDepth;
+    body->accept(*this);
+    --loopDepth;
+    auto exits = std::move(loopExitStates.back());
+    loopExitStates.pop_back();
+    if (!statementLeavesLoop(body)) {
+        const size_t n = std::min({ outerScopes, beforeBody.size(), ownershipScopes.size() });
+        for (size_t i = 0; i < n; ++i) {
+            for (const auto& entry : ownershipScopes[i]) {
+                auto before = beforeBody[i].find(entry.first);
+                if (entry.second.moved && before != beforeBody[i].end() && !before->second.moved) {
+                    reportError("Type error: '" + entry.first +
+                                "' is moved inside a loop body and would be moved again on the next iteration");
+                }
+            }
+        }
+    }
+    for (const auto& exit : exits) mergeMovedFrom(exit);
 }
 
 void TypeChecker::visit(ForStatementNode& node) {
@@ -1168,9 +1220,7 @@ void TypeChecker::visit(ForStatementNode& node) {
     }
     visitLoopContracts(node);
     if (node.body) {
-        ++loopDepth;
-        node.body->accept(*this);
-        --loopDepth;
+        visitLoopBody(node.body.get(), ownershipScopes.size() - 1);
     }
     exitOwnershipScope();
     cg.symbolTable.exitScope();
@@ -1224,9 +1274,18 @@ void TypeChecker::visit(BlockNode& node) {
     cg.symbolTable.exitScope();
 }
 
+static bool isRefcountHandleType(const Type* type) {
+    return type && type->getKind() == Type::Kind::GENERIC && (type->getName() == "Shared" || type->getName() == "Weak");
+}
+
 void TypeChecker::visit(AssignmentNode& node) {
     if (node.expression) {
         node.expression->accept(*this);
+    }
+    Symbol* target = CodeGenerator::getInstance().symbolTable.lookup(node.name);
+    if (target && isRefcountHandleType(target->type.get())) {
+        reportError("Type error: a " + target->type->getName() + " handle '" + node.name +
+                    "' cannot be reassigned; declare a new binding instead");
     }
 }
 
@@ -2006,6 +2065,20 @@ void TypeChecker::visit(ValueNode& node) {
 }
 
 void TypeChecker::visit(FunctionCallNode& node) {
+    static int callDepth = 0;
+    static bool callNestingExceeded = false;
+    if (callNestingExceeded) return;
+    if (callDepth >= 256) {
+        callNestingExceeded = true;
+        reportError("Type error: call to '" + node.functionName +
+                    "' nests too deeply (a default argument that calls its own function?)");
+        return;
+    }
+    struct DepthGuard {
+        int& depth;
+        explicit DepthGuard(int& d) : depth(d) { ++depth; }
+        ~DepthGuard() { --depth; }
+    } depthGuard(callDepth);
     std::vector<std::unique_ptr<Type>> parameterTypes;
     auto& cg = CodeGenerator::getInstance();
     {
@@ -2336,6 +2409,13 @@ void TypeChecker::visit(AssignmentExpressionNode& node) {
     const std::string leftName = identifierName(node.left.get());
     const std::string rightName = movedOrBorrowedIdentifier(node.right.get());
     const bool rightIsMoveChecked = rightType && isMoveCheckedType(rightType.get());
+    if (!leftName.empty() && dynamic_cast<IdentifierNode*>(node.left.get())) {
+        auto leftType = node.left->getType();
+        if (isRefcountHandleType(leftType.get())) {
+            reportError("Type error: a " + leftType->getName() + " handle '" + leftName +
+                        "' cannot be reassigned; declare a new binding instead");
+        }
+    }
     if (node.op == "<-") {
         if (!rightName.empty()) {
             markMoved(rightName);
@@ -2656,9 +2736,7 @@ void TypeChecker::visit(WhileStatementNode& node) {
         // those moves, mirroring the diverging-if-arm handling. A non-diverging body keeps its moves
         // (a value moved in a body that can loop is conservatively treated as moved afterward).
         const auto beforeBody = ownershipScopes;
-        ++loopDepth;
-        node.body->accept(*this);
-        --loopDepth;
+        visitLoopBody(node.body.get(), ownershipScopes.size());
         // A `break` leaves the loop with the body's moves in effect, so such a body is not diverging.
         if (statementDiverges(node.body.get()) && !containsLoopExit(node.body.get())) {
             ownershipScopes = beforeBody;

@@ -503,14 +503,16 @@ char* csec_llvm_lexer_helper_definition(const char* name) {
 
 int csec_lex_line_comment(const char* source, int index) {
     if (!source || index < 0) return index;
-    int cursor = index + 2;
+    int cursor = index;
+    for (int k = 0; k < 2 && source[cursor]; ++k) ++cursor;
     while (source[cursor] && source[cursor] != '\n') ++cursor;
     return cursor;
 }
 
 int csec_lex_block_comment(const char* source, int index) {
     if (!source || index < 0) return index;
-    int cursor = index + 2, depth = 1;
+    int cursor = index, depth = 1;
+    for (int k = 0; k < 2 && source[cursor]; ++k) ++cursor;
     while (source[cursor] && source[cursor + 1] && depth > 0) {
         if (source[cursor] == '/' && source[cursor + 1] == '*') { ++depth; cursor += 2; }
         else if (source[cursor] == '*' && source[cursor + 1] == '/') { --depth; cursor += 2; }

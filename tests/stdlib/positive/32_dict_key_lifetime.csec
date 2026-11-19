@@ -1,0 +1,28 @@
+// A String key read with keyAt stays valid after the dictionary drops it.
+def main(): Int {
+    val d: Dict<String, Int> = {};
+    d["alpha"] = 1;
+    d["beta"] = 2;
+    val first = d.keyAt(0);
+    d.clear();
+    d["gamma"] = 3;
+    if (first != "alpha") { return 1; }
+    var key = "k";
+    var i = 0;
+    while (i < 40) {
+        d[key] = i;
+        key = key + "x";
+        i = i + 1;
+    }
+    val held = d.keyAt(1);
+    d.remove("k");
+    key = "kx";
+    i = 1;
+    while (i < 39) {
+        d.remove(key);
+        key = key + "x";
+        i = i + 1;
+    }
+    if (held != "k" or d.size() != 2 or d.keyAt(0) != "gamma" or d.keyAt(1).length() != 40) { return 2; }
+    return 0;
+}

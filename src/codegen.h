@@ -91,7 +91,8 @@ public:
     // Tensor storage consists of the header plus separately allocated dims/data buffers.
     void registerTensorCleanup(llvm::Value* tensor);
     // A manual free consumes a local allocation; remove its pending lexical drop.
-    void forgetCleanup(llvm::Value* pointer);
+    bool forgetCleanup(llvm::Value* pointer);
+    bool hasCleanup(llvm::Value* pointer) const;
     // A Shared<T> control block: at scope exit its strong count is decremented; the block is freed
     // only when both strong and weak reach zero (reverse-order, like every other cleanup).
     void registerSharedCleanup(llvm::Value* controlBlock);
@@ -105,8 +106,10 @@ public:
     bool hasDropFlag(llvm::Value* pointer) const { return dropFlagInCurrentFunction(pointer) != nullptr; }
     llvm::Value* dropFlagInCurrentFunction(llvm::Value* pointer) const;
     void emitCurrentScopeCleanups();
+    void releaseFromCurrentScope(llvm::Value* value);
+    llvm::Value* copyStackBufferToHeap(llvm::Value* value);
     void emitAllCleanups();
-    void emitAllCleanupsExcept(llvm::Value* retainedPointer);
+    void emitAllCleanupsExcept(llvm::Value* retainedValue);
     // Number of open cleanup scopes, and the drops of every scope opened at or above `depth`
     // (innermost first, entries kept) -- used by break/continue to leave a loop body early.
     size_t cleanupDepth() const { return cleanupScopes.size(); }
@@ -121,6 +124,7 @@ public:
     std::vector<LoopTarget> loopTargets;
 
     void markFreshTensor(llvm::Value* tensor);
+    bool isTensorAllocation(llvm::Value* tensor) const;
     bool isFreshTensor(llvm::Value* tensor) const;
     static void clearFreshTensor(llvm::Value* tensor);
     void stripFreshTensorMarks();
@@ -138,10 +142,12 @@ private:
     // Each cleanup is a (pointer, kind) pair: Free drops a single heap allocation, TensorFree also
     // frees the tensor's separate dims/data buffers, and SharedRelease/WeakRelease decrement a
     // Shared/Weak control block (freeing it only when both counts reach zero).
-    enum class CleanupKind { Free = 0, TensorFree = 1, SharedRelease = 2, WeakRelease = 3, FlaggedFree = 4 };
+    enum class CleanupKind { Free = 0, TensorFree = 1, SharedRelease = 2, WeakRelease = 3 };
     std::unordered_map<llvm::Value*, llvm::Value*> dropFlags;  // owned pointer -> its i1 drop flag
     std::vector<std::vector<std::pair<llvm::Value*, CleanupKind>>> cleanupScopes;
-    void emitCleanupEntry(llvm::Value* pointer, CleanupKind kind, llvm::Value* retainedPointer);
+    void registerOwned(llvm::Value* pointer, CleanupKind kind);
+    void emitCleanupEntry(llvm::Value* pointer, CleanupKind kind, const std::unordered_set<llvm::Value*>& retained);
+    void emitCleanupBody(llvm::Value* pointer, CleanupKind kind);
 
     struct TemporaryFrame {
         llvm::Function* function;

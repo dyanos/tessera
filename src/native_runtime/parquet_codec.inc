@@ -292,7 +292,7 @@ bool snappyDecompress(const uint8_t* src, size_t size, std::string& out) {
         if ((b & 0x80) == 0) break;
     }
     out.clear();
-    out.reserve(static_cast<size_t>(length));
+    out.reserve(static_cast<size_t>(std::min<uint64_t>(length, static_cast<uint64_t>(size) * 32)));
     while (pos < size) {
         const uint8_t tag = src[pos++];
         const int kind = tag & 3;
@@ -552,7 +552,7 @@ bool gzipDecompress(const uint8_t* src, size_t size, std::string& out) {
 // LZ4 block format (Parquet's LZ4_RAW codec).
 bool lz4Decompress(const uint8_t* src, size_t size, size_t expected, std::string& out) {
     out.clear();
-    out.reserve(expected);
+    out.reserve(std::min<uint64_t>(expected, static_cast<uint64_t>(size) * 256));
     size_t pos = 0;
     while (pos < size) {
         const uint8_t token = src[pos++];
@@ -632,6 +632,10 @@ bool decompress(int codec, const uint8_t* src, size_t size, size_t expected, std
         break;
     case kZstd:
 #if defined(CSEC_HAVE_ZSTD)
+        {
+            const unsigned long long frameSize = ZSTD_getFrameContentSize(src, size);
+            if (frameSize == ZSTD_CONTENTSIZE_ERROR || (frameSize != ZSTD_CONTENTSIZE_UNKNOWN && frameSize != expected)) break;
+        }
         out.resize(expected);
         {
             const size_t written = ZSTD_decompress(out.empty() ? nullptr : &out[0], expected, src, size);
@@ -758,14 +762,17 @@ bool decodeHybrid(const uint8_t* p, size_t size, int width, size_t count, std::v
 }
 
 // DELTA_BINARY_PACKED: decodes all values in the block stream and reports the bytes consumed.
-bool decodeDeltaBinary(const uint8_t* p, size_t size, std::vector<long long>& out, size_t& consumed) {
+bool decodeDeltaBinary(const uint8_t* p, size_t size, std::vector<long long>& out, size_t& consumed, size_t maxValues) {
     size_t pos = 0;
     uint64_t blockSize = 0, miniblocks = 0, total = 0, firstRaw = 0;
     if (!readUleb(p, size, pos, blockSize) || !readUleb(p, size, pos, miniblocks) || !readUleb(p, size, pos, total) ||
         !readUleb(p, size, pos, firstRaw)) {
         return false;
     }
-    if (miniblocks == 0 || blockSize == 0 || blockSize % miniblocks != 0 || total > (size_t(1) << 40)) return false;
+    if (blockSize == 0 || blockSize % 128 != 0 || blockSize > (uint64_t(1) << 20) || miniblocks == 0 ||
+        blockSize % miniblocks != 0 || (blockSize / miniblocks) % 32 != 0 || total > maxValues) {
+        return false;
+    }
     const size_t perMiniblock = static_cast<size_t>(blockSize / miniblocks);
     out.clear();
     out.reserve(static_cast<size_t>(total));
@@ -775,17 +782,18 @@ bool decodeDeltaBinary(const uint8_t* p, size_t size, std::vector<long long>& ou
         uint64_t minRaw = 0;
         if (!readUleb(p, size, pos, minRaw)) return false;
         const uint64_t minDelta = (minRaw >> 1) ^ (~(minRaw & 1) + 1);
-        if (pos + miniblocks > size) return false;
+        if (miniblocks > size - pos) return false;
         const uint8_t* widths = p + pos;
         pos += static_cast<size_t>(miniblocks);
         for (size_t m = 0; m < miniblocks && out.size() < total; ++m) {
             const int width = widths[m];
             if (width > 64) return false;
             const size_t bytes = perMiniblock * width / 8;
-            if (pos + bytes > size) {
+            if (bytes > size - pos) {
                 // The final miniblock may be truncated to the values that remain.
-                const size_t need = ((total - out.size()) * width + 7) / 8;
-                if (pos + need > size) return false;
+                const size_t remaining = std::min<size_t>(static_cast<size_t>(total) - out.size(), perMiniblock);
+                const size_t need = (remaining * width + 7) / 8;
+                if (need > size - pos) return false;
             }
             for (size_t k = 0; k < perMiniblock && out.size() < total; ++k) {
                 const uint64_t delta = width == 0 ? 0 : unpackBits(p + pos, k * width, width);
@@ -799,10 +807,10 @@ bool decodeDeltaBinary(const uint8_t* p, size_t size, std::vector<long long>& ou
     return true;
 }
 
-bool decodeDeltaLengthByteArray(const uint8_t* p, size_t size, std::vector<std::string>& out, size_t& consumed) {
+bool decodeDeltaLengthByteArray(const uint8_t* p, size_t size, std::vector<std::string>& out, size_t& consumed, size_t maxValues) {
     std::vector<long long> lengths;
     size_t pos = 0;
-    if (!decodeDeltaBinary(p, size, lengths, pos)) return false;
+    if (!decodeDeltaBinary(p, size, lengths, pos, maxValues)) return false;
     out.clear();
     out.reserve(lengths.size());
     for (long long length : lengths) {
@@ -814,13 +822,13 @@ bool decodeDeltaLengthByteArray(const uint8_t* p, size_t size, std::vector<std::
     return true;
 }
 
-bool decodeDeltaByteArray(const uint8_t* p, size_t size, std::vector<std::string>& out) {
+bool decodeDeltaByteArray(const uint8_t* p, size_t size, std::vector<std::string>& out, size_t maxValues) {
     std::vector<long long> prefixes;
     size_t pos = 0;
-    if (!decodeDeltaBinary(p, size, prefixes, pos)) return false;
+    if (!decodeDeltaBinary(p, size, prefixes, pos, maxValues)) return false;
     std::vector<std::string> suffixes;
     size_t used = 0;
-    if (!decodeDeltaLengthByteArray(p + pos, size - pos, suffixes, used)) return false;
+    if (!decodeDeltaLengthByteArray(p + pos, size - pos, suffixes, used, maxValues)) return false;
     if (suffixes.size() != prefixes.size()) return false;
     out.clear();
     out.reserve(prefixes.size());

@@ -1,0 +1,12 @@
+import std.dataframe
+// Malformed .npy headers (see data/make_bad_npy_fixtures.py) are rejected with an error, not a crash.
+def dir(): String = "tests/stdlib/data/npy/"
+
+def main(): Int {
+    if (dfReadNpy(dir() + "bad_zero_item.npy") != 0) { return 1; }
+    if (dfReadNpy(dir() + "bad_huge_dtype.npy") != 0) { return 2; }
+    if (dfReadNpy(dir() + "bad_field_overflow.npy") != 0) { return 3; }
+    if (dfReadNpy(dir() + "bad_deep_header.npy") != 0) { return 4; }
+    if (dfLastError() == "") { return 5; }
+    return 0;
+}

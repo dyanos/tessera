@@ -1,0 +1,7 @@
+// Element-wise operations on tensors of different shapes stop the program (exit 1).
+def main(): Int {
+    val a: Tensor<Double, 10> = new Tensor<Double, 10>(1.0);
+    val b: Tensor<Double, 2> = new Tensor<Double, 2>(1.0);
+    val c = a + b;
+    return 0;
+}

@@ -2104,7 +2104,7 @@ llvm::Value* FunctionCallNode::codegen() {
         llvm::Value* block = cg.builder.CreateBitCast(raw, llvm::PointerType::getUnqual(blockType->getContext()), "shared.block");
         cg.builder.CreateStore(llvm::ConstantInt::get(i64Ty, 1),
             cg.builder.CreateStructGEP(blockType, block, 0, "shared.strong.ptr"));
-        cg.builder.CreateStore(llvm::ConstantInt::get(i64Ty, 0),
+        cg.builder.CreateStore(llvm::ConstantInt::get(i64Ty, 1),
             cg.builder.CreateStructGEP(blockType, block, 1, "shared.weak.ptr"));
         cg.builder.CreateStore(payload,
             cg.builder.CreateStructGEP(blockType, block, 2, "shared.payload.ptr"));
@@ -2121,8 +2121,8 @@ llvm::Value* FunctionCallNode::codegen() {
         auto* i64Ty = llvm::Type::getInt64Ty(cg.context);
         llvm::Value* block = argValues[0];
         llvm::Value* weakPtr = cg.builder.CreateGEP(i64Ty, block, llvm::ConstantInt::get(i64Ty, 1), "weak.count.ptr");
-        llvm::Value* weak = cg.builder.CreateLoad(i64Ty, weakPtr, "weak.count");
-        cg.builder.CreateStore(cg.builder.CreateAdd(weak, llvm::ConstantInt::get(i64Ty, 1), "weak.inc"), weakPtr);
+        cg.builder.CreateAtomicRMW(llvm::AtomicRMWInst::Add, weakPtr, llvm::ConstantInt::get(i64Ty, 1),
+                                   llvm::MaybeAlign(8), llvm::AtomicOrdering::Monotonic);
         return block;
     }
 

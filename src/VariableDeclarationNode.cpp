@@ -247,7 +247,9 @@ llvm::Value* VariableDeclarationNode::codegen() {
                 // obligation to this binding instead of keeping two stale registrations.
                 cg.forgetCleanup(initValue);
             }
-            if (autoDrop) cg.registerTensorCleanup(initValue);
+            if (autoDrop && (!tensorMoveInitializer || cg.isTensorAllocation(initValue))) {
+                cg.registerTensorCleanup(initValue);
+            }
         }
         // Reference-class instances and array/vector locals are intentionally NOT auto-registered for
         // scope-exit free — the attempt to do so was unsafe and is disabled pending a proper ownership

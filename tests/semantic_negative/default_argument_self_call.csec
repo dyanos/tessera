@@ -1,0 +1,2 @@
+def f(x: Int = f()): Int = x
+def main(): Int = f()

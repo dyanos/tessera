@@ -231,6 +231,19 @@ llvm::Function* rebuildRuntimeMain(CodeGenerator& codeGen) {
         return codeGen.mainFunction;
     }
 
+    for (llvm::BasicBlock& block : *codeGen.mainFunction) {
+        for (llvm::Instruction& inst : block) {
+            for (llvm::User* user : inst.users()) {
+                auto* userInst = llvm::dyn_cast<llvm::Instruction>(user);
+                if (userInst && userInst->getFunction() != codeGen.mainFunction) {
+                    codeGen.reportError("a top-level value is used inside function '" +
+                                        userInst->getFunction()->getName().str() +
+                                        "'; declare it inside main() or pass it as an argument");
+                    return codeGen.mainFunction;
+                }
+            }
+        }
+    }
     codeGen.mainFunction->deleteBody();
     llvm::BasicBlock* entry = llvm::BasicBlock::Create(codeGen.context, "entry", codeGen.mainFunction);
     llvm::IRBuilder<> builder(entry);
@@ -1675,6 +1688,13 @@ int main(int argc, char** argv) {
 
     auto& codeGen = CodeGenerator::getInstance();
     llvm::Function* runtimeEntry = rebuildRuntimeMain(codeGen);
+    if (codeGen.errorCount > 0) {
+        for (llvm::Function& function : *codeGen.module) {
+            for (llvm::BasicBlock& block : function) block.dropAllReferences();
+        }
+        codeGen.module->dropAllReferences();
+        return 1;
+    }
     if (codeGen.mainFunction && !codeGen.mainFunction->empty()) {
         llvm::BasicBlock& rootEntry = codeGen.mainFunction->getEntryBlock();
         if (!csec_llvm::terminatorOrNull(&rootEntry)) {
