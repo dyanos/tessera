@@ -77,7 +77,7 @@ public:
     }
     // A stack slot in the entry block of the current function, so code in a loop does not allocate
     // a new one on every iteration.
-    llvm::AllocaInst* createEntryAlloca(llvm::Type* type, const std::string& name);
+    llvm::AllocaInst* createEntryAlloca(llvm::Type* type, const std::string& name, llvm::Value* count = nullptr);
 
     void addExternalLinkLibrary(const std::string& library);
     void addExternalLinkPath(const std::string& path);

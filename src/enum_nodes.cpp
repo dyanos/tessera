@@ -111,7 +111,7 @@ llvm::Value* EnumConstructNode::codegen() {
 
     llvm::Value* instance = nullptr;
     if (symbol->isStruct) {
-        instance = cg.builder.CreateAlloca(structType, nullptr, variantName + ".value");
+        instance = cg.createEntryAlloca(structType, variantName + ".value");
     }
     else {
         const llvm::DataLayout& dl = cg.module->getDataLayout();

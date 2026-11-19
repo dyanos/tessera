@@ -550,7 +550,7 @@ llvm::Value* ClassInstanceCreationNode::codegen() {
 
     llvm::Value* instance = nullptr;
     if (classSymbol->isStruct) {
-        instance = cg.builder.CreateAlloca(classType, nullptr, "newstruct");
+        instance = cg.createEntryAlloca(classType, "newstruct");
     }
     else {
         const llvm::DataLayout& dl = cg.module->getDataLayout();

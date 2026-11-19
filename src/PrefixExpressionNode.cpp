@@ -118,7 +118,7 @@ llvm::Value* lowerConcurrentCall(FunctionCallNode* call, bool wantFuture) {
                                                argType->getKind() == Type::Kind::FUNCTION);
         llvm::Value* binding = argument;
         if (!boundDirectly) {
-            binding = cg.builder.CreateAlloca(fields[i + 1], nullptr, name);
+            binding = cg.createEntryAlloca(fields[i + 1], name);
             cg.builder.CreateStore(argument, binding);
         }
         cg.symbolTable.addSymbol(name, std::make_unique<Symbol>(name, types[i]->clone(), binding, false, SymbolType::VARIABLE));

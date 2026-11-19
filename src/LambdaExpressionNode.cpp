@@ -299,7 +299,7 @@ llvm::Value* LambdaExpressionNode::codegen() {
                     captured[i].name, captured[i].semanticType->clone(), storage, true, SymbolType::VARIABLE));
             } else {
                 // The slot holds the captured value; copy it into a local so the name is an lvalue.
-                llvm::Value* localCopy = cg.builder.CreateAlloca(captured[i].fieldType, nullptr, captured[i].name);
+                llvm::Value* localCopy = cg.createEntryAlloca(captured[i].fieldType, captured[i].name);
                 llvm::Value* value = cg.builder.CreateLoad(captured[i].fieldType, slot, captured[i].name + ".val");
                 cg.builder.CreateStore(value, localCopy);
                 cg.symbolTable.addSymbol(captured[i].name, std::make_unique<Symbol>(
@@ -348,7 +348,7 @@ llvm::Value* LambdaExpressionNode::codegen() {
         if (capturesByReference) {
             llvm::Value* storage = captured[i].outerValue;
             if (isSsaParameter) {
-                storage = cg.builder.CreateAlloca(storage->getType(), nullptr, captured[i].name + ".spill");
+                storage = cg.createEntryAlloca(storage->getType(), captured[i].name + ".spill");
                 cg.builder.CreateStore(captured[i].outerValue, storage);
             }
             cg.builder.CreateStore(storage, slot);

@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "ArrayLiteralNode.h"
 #include "type_checker.h"
 #include "debug_info.h"
 #include "ClassDeclarationNode.h"
@@ -428,7 +429,7 @@ llvm::Function* ClassDeclarationNode::defineMethod(FunctionDeclarationNode* meth
         argValue->setName(paramNode->name);
         if (isStructClassType(paramNode->type.get())) {
             llvm::Type* storageType = cg.getLLVMType(paramNode->type.get());
-            auto* paramSlot = cg.builder.CreateAlloca(storageType, nullptr, (paramNode->name + ".addr").c_str());
+            auto* paramSlot = cg.createEntryAlloca(storageType, (paramNode->name + ".addr").c_str());
             cg.builder.CreateStore(argValue, paramSlot);
             argValue = paramSlot;
         }
@@ -442,6 +443,7 @@ llvm::Function* ClassDeclarationNode::defineMethod(FunctionDeclarationNode* meth
 
     cg.enterCleanupScope();
     for (auto& owned : ownedParameters) cg.registerOwnedValueCleanup(owned.first, owned.second.get());
+    ArrayLiteralNode::markHoistable(method->body.get());
     method->body->codegen();
     if (cg.builder.GetInsertBlock() && !csec_llvm::terminatorOrNull(cg.builder.GetInsertBlock())) {
         cg.emitCurrentScopeCleanups();

@@ -47,7 +47,7 @@ llvm::Value* DestructuringAssignmentNode::codegen() {
         // Bind the target as a fresh local: alloca of the slot type, store the moved element, and
         // register the binding so later uses load it. Ownership of owned (pointer-backed) elements
         // transfers to the new binding.
-        llvm::AllocaInst* slot = cg.builder.CreateAlloca(slotType, nullptr, targets[i].name.c_str());
+        llvm::AllocaInst* slot = cg.createEntryAlloca(slotType, targets[i].name.c_str());
         cg.builder.CreateStore(element, slot);
         cg.symbolTable.addSymbol(
             targets[i].name,

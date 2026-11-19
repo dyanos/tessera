@@ -89,11 +89,11 @@ llvm::Value* FilterStatementNode::codegen() {
         llvm::Value* initElemPtr = cg.builder.CreateGEP(elementType, resultPtr, initIdx, "filter_init_ptr");
         cg.builder.CreateStore(nullElem, initElemPtr);
     }
-    llvm::Value* countPtr = cg.builder.CreateAlloca(cg.builder.getInt32Ty(), nullptr, "filter_count");
+    llvm::Value* countPtr = cg.createEntryAlloca(cg.builder.getInt32Ty(), "filter_count");
     cg.builder.CreateStore(cg.builder.getInt32(0), countPtr);
-    llvm::Value* counterPtr = cg.builder.CreateAlloca(cg.builder.getInt32Ty(), nullptr, "filter_i");
+    llvm::Value* counterPtr = cg.createEntryAlloca(cg.builder.getInt32Ty(), "filter_i");
     cg.builder.CreateStore(cg.builder.getInt32(0), counterPtr);
-    llvm::Value* varPtr = cg.builder.CreateAlloca(elementType, nullptr, variable + "_ptr");
+    llvm::Value* varPtr = cg.createEntryAlloca(elementType, variable + "_ptr");
 
     // Bind loop variable in scope (once, outside loop)
     cg.symbolTable.enterScope();

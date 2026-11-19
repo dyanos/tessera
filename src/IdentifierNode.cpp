@@ -53,7 +53,7 @@ llvm::Value* wrapFunctionAsClosure(llvm::Function* fn) {
     }
 
     auto* closureType = llvm::StructType::get(cg.context, { opaquePtr, opaquePtr });
-    llvm::Value* closure = cg.builder.CreateAlloca(closureType, nullptr, "fn.closure");
+    llvm::Value* closure = cg.createEntryAlloca(closureType, "fn.closure");
     cg.builder.CreateStore(thunk, cg.builder.CreateStructGEP(closureType, closure, 0, "closure.code"));
     cg.builder.CreateStore(llvm::ConstantPointerNull::get(opaquePtr),
         cg.builder.CreateStructGEP(closureType, closure, 1, "closure.env"));

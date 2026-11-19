@@ -7,6 +7,7 @@
 class ArrayLiteralNode : public ASTNode {
 public:
     std::vector<std::unique_ptr<ASTNode>> elements;
+    bool hoistable = false;
 
     ArrayLiteralNode() {
         elements.clear();
@@ -30,6 +31,8 @@ public:
         return *this;
     }
     virtual ~ArrayLiteralNode() = default;
+
+    static void markHoistable(ASTNode* functionBody);
 
     void accept(ASTVisitor& visitor) override;
     llvm::Value* codegen() override;

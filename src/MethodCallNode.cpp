@@ -487,7 +487,7 @@ llvm::Value* MethodCallNode::codegen() {
     // pass the pointer. A receiver that is already a pointer (a struct variable, or a reference
     // class) is used unchanged.
     if (objectValue && !objectValue->getType()->isPointerTy()) {
-        llvm::Value* slot = cg.builder.CreateAlloca(objectValue->getType(), nullptr, "recv.materialized");
+        llvm::Value* slot = cg.createEntryAlloca(objectValue->getType(), "recv.materialized");
         cg.builder.CreateStore(objectValue, slot);
         objectValue = slot;
     }

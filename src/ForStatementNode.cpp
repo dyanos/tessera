@@ -54,7 +54,7 @@ void bindLoopVariable(const std::string& name, const Type* type, llvm::Value* va
     const bool direct = type->getKind() == Type::Kind::ARRAY || type->getKind() == Type::Kind::FUNCTION ||
         (type->getKind() == Type::Kind::GENERIC && (type->getName() == "Array" || type->getName() == "Vector"));
     if (!direct) {
-        auto* slot = cg.builder.CreateAlloca(value->getType(), nullptr, name + "_ptr");
+        auto* slot = cg.createEntryAlloca(value->getType(), name + "_ptr");
         cg.builder.CreateStore(value, slot);
         bound = slot;
     }
@@ -277,7 +277,7 @@ llvm::Value* ForStatementNode::codegen() {
             endValue = cg.builder.CreateSub(endValue, llvm::ConstantInt::get(rangeValueType, 1, true), "untilEnd");
         }
 
-        value_ptr = cg.builder.CreateAlloca(rangeValueType, nullptr, this->variable + "_ptr");
+        value_ptr = cg.createEntryAlloca(rangeValueType, this->variable + "_ptr");
         cg.builder.CreateStore(startValue, value_ptr);
 
         auto rangeType = rangeExpr->startExpr->getType();
@@ -342,7 +342,7 @@ llvm::Value* ForStatementNode::codegen() {
         cg.builder.SetInsertPoint(loopBodyBB);
         auto textFn = cg.module->getOrInsertFunction("csec_token_text_at", llvm::FunctionType::get(i8PtrTy, {i8PtrTy, i32Ty}, false));
         llvm::Value* text = cg.builder.CreateCall(textFn, {stream, ordinal}, tokenValue + ".text");
-        auto* textSlot = cg.builder.CreateAlloca(i8PtrTy, nullptr, tokenValue + "_ptr");
+        auto* textSlot = cg.createEntryAlloca(i8PtrTy, tokenValue + "_ptr");
         cg.builder.CreateStore(text, textSlot);
         cg.symbolTable.addSymbol(tokenValue, std::make_unique<Symbol>(tokenValue, std::make_unique<BasicType>("String"), textSlot, false, SymbolType::VARIABLE));
     }

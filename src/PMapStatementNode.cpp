@@ -308,7 +308,7 @@ llvm::Value* codegenOutlinedParallelPMap(
     }
     ctxTy->setBody(ctxFields);
 
-    llvm::Value* ctx = cg.builder.CreateAlloca(ctxTy, nullptr, "pmap.ctx");
+    llvm::Value* ctx = cg.createEntryAlloca(ctxTy, "pmap.ctx");
     cg.builder.CreateStore(arrayPtr, cg.builder.CreateStructGEP(ctxTy, ctx, 0, "pmap.ctx.input.slot"));
     cg.builder.CreateStore(resultPtr, cg.builder.CreateStructGEP(ctxTy, ctx, 1, "pmap.ctx.result.slot"));
     for (size_t i = 0; i < captures.size(); ++i) {
@@ -345,7 +345,7 @@ llvm::Value* codegenOutlinedParallelPMap(
 
     llvm::Value* elemPtr = cg.builder.CreateGEP(elementType, inputBase, idx, "pmap.cb.elem.ptr");
     llvm::Value* elemValue = cg.builder.CreateLoad(elementType, elemPtr, "pmap.cb.elem");
-    llvm::Value* varPtr = cg.builder.CreateAlloca(elementType, nullptr, node.variable + "_ptr");
+    llvm::Value* varPtr = cg.createEntryAlloca(elementType, node.variable + "_ptr");
     cg.builder.CreateStore(elemValue, varPtr);
 
     cg.symbolTable.enterScope();
@@ -358,7 +358,7 @@ llvm::Value* codegenOutlinedParallelPMap(
             capture.llvmType,
             cg.builder.CreateStructGEP(ctxTy, callbackCtx, static_cast<unsigned>(i + 2), capture.name + ".capture.slot"),
             capture.name + ".capture");
-        llvm::Value* capturePtr = cg.builder.CreateAlloca(capture.llvmType, nullptr, capture.name + "_capture_ptr");
+        llvm::Value* capturePtr = cg.createEntryAlloca(capture.llvmType, capture.name + "_capture_ptr");
         cg.builder.CreateStore(captureValue, capturePtr);
         cg.symbolTable.addSymbol(capture.name, std::make_unique<Symbol>(
             capture.name, capture.type->clone(), capturePtr, false, SymbolType::VARIABLE));
@@ -460,7 +460,7 @@ llvm::Value* PMapStatementNode::codegen() {
 
     cg.symbolTable.enterScope();
     std::unique_ptr<Type> preflightVarType = pmapElementSourceType(iterType);
-    llvm::Value* preflightVarPtr = cg.builder.CreateAlloca(elementType, nullptr, variable + "_typecheck_ptr");
+    llvm::Value* preflightVarPtr = cg.createEntryAlloca(elementType, variable + "_typecheck_ptr");
     cg.symbolTable.addSymbol(variable, std::make_unique<Symbol>(
         variable, std::move(preflightVarType), preflightVarPtr, false, SymbolType::VARIABLE));
     auto bodyType = body->getType();
@@ -476,9 +476,9 @@ llvm::Value* PMapStatementNode::codegen() {
     }
 
     // Allocate loop counter and element variable before the loop
-    llvm::Value* counterPtr = cg.builder.CreateAlloca(cg.builder.getInt32Ty(), nullptr, "pmap_i");
+    llvm::Value* counterPtr = cg.createEntryAlloca(cg.builder.getInt32Ty(), "pmap_i");
     cg.builder.CreateStore(cg.builder.getInt32(0), counterPtr);
-    llvm::Value* varPtr = cg.builder.CreateAlloca(elementType, nullptr, variable + "_ptr");
+    llvm::Value* varPtr = cg.createEntryAlloca(elementType, variable + "_ptr");
 
     // Bind loop variable in scope (once, outside loop)
     cg.symbolTable.enterScope();

@@ -128,11 +128,11 @@ llvm::Value* ReduceStatementNode::codegen() {
     }
 
     // Allocate all variables before the loop
-    llvm::Value* accPtr = cg.builder.CreateAlloca(initValue->getType(), nullptr, "acc");
+    llvm::Value* accPtr = cg.createEntryAlloca(initValue->getType(), "acc");
     cg.builder.CreateStore(initValue, accPtr);
-    llvm::Value* counterPtr = cg.builder.CreateAlloca(cg.builder.getInt32Ty(), nullptr, "reduce_i");
+    llvm::Value* counterPtr = cg.createEntryAlloca(cg.builder.getInt32Ty(), "reduce_i");
     cg.builder.CreateStore(cg.builder.getInt32(0), counterPtr);
-    llvm::Value* varPtr = cg.builder.CreateAlloca(elementType, nullptr, variable + "_ptr");
+    llvm::Value* varPtr = cg.createEntryAlloca(elementType, variable + "_ptr");
 
     // Bind loop variable and accumulator in scope (once, outside loop)
     cg.symbolTable.enterScope();

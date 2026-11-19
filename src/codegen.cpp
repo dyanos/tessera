@@ -742,11 +742,11 @@ void CodeGenerator::reportError(const std::string& message) {
     ++errorCount;
 }
 
-llvm::AllocaInst* CodeGenerator::createEntryAlloca(llvm::Type* type, const std::string& name) {
+llvm::AllocaInst* CodeGenerator::createEntryAlloca(llvm::Type* type, const std::string& name, llvm::Value* count) {
     llvm::Function* fn = builder.GetInsertBlock()->getParent();
     llvm::BasicBlock& entry = fn->getEntryBlock();
     llvm::IRBuilder<> at(&entry, entry.getFirstInsertionPt());
-    return at.CreateAlloca(type, nullptr, name);
+    return at.CreateAlloca(type, count, name);
 }
 
 void CodeGenerator::emitCleanupsAbove(size_t depth) {
