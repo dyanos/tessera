@@ -964,10 +964,10 @@ int csec_parallel_backend_implemented(const char* name) {
 void csec_parallel_for_i32(int start, int end, void* context, csec_parallel_for_i32_fn callback) {
     if (!callback || end <= start) return;
 
-    int count = end - start;
-    int requested = configuredParallelThreads();
+    const long long count = static_cast<long long>(end) - start;
+    long long requested = configuredParallelThreads();
     if (requested < 1) requested = 1;
-    int workerCount = requested < count ? requested : count;
+    const long long workerCount = requested < count ? requested : count;
 
     if (workerCount <= 1) {
         for (int i = start; i < end; ++i) {
@@ -977,15 +977,27 @@ void csec_parallel_for_i32(int start, int end, void* context, csec_parallel_for_
     }
 
     std::vector<std::thread> workers;
-    workers.reserve(static_cast<size_t>(workerCount));
-    for (int worker = 0; worker < workerCount; ++worker) {
-        int chunkStart = start + (count * worker) / workerCount;
-        int chunkEnd = start + (count * (worker + 1)) / workerCount;
-        workers.emplace_back([=]() {
-            for (int i = chunkStart; i < chunkEnd; ++i) {
-                callback(context, i);
-            }
-        });
+    int inlineStart = end;
+    try {
+        workers.reserve(static_cast<size_t>(workerCount));
+    } catch (...) {
+        inlineStart = start;
+    }
+    for (long long worker = 0; worker < workerCount && inlineStart == end; ++worker) {
+        const int chunkStart = static_cast<int>(start + (count * worker) / workerCount);
+        const int chunkEnd = static_cast<int>(start + (count * (worker + 1)) / workerCount);
+        try {
+            workers.emplace_back([=]() {
+                for (int i = chunkStart; i < chunkEnd; ++i) {
+                    callback(context, i);
+                }
+            });
+        } catch (...) {
+            inlineStart = chunkStart;
+        }
+    }
+    for (int i = inlineStart; i < end; ++i) {
+        callback(context, i);
     }
 
     for (auto& worker : workers) {
