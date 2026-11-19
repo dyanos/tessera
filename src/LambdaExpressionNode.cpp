@@ -333,7 +333,7 @@ llvm::Value* LambdaExpressionNode::codegen() {
         return cg.builder.CreateCall(cg.mallocFunction, bytes, name);
     };
     llvm::Value* environment = escapes ? heapAllocate(envType, "lambda.env.heap")
-                                       : cg.builder.CreateAlloca(envType, nullptr, "lambda.env");
+                                       : cg.createEntryAlloca(envType, "lambda.env");
     for (size_t i = 0; i < captured.size(); ++i) {
         llvm::Value* slot = cg.builder.CreateStructGEP(envType, environment, static_cast<unsigned>(i), captured[i].name + ".store");
         // A function parameter is bound to its SSA llvm::Argument rather than to storage: capture
@@ -347,15 +347,27 @@ llvm::Value* LambdaExpressionNode::codegen() {
             }
             cg.builder.CreateStore(storage, slot);
         } else {
-            llvm::Value* value = isSsaParameter
-                ? captured[i].outerValue
-                : cg.builder.CreateLoad(captured[i].fieldType, captured[i].outerValue, captured[i].name + ".take");
+            llvm::Value* value = captured[i].outerValue;
+            if (!isSsaParameter) {
+                IdentifierNode reference(captured[i].name);
+                value = reference.codegen();
+            }
+            if (value && value->getType() != captured[i].fieldType && value->getType()->isPointerTy()) {
+                value = cg.builder.CreateLoad(captured[i].fieldType, value, captured[i].name + ".take");
+            }
+            if (!value || value->getType() != captured[i].fieldType) {
+                value = llvm::Constant::getNullValue(captured[i].fieldType);
+            }
+            if (escapes) {
+                value = cg.copyStackBufferToHeap(value);
+                cg.noteMoved(captured[i].outerValue);
+            }
             cg.builder.CreateStore(value, slot);
         }
     }
     llvm::StructType* closureType = llvm::StructType::get(cg.context, { opaquePtr, opaquePtr });
     llvm::Value* closure = escapes ? heapAllocate(closureType, "lambda.closure.heap")
-                                   : cg.builder.CreateAlloca(closureType, nullptr, "lambda.closure");
+                                   : cg.createEntryAlloca(closureType, "lambda.closure");
     cg.builder.CreateStore(lambdaFunc, cg.builder.CreateStructGEP(closureType, closure, 0, "closure.code"));
     cg.builder.CreateStore(environment, cg.builder.CreateStructGEP(closureType, closure, 1, "closure.env"));
     return closure;

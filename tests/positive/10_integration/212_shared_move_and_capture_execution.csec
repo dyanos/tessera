@@ -1,0 +1,25 @@
+// A Shared moved into a new binding is released once; a [=] lambda captures the handle itself,
+// not the bytes it points to.
+def moveShared(): Int {
+    val s: Shared<Int> = Shared(42);
+    val t: Shared<Int> = <- s;
+    return t.get();
+}
+
+def capture(): Int {
+    val s: Shared<Int> = Shared(7);
+    val w: Weak<Int> = Weak(s);
+    val read = [=]() -> { return s.get() + w.get(); };
+    return read();
+}
+
+def main(): Int {
+    var i: Int = 0;
+    var total: Int = 0;
+    while (i < 10) {
+        total = total + moveShared() + capture();
+        i = i + 1;
+    }
+    if (total != 560) { return 2; }
+    return 0;
+}

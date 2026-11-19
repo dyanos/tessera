@@ -25,15 +25,18 @@ class SymbolTable {
 public:
     SymbolTable();
     SymbolTable(const SymbolTable& other) = delete;
-    SymbolTable(SymbolTable&& other) noexcept = default;
+    SymbolTable(SymbolTable&& other) noexcept;
     SymbolTable& operator=(const SymbolTable& other) = delete;
-    SymbolTable& operator=(SymbolTable&& other) noexcept = default;
+    SymbolTable& operator=(SymbolTable&& other) noexcept;
     ~SymbolTable();
 
     void initializeBuiltInTypes(llvm::LLVMContext& context);
     void enterScope();
     void exitScope();
     bool addSymbol(const std::string& name, std::unique_ptr<Symbol> symbol);
+private:
+    bool insertSymbol(const std::string& name, std::unique_ptr<Symbol>& symbol);
+public:
     Symbol* lookup(const std::string& name);
     // The symbol `name` in the outermost (program) scope only.
     Symbol* lookupGlobal(const std::string& name);
@@ -58,6 +61,7 @@ private:
     Symbol* currentSymbol = nullptr; // non-owning, points into scope symbols
     std::vector<std::unique_ptr<Scope>> ownedScopes;
     std::vector<Symbol*> symbolStack; // non-owning snapshot stack
+    std::vector<std::unique_ptr<Symbol>> rejectedSymbols;
 
 public:
     void setCurrentSymbol(Symbol& symbol) {

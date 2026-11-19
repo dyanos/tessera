@@ -10,6 +10,7 @@
 #include "type_checker.h"
 #include "type_utils.h"
 #include "default_arguments.h"
+#include "all_ast.h"
 
 namespace {
 // Whether every use of `name` in `statements[from..]` leaves it the only owner of its object:
@@ -74,8 +75,7 @@ bool isTensorBorrowingBuiltin(const std::string& functionName) {
     if (!names.count(functionName)) return false;
     auto& cg = CodeGenerator::getInstance();
     if (cg.module->getFunction(functionName)) return false;
-    Symbol* symbol = cg.symbolTable.lookup(functionName);
-    return symbol == nullptr || symbol->symbolType != SymbolType::FUNCTION;
+    return cg.symbolTable.lookup(functionName) == nullptr;
 }
 
 bool isIntegerText(const std::string& text) {
@@ -95,15 +95,15 @@ bool isTensorOrNumericType(const Type* type) {
     return type->getName() == "Tensor" || numeric.count(type->getName()) != 0;
 }
 
-VariableDeclarationNode* findLaterDeclaration(const std::string& name,
-                                              std::vector<std::unique_ptr<ASTNode>>& statements, size_t from) {
-    VariableDeclarationNode* found = nullptr;
-    for (size_t i = from; i < statements.size() && !found; ++i) {
+std::vector<VariableDeclarationNode*> laterDeclarations(const std::string& name,
+                                                        std::vector<std::unique_ptr<ASTNode>>& statements, size_t from) {
+    std::vector<VariableDeclarationNode*> found;
+    for (size_t i = from; i < statements.size(); ++i) {
         ast_walk::walk(statements[i].get(), nullptr, [&](ASTNode* n, std::unique_ptr<ASTNode>*) {
             if (auto* decl = dynamic_cast<VariableDeclarationNode*>(n)) {
-                if (decl->name == name) found = decl;
+                if (decl->name == name) found.push_back(decl);
             }
-            return found == nullptr;
+            return true;
         });
     }
     return found;
@@ -128,14 +128,15 @@ bool cannotDispatchClassOperator(ASTNode* left, std::vector<std::unique_ptr<ASTN
     if (!left) return false;
     if (auto* id = dynamic_cast<IdentifierNode*>(left)) {
         if (id->value.find('.') == std::string::npos) {
-            if (Symbol* symbol = CodeGenerator::getInstance().symbolTable.lookup(id->value)) {
-                return isTensorOrNumericType(symbol->type.get());
-            }
-            if (auto* decl = findLaterDeclaration(id->value, statements, from)) {
+            Symbol* symbol = CodeGenerator::getInstance().symbolTable.lookup(id->value);
+            auto declarations = laterDeclarations(id->value, statements, from);
+            if (!symbol && declarations.empty()) return isIntegerText(id->value);
+            if (symbol && !isTensorOrNumericType(symbol->type.get())) return false;
+            for (auto* decl : declarations) {
                 auto declType = decl->getType();
-                return isTensorOrNumericType(declType.get());
+                if (!isTensorOrNumericType(declType.get())) return false;
             }
-            return isIntegerText(id->value);
+            return true;
         }
     }
     if (!identifiersResolve(left)) return false;
@@ -159,7 +160,8 @@ bool onlyBorrowingTensorUses(const std::string& name, std::vector<std::unique_pt
                 if (binary->right.get() == node && cannotDispatchClassOperator(binary->left.get(), statements, from)) return;
             }
             if (auto* call = dynamic_cast<FunctionCallNode*>(parent)) {
-                if (isTensorBorrowingBuiltin(call->functionName)) return;
+                if (isTensorBorrowingBuiltin(call->functionName) &&
+                    laterDeclarations(call->functionName, statements, from).empty()) return;
             }
             if (auto* access = dynamic_cast<ArrayAccessNode*>(parent)) {
                 if (access->array.get() == node) return;
@@ -183,6 +185,12 @@ bool onlyBorrowingTensorUses(const std::string& name, std::vector<std::unique_pt
     };
     for (size_t i = from; i < statements.size() && safe; ++i) visit(statements[i].get(), nullptr);
     return safe;
+}
+bool yieldsValue(ASTNode* statement) {
+    return dynamic_cast<IdentifierNode*>(statement) || dynamic_cast<PrefixExpressionNode*>(statement) ||
+           dynamic_cast<TupleExpressionNode*>(statement) || dynamic_cast<IfStatementNode*>(statement) ||
+           dynamic_cast<MatchExpressionNode*>(statement) || dynamic_cast<BlockNode*>(statement) ||
+           dynamic_cast<CastingExpressionNode*>(statement);
 }
 }  // namespace
 
@@ -224,6 +232,7 @@ llvm::Value* BlockNode::codegen() {
 
     auto* currentBlock = cg.builder.GetInsertBlock();
     if (currentBlock && !csec_llvm::terminatorOrNull(currentBlock)) {
+        if (last && yieldsValue(statements.back().get())) cg.releaseFromCurrentScope(last);
         cg.emitCurrentScopeCleanups();
     }
     cg.exitCleanupScope();

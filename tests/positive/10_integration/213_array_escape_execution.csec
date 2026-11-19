@@ -1,0 +1,32 @@
+// An array literal returned from a function outlives the callee's frame, and an Array field is
+// indexed through the buffer it points to rather than through the object.
+class Bag(cap: Int) {
+    var count: Int = 0;
+    var tag: Int = 77;
+    var data: Array<Int> = new Int[4];
+    def put(v: Int): Int { data[count] = v; count = count + 1; return count; }
+    def at(i: Int): Int { return data[i]; }
+}
+
+def make(n: Int): Array<Int> {
+    val a = [n, n + 1, n + 2, n + 3];
+    return a;
+}
+
+def clobber(k: Int): Int {
+    val z = [k, k, k, k, k, k, k, k];
+    return z[0] + z[7];
+}
+
+def main(): Int {
+    val a = make(10);
+    val c = clobber(99);
+    if (a[0] + a[3] != 23) { return 2; }
+    val bag = new Bag(4);
+    bag.put(5);
+    bag.put(6);
+    bag.put(7);
+    if (bag.at(0) + bag.at(2) != 12) { return 3; }
+    if (bag.tag != 77 or bag.count != 3) { return 4; }
+    return 0;
+}

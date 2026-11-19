@@ -1,0 +1,6 @@
+// A slice that reaches past the end stops the program (exit 1) instead of reading past the buffer.
+def main(): Int {
+    val a: Tensor<Double, 4> = new Tensor<Double, 4>(1.0);
+    val s = a[1:9];
+    return 0;
+}

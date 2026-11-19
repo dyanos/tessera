@@ -1,0 +1,42 @@
+// A tensor val is dropped only when every later use borrows it: a later local that shadows an
+// operand, a closure named like a builtin, and a move out of a parameter all keep it alive.
+class Holder() {
+    var kept: Tensor<Double, 1, 2> = new Tensor<Double, 1, 2>(0.0);
+    def operator +(right: Tensor<Double, 1, 2>): Int {
+        kept = right;
+        return 1;
+    }
+}
+
+def shadowed(h: Double, x: Tensor<Double, 1, 2>, w: Tensor<Double, 2, 2>): Holder {
+    val t = x @ w;
+    val h = new Holder();
+    val n = h + t;
+    return h;
+}
+
+def viaClosure(x: Tensor<Double, 1, 2>, w: Tensor<Double, 2, 2>): Tensor<Double, 1, 2> {
+    val relu = [](a: Tensor<Double, 1, 2>) -> { return a; };
+    val t = x @ w;
+    val u: Tensor<Double, 1, 2> = relu(t);
+    return u;
+}
+
+def movedParam(p: Tensor<Double, 1, 2>): Double {
+    val t = <- p;
+    return sum(t);
+}
+
+def main(): Int {
+    val x: Tensor<Double, 1, 2> = new Tensor<Double, 1, 2>(1.0);
+    val w: Tensor<Double, 2, 2> = new Tensor<Double, 2, 2>(0.5);
+    val hh = shadowed(1.0, x, w);
+    val r = viaClosure(x, w);
+    val s = movedParam(x);
+    val filler: Tensor<Double, 1, 2> = new Tensor<Double, 1, 2>(9.0);
+    val k = hh.kept;
+    if (k[0, 0] != 1.0) { return 2; }
+    if (r[0, 1] != 1.0) { return 3; }
+    if (x[0, 0] != 1.0 or s != 2.0) { return 4; }
+    return 0;
+}

@@ -34,6 +34,15 @@ llvm::Value* AssignmentExpressionNode::codegen() {
             if (!key) return nullptr;
             return codegenDictSet(access->array.get(), key, right.get(), op);
         }
+        if (access->hasSlice()) {
+            llvm::Value* rightValue = right->codegen();
+            if (!rightValue) {
+                std::cerr << "Error: Assignment failed" << std::endl;
+                return nullptr;
+            }
+            auto rightType = right->getType();
+            return access->codegenSliceAssign(rightValue, rightType.get());
+        }
     }
     llvm::Value* leftValue = left->codegen();
     llvm::Value* rightValue = right->codegen();

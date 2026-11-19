@@ -172,6 +172,8 @@ private:
     // no-borrow-across-await rule is enforced at each await point.
     bool inAsyncFunction = false;
     std::vector<std::unordered_map<std::string, OwnershipState>> ownershipScopes;
+    std::vector<std::vector<std::vector<std::unordered_map<std::string, OwnershipState>>>> loopExitStates;
+    void visitLoopBody(ASTNode* body, size_t outerScopes);
     void reportError(const std::string& message);
     void checkTypeResolved(const std::unique_ptr<Type>& type, const std::string& context);
     void enterOwnershipScope();

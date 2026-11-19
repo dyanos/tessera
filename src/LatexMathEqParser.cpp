@@ -652,6 +652,9 @@ std::unique_ptr<ASTNode> LatexMathEqParser::parseTerminal() {
 								if (!binExpr) {
 									throw std::runtime_error("Failed to cast lower limit to BinaryExpressionNode.");
 								}
+								if (!binExpr->left || !binExpr->right) {
+									throw std::runtime_error("Expected 'variable = start' in lower limit.");
+								}
 								if (binExpr->op == "=") {
 									if (binExpr->left->nodeType == ASTNodeType::IDENTIFIER) {
 										auto* idNode = dynamic_cast<IdentifierNode*>(binExpr->left.get());
@@ -814,7 +817,11 @@ std::unique_ptr<ASTNode> LatexMathEqParser::parseSimpleExpr() {
 		return std::make_unique<UnaryExpressionNode>(op, std::move(operand));
 	}
 
-	return parseTerminal();
+	auto terminal = parseTerminal();
+	if (!terminal) {
+		throw std::runtime_error("Expected an operand in LaTeX expression.");
+	}
+	return terminal;
 }
 
 std::unique_ptr<ASTNode> LatexMathEqParser::parseArg(bool isBrace) {

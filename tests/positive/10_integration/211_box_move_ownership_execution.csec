@@ -1,0 +1,50 @@
+// Moving a box into a call, yielding it from a block, or returning it through a tuple or an
+// if-expression hands ownership on exactly once (no double free, no use after free).
+def pass(b: box Int): box Int {
+    return b;
+}
+
+def take(v: box Int): Int = 1
+
+def throughCall(): Int {
+    val b: box Int = 5;
+    val c: box Int = pass(<- b);
+    return 0;
+}
+
+def fromBlock(c: Bool): Int {
+    val r: box Int = if (c) {
+        val b: box Int = 41;
+        b
+    } else {
+        val d: box Int = 2;
+        d
+    };
+    return 0;
+}
+
+def pick(c: Bool): box Int {
+    val b: box Int = 1;
+    val d: box Int = 2;
+    return if (c) { b } else { d };
+}
+
+def pair(): (box Int, box Int) {
+    val a: box Int = 10;
+    val b: box Int = 20;
+    return a, b;
+}
+
+def main(): Int {
+    var i: Int = 0;
+    var total: Int = 0;
+    while (i < 50) {
+        total = total + throughCall() + fromBlock(i % 2 == 0);
+        val p: box Int = pick(i % 2 == 0);
+        x, y = pair();
+        total = total + take(<- x) + take(<- y);
+        i = i + 1;
+    }
+    if (total != 100) { return 2; }
+    return 0;
+}

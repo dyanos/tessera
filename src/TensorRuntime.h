@@ -94,7 +94,7 @@ template <typename Body>
 inline void emitCountedLoop(CodeGenerator& cg, llvm::Value* count, const std::string& name, Body body) {
     auto* function = cg.builder.GetInsertBlock()->getParent();
     auto* i64Ty = llvm::Type::getInt64Ty(cg.context);
-    auto* indexPtr = cg.builder.CreateAlloca(i64Ty, nullptr, name + ".i");
+    auto* indexPtr = cg.createEntryAlloca(i64Ty, name + ".i");
     cg.builder.CreateStore(i64(cg, 0), indexPtr);
 
     auto* condBB = llvm::BasicBlock::Create(cg.context, name + ".cond", function);
@@ -119,11 +119,32 @@ inline void emitCountedLoop(CodeGenerator& cg, llvm::Value* count, const std::st
     cg.builder.SetInsertPoint(endBB);
 }
 
+inline void tensorFailIf(CodeGenerator& cg, llvm::Value* failed, const char* message) {
+    auto* function = cg.builder.GetInsertBlock()->getParent();
+    auto* ptrTy = llvm::PointerType::getUnqual(cg.context);
+    auto* i32Ty = llvm::Type::getInt32Ty(cg.context);
+    llvm::FunctionCallee puts = cg.module->getOrInsertFunction("puts", llvm::FunctionType::get(i32Ty, { ptrTy }, false));
+    llvm::FunctionCallee exitFn = cg.module->getOrInsertFunction(
+        "exit", llvm::FunctionType::get(llvm::Type::getVoidTy(cg.context), { i32Ty }, false));
+    auto* failBB = llvm::BasicBlock::Create(cg.context, "tensor.check.fail", function);
+    auto* okBB = llvm::BasicBlock::Create(cg.context, "tensor.check.ok", function);
+    cg.builder.CreateCondBr(failed, failBB, okBB);
+    cg.builder.SetInsertPoint(failBB);
+    cg.builder.CreateCall(puts, { cg.builder.CreateGlobalString(message, "tensor.check.message") });
+    cg.builder.CreateCall(exitFn, { llvm::ConstantInt::get(i32Ty, 1) });
+    cg.builder.CreateUnreachable();
+    cg.builder.SetInsertPoint(okBB);
+}
+
 inline llvm::Value* allocateTensor(CodeGenerator& cg, llvm::Value* rank, llvm::Value* count) {
     auto* tensorPtrTy = getTensorPointerType(cg);
     auto* i64Ty = llvm::Type::getInt64Ty(cg.context);
     auto* f64Ty = llvm::Type::getDoubleTy(cg.context);
 
+    llvm::Value* tooLarge = cg.builder.CreateOr(
+        cg.builder.CreateICmpUGT(count, i64(cg, (int64_t(1) << 59)), "tensor.count.too.large"),
+        cg.builder.CreateICmpUGT(rank, i64(cg, 1 << 20), "tensor.rank.too.large"), "tensor.size.invalid");
+    tensorFailIf(cg, tooLarge, "Tensor error: tensor size is out of range");
     llvm::Value* tensor = mallocBytes(cg, i64(cg, 32), tensorPtrTy, "tensor");
     llvm::Value* dims = mallocBytes(
         cg,
@@ -136,6 +157,14 @@ inline llvm::Value* allocateTensor(CodeGenerator& cg, llvm::Value* rank, llvm::V
         llvm::PointerType::getUnqual(f64Ty->getContext()),
         "tensor.data.alloc");
 
+    llvm::Value* allocationFailed = cg.builder.CreateOr(
+        cg.builder.CreateIsNull(tensor, "tensor.header.null"),
+        cg.builder.CreateOr(
+            cg.builder.CreateAnd(cg.builder.CreateIsNull(dims, "tensor.dims.null"),
+                                 cg.builder.CreateICmpNE(rank, i64(cg, 0))),
+            cg.builder.CreateAnd(cg.builder.CreateIsNull(data, "tensor.data.null"),
+                                 cg.builder.CreateICmpNE(count, i64(cg, 0)))), "tensor.alloc.failed");
+    tensorFailIf(cg, allocationFailed, "Tensor error: out of memory");
     cg.builder.CreateStore(rank, tensorField(cg, tensor, 0, "tensor.rank.slot"));
     cg.builder.CreateStore(dims, tensorField(cg, tensor, 1, "tensor.dims.slot"));
     cg.builder.CreateStore(count, tensorField(cg, tensor, 2, "tensor.count.slot"));
@@ -249,7 +278,7 @@ inline llvm::Value* sumTensor(CodeGenerator& cg, llvm::Value* source) {
     auto* f64Ty = llvm::Type::getDoubleTy(cg.context);
     llvm::Value* count = loadCount(cg, source);
     llvm::Value* data = loadData(cg, source);
-    llvm::Value* sumPtr = cg.builder.CreateAlloca(f64Ty, nullptr, "tensor.sum.ptr");
+    llvm::Value* sumPtr = cg.createEntryAlloca(f64Ty, "tensor.sum.ptr");
     cg.builder.CreateStore(llvm::ConstantFP::get(f64Ty, 0.0), sumPtr);
     emitCountedLoop(cg, count, "tensor.sum", [&](llvm::Value* index) {
         llvm::Value* value = cg.builder.CreateLoad(f64Ty, cg.builder.CreateGEP(f64Ty, data, index, "tensor.sum.slot"), "tensor.sum.value");
@@ -270,7 +299,7 @@ inline llvm::Value* normTensor(CodeGenerator& cg, llvm::Value* source) {
     auto* f64Ty = llvm::Type::getDoubleTy(cg.context);
     llvm::Value* count = loadCount(cg, source);
     llvm::Value* data = loadData(cg, source);
-    llvm::Value* sumPtr = cg.builder.CreateAlloca(f64Ty, nullptr, "tensor.norm.sum.ptr");
+    llvm::Value* sumPtr = cg.createEntryAlloca(f64Ty, "tensor.norm.sum.ptr");
     cg.builder.CreateStore(llvm::ConstantFP::get(f64Ty, 0.0), sumPtr);
     emitCountedLoop(cg, count, "tensor.norm", [&](llvm::Value* index) {
         llvm::Value* value = cg.builder.CreateLoad(f64Ty, cg.builder.CreateGEP(f64Ty, data, index, "tensor.norm.slot"), "tensor.norm.value");
@@ -302,7 +331,7 @@ inline llvm::Value* softmaxTensor(CodeGenerator& cg, llvm::Value* source) {
     });
 
     llvm::Function* expFn = getOrCreateUnaryDoubleRuntime(cg, "csec_math_exp");
-    llvm::Value* sumPtr = cg.builder.CreateAlloca(f64Ty, nullptr, "tensor.softmax.sum.ptr");
+    llvm::Value* sumPtr = cg.createEntryAlloca(f64Ty, "tensor.softmax.sum.ptr");
     cg.builder.CreateStore(llvm::ConstantFP::get(f64Ty, 0.0), sumPtr);
 
     emitCountedLoop(cg, count, "tensor.softmax.exp", [&](llvm::Value* index) {
@@ -330,7 +359,7 @@ inline llvm::Value* mseTensor(CodeGenerator& cg, llvm::Value* prediction, llvm::
     llvm::Value* count = cg.builder.CreateSelect(cg.builder.CreateICmpULT(predCount, targetCount), predCount, targetCount, "tensor.mse.count");
     llvm::Value* predData = loadData(cg, prediction);
     llvm::Value* targetData = loadData(cg, target);
-    llvm::Value* sumPtr = cg.builder.CreateAlloca(f64Ty, nullptr, "tensor.mse.sum.ptr");
+    llvm::Value* sumPtr = cg.createEntryAlloca(f64Ty, "tensor.mse.sum.ptr");
     cg.builder.CreateStore(llvm::ConstantFP::get(f64Ty, 0.0), sumPtr);
 
     emitCountedLoop(cg, count, "tensor.mse", [&](llvm::Value* index) {
@@ -346,9 +375,26 @@ inline llvm::Value* mseTensor(CodeGenerator& cg, llvm::Value* prediction, llvm::
     return cg.builder.CreateFDiv(cg.builder.CreateLoad(f64Ty, sumPtr, "tensor.mse.sum"), countDouble, "tensor.mse.result");
 }
 
+inline void checkSameShape(CodeGenerator& cg, llvm::Value* left, llvm::Value* right) {
+    auto* i64Ty = llvm::Type::getInt64Ty(cg.context);
+    llvm::Value* rank = loadRank(cg, left);
+    llvm::Value* differs = cg.builder.CreateOr(
+        cg.builder.CreateICmpNE(rank, loadRank(cg, right), "tensor.shape.rank.differs"),
+        cg.builder.CreateICmpNE(loadCount(cg, left), loadCount(cg, right), "tensor.shape.count.differs"));
+    tensorFailIf(cg, differs, "Tensor error: tensor shapes do not match");
+    llvm::Value* leftDims = loadDims(cg, left);
+    llvm::Value* rightDims = loadDims(cg, right);
+    emitCountedLoop(cg, rank, "tensor.shape.check", [&](llvm::Value* axis) {
+        llvm::Value* l = cg.builder.CreateLoad(i64Ty, cg.builder.CreateGEP(i64Ty, leftDims, axis), "tensor.shape.left");
+        llvm::Value* r = cg.builder.CreateLoad(i64Ty, cg.builder.CreateGEP(i64Ty, rightDims, axis), "tensor.shape.right");
+        tensorFailIf(cg, cg.builder.CreateICmpNE(l, r, "tensor.shape.dim.differs"), "Tensor error: tensor shapes do not match");
+    });
+}
+
 inline llvm::Value* elementwiseTensorTensor(CodeGenerator& cg, llvm::Value* left, llvm::Value* right, const std::string& op) {
     auto* i64Ty = llvm::Type::getInt64Ty(cg.context);
     auto* f64Ty = llvm::Type::getDoubleTy(cg.context);
+    checkSameShape(cg, left, right);
     llvm::Value* rank = loadRank(cg, left);
     llvm::Value* count = loadCount(cg, left);
     llvm::Value* result = allocateTensor(cg, rank, count);
@@ -405,7 +451,7 @@ inline llvm::Value* elementwiseTensorScalar(CodeGenerator& cg, llvm::Value* tens
 
 inline llvm::Value* tensorLinearIndex(CodeGenerator& cg, llvm::Value* coords, llvm::Value* dims, llvm::Value* rank) {
     auto* i64Ty = llvm::Type::getInt64Ty(cg.context);
-    auto* resultPtr = cg.builder.CreateAlloca(i64Ty, nullptr, "tensor.linear.ptr");
+    auto* resultPtr = cg.createEntryAlloca(i64Ty, "tensor.linear.ptr");
     cg.builder.CreateStore(i64(cg, 0), resultPtr);
     emitCountedLoop(cg, rank, "tensor.linear", [&](llvm::Value* axis) {
         llvm::Value* dim = cg.builder.CreateLoad(i64Ty, cg.builder.CreateGEP(i64Ty, dims, axis, "tensor.linear.dim.ptr"), "tensor.linear.dim");
@@ -417,22 +463,32 @@ inline llvm::Value* tensorLinearIndex(CodeGenerator& cg, llvm::Value* coords, ll
     return cg.builder.CreateLoad(i64Ty, resultPtr, "tensor.linear.result");
 }
 
+inline llvm::Value* checkedCoordinates(CodeGenerator& cg, llvm::Value* rank, llvm::Value* dims,
+                                       const std::vector<llvm::Value*>& indices, const char* name) {
+    auto* i64Ty = llvm::Type::getInt64Ty(cg.context);
+    const int64_t axes = static_cast<int64_t>(indices.size());
+    tensorFailIf(cg, cg.builder.CreateICmpNE(rank, i64(cg, axes), "tensor.index.rank.mismatch"),
+                 "Tensor error: number of indices does not match the tensor rank");
+    llvm::Value* coords = cg.createEntryAlloca(llvm::ArrayType::get(i64Ty, static_cast<uint64_t>(axes > 0 ? axes : 1)), name);
+    for (int64_t axis = 0; axis < axes; ++axis) {
+        llvm::Value* coord = indices[axis] ? indices[axis] : i64(cg, 0);
+        llvm::Value* dim = cg.builder.CreateLoad(i64Ty, cg.builder.CreateGEP(i64Ty, dims, i64(cg, axis)), "tensor.index.dim");
+        tensorFailIf(cg, cg.builder.CreateICmpUGE(coord, dim, "tensor.index.outside"), "Tensor error: index out of bounds");
+        cg.builder.CreateStore(coord, cg.builder.CreateGEP(i64Ty, coords, i64(cg, axis), "tensor.index.coord.slot"));
+    }
+    return coords;
+}
+
 // Address of a single tensor element t[i0, i1, ...]. Mirrors the full-scalar-index read in
 // sliceTensor (same row-major linear index into the data buffer) but returns the element pointer,
 // so `t[i, j] = v` can store through it. `indices` must give one scalar per axis (no slices).
 inline llvm::Value* elementPointer(CodeGenerator& cg, llvm::Value* tensor,
                                    const std::vector<llvm::Value*>& indices) {
-    auto* i64Ty = llvm::Type::getInt64Ty(cg.context);
     auto* f64Ty = llvm::Type::getDoubleTy(cg.context);
     llvm::Value* rank = loadRank(cg, tensor);
     llvm::Value* dims = loadDims(cg, tensor);
     llvm::Value* data = loadData(cg, tensor);
-    llvm::Value* coords = cg.builder.CreateAlloca(i64Ty, rank, "tensor.set.coords");
-    for (size_t axis = 0; axis < indices.size(); ++axis) {
-        llvm::Value* coord = indices[axis] ? indices[axis] : i64(cg, 0);
-        cg.builder.CreateStore(coord,
-            cg.builder.CreateGEP(i64Ty, coords, i64(cg, static_cast<int64_t>(axis)), "tensor.set.coord.slot"));
-    }
+    llvm::Value* coords = checkedCoordinates(cg, rank, dims, indices, "tensor.set.coords");
     llvm::Value* index = tensorLinearIndex(cg, coords, dims, rank);
     return cg.builder.CreateGEP(f64Ty, data, index, "tensor.set.addr");
 }
@@ -456,65 +512,62 @@ inline llvm::Value* sliceTensor(
     }
 
     if (sliceRankConst == 0) {
-        llvm::Value* coords = cg.builder.CreateAlloca(i64Ty, srcRank, "tensor.index.coords");
-        for (size_t axis = 0; axis < axisCount; ++axis) {
-            llvm::Value* coord = starts[axis] ? starts[axis] : i64(cg, 0);
-            cg.builder.CreateStore(coord, cg.builder.CreateGEP(i64Ty, coords, i64(cg, static_cast<int64_t>(axis)), "tensor.index.coord.slot"));
-        }
+        llvm::Value* coords = checkedCoordinates(cg, srcRank, srcDims, starts, "tensor.index.coords");
         llvm::Value* srcIndex = tensorLinearIndex(cg, coords, srcDims, srcRank);
         return cg.builder.CreateLoad(f64Ty, cg.builder.CreateGEP(f64Ty, srcData, srcIndex, "tensor.index.data"), "tensor.index.value");
     }
 
-    llvm::Value* result = allocateTensor(cg, i64(cg, sliceRankConst), i64(cg, 1));
-    llvm::Value* dstDims = loadDims(cg, result);
-    llvm::Value* countPtr = cg.builder.CreateAlloca(i64Ty, nullptr, "tensor.slice.count.ptr");
-    cg.builder.CreateStore(i64(cg, 1), countPtr);
-    int64_t dstAxis = 0;
+    tensorFailIf(cg, cg.builder.CreateICmpNE(srcRank, i64(cg, static_cast<int64_t>(axisCount)), "tensor.slice.rank.mismatch"),
+                 "Tensor error: number of indices does not match the tensor rank");
+    std::vector<llvm::Value*> axisStarts(axisCount, nullptr);
+    std::vector<llvm::Value*> axisSteps(axisCount, nullptr);
+    std::vector<llvm::Value*> lengths;
+    llvm::Value* count = i64(cg, 1);
     for (size_t axis = 0; axis < axisCount; ++axis) {
-        if (!isSlice[axis]) continue;
         llvm::Value* dim = cg.builder.CreateLoad(i64Ty, cg.builder.CreateGEP(i64Ty, srcDims, i64(cg, static_cast<int64_t>(axis)), "tensor.slice.dim.ptr"), "tensor.slice.dim");
         llvm::Value* start = starts[axis] ? starts[axis] : i64(cg, 0);
+        axisStarts[axis] = start;
+        if (!isSlice[axis]) {
+            tensorFailIf(cg, cg.builder.CreateICmpUGE(start, dim, "tensor.slice.index.outside"), "Tensor error: index out of bounds");
+            continue;
+        }
         llvm::Value* end = ends[axis] ? ends[axis] : dim;
         llvm::Value* step = steps[axis] ? steps[axis] : i64(cg, 1);
+        axisSteps[axis] = step;
+        llvm::Value* invalid = cg.builder.CreateOr(
+            cg.builder.CreateICmpSLT(step, i64(cg, 1), "tensor.slice.step.invalid"),
+            cg.builder.CreateOr(
+                cg.builder.CreateICmpSLT(start, i64(cg, 0), "tensor.slice.start.negative"),
+                cg.builder.CreateOr(
+                    cg.builder.CreateICmpSGT(start, end, "tensor.slice.start.after.end"),
+                    cg.builder.CreateICmpSGT(end, dim, "tensor.slice.end.outside"))));
+        tensorFailIf(cg, invalid, "Tensor error: slice bounds out of range");
         llvm::Value* span = cg.builder.CreateSub(end, start, "tensor.slice.span");
         llvm::Value* length = cg.builder.CreateUDiv(cg.builder.CreateAdd(span, cg.builder.CreateSub(step, i64(cg, 1))), step, "tensor.slice.len");
-        cg.builder.CreateStore(length, cg.builder.CreateGEP(i64Ty, dstDims, i64(cg, dstAxis), "tensor.slice.dst.dim"));
-        llvm::Value* currentCount = cg.builder.CreateLoad(i64Ty, countPtr, "tensor.slice.count");
-        cg.builder.CreateStore(cg.builder.CreateMul(currentCount, length, "tensor.slice.next.count"), countPtr);
-        ++dstAxis;
+        lengths.push_back(length);
+        count = cg.builder.CreateMul(count, length, "tensor.slice.next.count");
     }
 
-    llvm::Value* count = cg.builder.CreateLoad(i64Ty, countPtr, "tensor.slice.total");
-    result = allocateTensor(cg, i64(cg, sliceRankConst), count);
-    dstDims = loadDims(cg, result);
+    llvm::Value* result = allocateTensor(cg, i64(cg, sliceRankConst), count);
+    llvm::Value* dstDims = loadDims(cg, result);
     llvm::Value* dstData = loadData(cg, result);
-    dstAxis = 0;
-    for (size_t axis = 0; axis < axisCount; ++axis) {
-        if (!isSlice[axis]) continue;
-        llvm::Value* dim = cg.builder.CreateLoad(i64Ty, cg.builder.CreateGEP(i64Ty, srcDims, i64(cg, static_cast<int64_t>(axis))), "tensor.slice.dim");
-        llvm::Value* start = starts[axis] ? starts[axis] : i64(cg, 0);
-        llvm::Value* end = ends[axis] ? ends[axis] : dim;
-        llvm::Value* step = steps[axis] ? steps[axis] : i64(cg, 1);
-        llvm::Value* span = cg.builder.CreateSub(end, start, "tensor.slice.span");
-        llvm::Value* length = cg.builder.CreateUDiv(cg.builder.CreateAdd(span, cg.builder.CreateSub(step, i64(cg, 1))), step, "tensor.slice.len");
-        cg.builder.CreateStore(length, cg.builder.CreateGEP(i64Ty, dstDims, i64(cg, dstAxis), "tensor.slice.dst.dim"));
-        ++dstAxis;
+    for (int64_t dstAxis = 0; dstAxis < sliceRankConst; ++dstAxis) {
+        cg.builder.CreateStore(lengths[dstAxis], cg.builder.CreateGEP(i64Ty, dstDims, i64(cg, dstAxis), "tensor.slice.dst.dim"));
     }
 
-    llvm::Value* srcCoords = cg.builder.CreateAlloca(i64Ty, srcRank, "tensor.slice.src.coords");
+    llvm::Value* srcCoords = cg.createEntryAlloca(llvm::ArrayType::get(i64Ty, static_cast<uint64_t>(axisCount)), "tensor.slice.src.coords");
+    llvm::Value* remainingPtr = cg.createEntryAlloca(i64Ty, "tensor.slice.remaining.ptr");
     emitCountedLoop(cg, count, "tensor.slice.copy", [&](llvm::Value* dstIndex) {
-        llvm::Value* remainingPtr = cg.builder.CreateAlloca(i64Ty, nullptr, "tensor.slice.remaining.ptr");
         cg.builder.CreateStore(dstIndex, remainingPtr);
         int64_t outAxis = sliceRankConst - 1;
         for (int64_t axis = static_cast<int64_t>(axisCount) - 1; axis >= 0; --axis) {
-            llvm::Value* coord = starts[axis] ? starts[axis] : i64(cg, 0);
+            llvm::Value* coord = axisStarts[axis];
             if (isSlice[axis]) {
-                llvm::Value* len = cg.builder.CreateLoad(i64Ty, cg.builder.CreateGEP(i64Ty, dstDims, i64(cg, outAxis), "tensor.slice.len.ptr"), "tensor.slice.len");
+                llvm::Value* len = lengths[outAxis];
                 llvm::Value* remaining = cg.builder.CreateLoad(i64Ty, remainingPtr, "tensor.slice.remaining");
                 llvm::Value* local = cg.builder.CreateURem(remaining, len, "tensor.slice.local");
                 cg.builder.CreateStore(cg.builder.CreateUDiv(remaining, len, "tensor.slice.next.remaining"), remainingPtr);
-                llvm::Value* step = steps[axis] ? steps[axis] : i64(cg, 1);
-                coord = cg.builder.CreateAdd(coord, cg.builder.CreateMul(local, step, "tensor.slice.offset"), "tensor.slice.src.coord");
+                coord = cg.builder.CreateAdd(coord, cg.builder.CreateMul(local, axisSteps[axis], "tensor.slice.offset"), "tensor.slice.src.coord");
                 --outAxis;
             }
             cg.builder.CreateStore(coord, cg.builder.CreateGEP(i64Ty, srcCoords, i64(cg, axis), "tensor.slice.src.coord.slot"));
@@ -541,20 +594,16 @@ inline llvm::Value* transposeTensor(CodeGenerator& cg, llvm::Value* source) {
     llvm::Value* last = cg.builder.CreateSub(rank, one, "tensor.last.dim");
     llvm::Value* prev = cg.builder.CreateSub(rank, two, "tensor.prev.dim");
 
+    llvm::Value* rankIsAtLeastTwo = cg.builder.CreateICmpUGE(rank, two, "tensor.rank.ge2");
     emitCountedLoop(cg, rank, "tensor.transpose.dims", [&](llvm::Value* index) {
         llvm::Value* useLast = cg.builder.CreateICmpEQ(index, prev, "tensor.use.last");
         llvm::Value* usePrev = cg.builder.CreateICmpEQ(index, last, "tensor.use.prev");
-        llvm::Value* srcIndex = cg.builder.CreateSelect(useLast, last, cg.builder.CreateSelect(usePrev, prev, index), "tensor.transpose.dim.index");
+        llvm::Value* swapped = cg.builder.CreateSelect(useLast, last, cg.builder.CreateSelect(usePrev, prev, index));
+        llvm::Value* srcIndex = cg.builder.CreateSelect(rankIsAtLeastTwo, swapped, index, "tensor.transpose.dim.index");
         llvm::Value* srcSlot = cg.builder.CreateGEP(i64Ty, srcDims, srcIndex, "tensor.src.dim");
         llvm::Value* dstSlot = cg.builder.CreateGEP(i64Ty, dstDims, index, "tensor.dst.dim");
         cg.builder.CreateStore(cg.builder.CreateLoad(i64Ty, srcSlot, "tensor.dim"), dstSlot);
     });
-
-    llvm::Value* rowsSlot = cg.builder.CreateGEP(i64Ty, srcDims, prev, "tensor.rows.slot");
-    llvm::Value* colsSlot = cg.builder.CreateGEP(i64Ty, srcDims, last, "tensor.cols.slot");
-    llvm::Value* rows = cg.builder.CreateLoad(i64Ty, rowsSlot, "tensor.rows");
-    llvm::Value* cols = cg.builder.CreateLoad(i64Ty, colsSlot, "tensor.cols");
-    llvm::Value* rankIsAtLeastTwo = cg.builder.CreateICmpUGE(rank, two, "tensor.rank.ge2");
 
     auto* function = cg.builder.GetInsertBlock()->getParent();
     auto* transposeBB = llvm::BasicBlock::Create(cg.context, "tensor.transpose.data", function);
@@ -563,6 +612,8 @@ inline llvm::Value* transposeTensor(CodeGenerator& cg, llvm::Value* source) {
     cg.builder.CreateCondBr(rankIsAtLeastTwo, transposeBB, copyBB);
 
     cg.builder.SetInsertPoint(transposeBB);
+    llvm::Value* rows = cg.builder.CreateLoad(i64Ty, cg.builder.CreateGEP(i64Ty, srcDims, prev, "tensor.rows.slot"), "tensor.rows");
+    llvm::Value* cols = cg.builder.CreateLoad(i64Ty, cg.builder.CreateGEP(i64Ty, srcDims, last, "tensor.cols.slot"), "tensor.cols");
     emitCountedLoop(cg, rows, "tensor.transpose.rows", [&](llvm::Value* row) {
         emitCountedLoop(cg, cols, "tensor.transpose.cols", [&](llvm::Value* col) {
             llvm::Value* srcIndex = cg.builder.CreateAdd(cg.builder.CreateMul(row, cols), col, "tensor.transpose.src.index");
@@ -593,7 +644,7 @@ inline llvm::Value* innerProduct(CodeGenerator& cg, llvm::Value* left, llvm::Val
     llvm::Value* leftData = loadData(cg, left);
     llvm::Value* rightData = loadData(cg, right);
     auto* f64Ty = llvm::Type::getDoubleTy(cg.context);
-    llvm::Value* sumPtr = cg.builder.CreateAlloca(f64Ty, nullptr, "tensor.inner.sum.ptr");
+    llvm::Value* sumPtr = cg.createEntryAlloca(f64Ty, "tensor.inner.sum.ptr");
     cg.builder.CreateStore(llvm::ConstantFP::get(f64Ty, 0.0), sumPtr);
 
     emitCountedLoop(cg, count, "tensor.inner", [&](llvm::Value* index) {
@@ -655,8 +706,16 @@ inline llvm::Value* outerProduct(CodeGenerator& cg, llvm::Value* left, llvm::Val
 inline llvm::Value* matrixProduct(CodeGenerator& cg, llvm::Value* left, llvm::Value* right) {
     auto* i64Ty = llvm::Type::getInt64Ty(cg.context);
     auto* f64Ty = llvm::Type::getDoubleTy(cg.context);
+    tensorFailIf(cg, cg.builder.CreateOr(
+                         cg.builder.CreateICmpNE(loadRank(cg, left), i64(cg, 2), "tensor.matmul.left.rank"),
+                         cg.builder.CreateICmpNE(loadRank(cg, right), i64(cg, 2), "tensor.matmul.right.rank")),
+                 "Tensor error: matrix product needs two rank-2 tensors");
     llvm::Value* leftDims = loadDims(cg, left);
     llvm::Value* rightDims = loadDims(cg, right);
+    llvm::Value* leftCols = cg.builder.CreateLoad(i64Ty, cg.builder.CreateGEP(i64Ty, leftDims, i64(cg, 1)), "tensor.matmul.left.cols");
+    llvm::Value* rightRows = cg.builder.CreateLoad(i64Ty, cg.builder.CreateGEP(i64Ty, rightDims, i64(cg, 0)), "tensor.matmul.right.rows");
+    tensorFailIf(cg, cg.builder.CreateICmpNE(leftCols, rightRows, "tensor.matmul.inner.differs"),
+                 "Tensor error: matrix product dimensions do not match");
     llvm::Value* rows = cg.builder.CreateLoad(i64Ty, cg.builder.CreateGEP(i64Ty, leftDims, i64(cg, 0), "tensor.matmul.rows.ptr"), "tensor.matmul.rows");
     llvm::Value* shared = cg.builder.CreateLoad(i64Ty, cg.builder.CreateGEP(i64Ty, leftDims, i64(cg, 1), "tensor.matmul.shared.ptr"), "tensor.matmul.shared");
     llvm::Value* cols = cg.builder.CreateLoad(i64Ty, cg.builder.CreateGEP(i64Ty, rightDims, i64(cg, 1), "tensor.matmul.cols.ptr"), "tensor.matmul.cols");
@@ -671,7 +730,7 @@ inline llvm::Value* matrixProduct(CodeGenerator& cg, llvm::Value* left, llvm::Va
     llvm::Value* dstData = loadData(cg, result);
     emitCountedLoop(cg, rows, "tensor.matmul.i", [&](llvm::Value* row) {
         emitCountedLoop(cg, cols, "tensor.matmul.j", [&](llvm::Value* col) {
-            llvm::Value* sumPtr = cg.builder.CreateAlloca(f64Ty, nullptr, "tensor.matmul.sum.ptr");
+            llvm::Value* sumPtr = cg.createEntryAlloca(f64Ty, "tensor.matmul.sum.ptr");
             cg.builder.CreateStore(llvm::ConstantFP::get(f64Ty, 0.0), sumPtr);
             emitCountedLoop(cg, shared, "tensor.matmul.k", [&](llvm::Value* k) {
                 llvm::Value* leftIndex = cg.builder.CreateAdd(cg.builder.CreateMul(row, shared), k, "tensor.matmul.left.index");

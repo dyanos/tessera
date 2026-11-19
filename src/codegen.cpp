@@ -107,7 +107,7 @@ void CodeGenerator::enterCleanupScope() {
 void CodeGenerator::exitCleanupScope() {
     if (!cleanupScopes.empty()) {
         for (const auto& entry : cleanupScopes.back()) {
-            if (entry.second == CleanupKind::FlaggedFree) dropFlags.erase(entry.first);
+            dropFlags.erase(entry.first);
         }
         cleanupScopes.pop_back();
     }
@@ -121,47 +121,64 @@ llvm::Value* CodeGenerator::dropFlagInCurrentFunction(llvm::Value* pointer) cons
     return flag;
 }
 
-void CodeGenerator::registerCleanup(llvm::Value* pointer) {
+void CodeGenerator::registerOwned(llvm::Value* pointer, CleanupKind kind) {
     if (!pointer || cleanupScopes.empty()) {
         return;
     }
-    cleanupScopes.back().push_back({ pointer, CleanupKind::Free });
+    forgetCleanup(pointer);
+    if (llvm::BasicBlock* block = builder.GetInsertBlock()) {
+        llvm::Function* fn = block->getParent();
+        llvm::IRBuilder<> entry(&fn->getEntryBlock(), fn->getEntryBlock().begin());
+        llvm::Value* flag = entry.CreateAlloca(llvm::Type::getInt1Ty(context), nullptr, "drop.flag");
+        entry.CreateStore(llvm::ConstantInt::getFalse(context), flag);
+        builder.CreateStore(llvm::ConstantInt::getTrue(context), flag);
+        dropFlags[pointer] = flag;
+    }
+    cleanupScopes.back().push_back({ pointer, kind });
+}
+
+void CodeGenerator::registerCleanup(llvm::Value* pointer) {
+    registerOwned(pointer, CleanupKind::Free);
 }
 
 void CodeGenerator::registerTensorCleanup(llvm::Value* tensor) {
-    if (!tensor || cleanupScopes.empty()) {
-        return;
-    }
-    cleanupScopes.back().push_back({ tensor, CleanupKind::TensorFree });
-}
-
-void CodeGenerator::forgetCleanup(llvm::Value* pointer) {
-    if (!pointer) return;
-    for (auto& scope : cleanupScopes) {
-        scope.erase(std::remove_if(scope.begin(), scope.end(), [&](const auto& entry) {
-            return entry.first == pointer;
-        }), scope.end());
-    }
+    registerOwned(tensor, CleanupKind::TensorFree);
 }
 
 void CodeGenerator::registerSharedCleanup(llvm::Value* controlBlock) {
-    if (!controlBlock || cleanupScopes.empty()) {
-        return;
-    }
-    cleanupScopes.back().push_back({ controlBlock, CleanupKind::SharedRelease });
+    registerOwned(controlBlock, CleanupKind::SharedRelease);
+}
+
+void CodeGenerator::registerWeakCleanup(llvm::Value* controlBlock) {
+    registerOwned(controlBlock, CleanupKind::WeakRelease);
 }
 
 void CodeGenerator::registerFlaggedCleanup(llvm::Value* pointer) {
-    if (!pointer || cleanupScopes.empty() || !builder.GetInsertBlock()) {
-        return;
+    registerOwned(pointer, CleanupKind::Free);
+}
+
+bool CodeGenerator::hasCleanup(llvm::Value* pointer) const {
+    if (!pointer) return false;
+    for (const auto& scope : cleanupScopes) {
+        for (const auto& entry : scope) {
+            if (entry.first == pointer) return true;
+        }
     }
-    llvm::Function* fn = builder.GetInsertBlock()->getParent();
-    llvm::IRBuilder<> entry(&fn->getEntryBlock(), fn->getEntryBlock().begin());
-    llvm::Value* flag = entry.CreateAlloca(llvm::Type::getInt1Ty(context), nullptr, "drop.flag");
-    entry.CreateStore(llvm::ConstantInt::getFalse(context), flag);
-    builder.CreateStore(llvm::ConstantInt::getTrue(context), flag);
-    dropFlags[pointer] = flag;
-    cleanupScopes.back().push_back({ pointer, CleanupKind::FlaggedFree });
+    return false;
+}
+
+bool CodeGenerator::forgetCleanup(llvm::Value* pointer) {
+    if (!pointer) return false;
+    bool found = false;
+    for (auto& scope : cleanupScopes) {
+        const size_t before = scope.size();
+        scope.erase(std::remove_if(scope.begin(), scope.end(), [&](const auto& entry) {
+            return entry.first == pointer;
+        }), scope.end());
+        found = found || scope.size() != before;
+    }
+    dropFlags.erase(pointer);
+    return found;
 }
 
 void CodeGenerator::noteMoved(llvm::Value* pointer) {
@@ -170,17 +187,58 @@ void CodeGenerator::noteMoved(llvm::Value* pointer) {
     }
 }
 
-void CodeGenerator::registerWeakCleanup(llvm::Value* controlBlock) {
-    if (!controlBlock || cleanupScopes.empty()) {
-        return;
+namespace {
+void collectRetained(llvm::Value* value, std::unordered_set<llvm::Value*>& retained) {
+    if (!value || !retained.insert(value).second) return;
+    if (auto* insert = llvm::dyn_cast<llvm::InsertValueInst>(value)) {
+        collectRetained(insert->getAggregateOperand(), retained);
+        collectRetained(insert->getInsertedValueOperand(), retained);
     }
-    cleanupScopes.back().push_back({ controlBlock, CleanupKind::WeakRelease });
+    else if (auto* phi = llvm::dyn_cast<llvm::PHINode>(value)) {
+        for (llvm::Value* incoming : phi->incoming_values()) collectRetained(incoming, retained);
+    }
+    else if (auto* select = llvm::dyn_cast<llvm::SelectInst>(value)) {
+        collectRetained(select->getTrueValue(), retained);
+        collectRetained(select->getFalseValue(), retained);
+    }
+    else if (auto* cast = llvm::dyn_cast<llvm::CastInst>(value)) {
+        collectRetained(cast->getOperand(0), retained);
+    }
 }
 
-void CodeGenerator::emitCleanupEntry(llvm::Value* pointer, CleanupKind kind, llvm::Value* retainedPointer) {
-    if (!pointer || pointer == retainedPointer) {
+bool belongsToOtherFunction(llvm::Value* value, llvm::Function* fn) {
+    if (auto* inst = llvm::dyn_cast<llvm::Instruction>(value)) return inst->getFunction() != fn;
+    if (auto* arg = llvm::dyn_cast<llvm::Argument>(value)) return arg->getParent() != fn;
+    return false;
+}
+}
+
+void CodeGenerator::emitCleanupEntry(llvm::Value* pointer, CleanupKind kind,
+                                     const std::unordered_set<llvm::Value*>& retained) {
+    if (!pointer || retained.count(pointer)) {
         return;
     }
+    llvm::BasicBlock* block = builder.GetInsertBlock();
+    if (!block || belongsToOtherFunction(pointer, block->getParent())) {
+        return;
+    }
+    llvm::Value* flag = dropFlagInCurrentFunction(pointer);
+    if (!flag) {
+        emitCleanupBody(pointer, kind);
+        return;
+    }
+    llvm::Function* fn = block->getParent();
+    llvm::Value* live = builder.CreateLoad(llvm::Type::getInt1Ty(context), flag, "drop.live");
+    auto* freeBB = llvm::BasicBlock::Create(context, "drop.free", fn);
+    auto* contBB = llvm::BasicBlock::Create(context, "drop.cont", fn);
+    builder.CreateCondBr(live, freeBB, contBB);
+    builder.SetInsertPoint(freeBB);
+    emitCleanupBody(pointer, kind);
+    builder.CreateBr(contBB);
+    builder.SetInsertPoint(contBB);
+}
+
+void CodeGenerator::emitCleanupBody(llvm::Value* pointer, CleanupKind kind) {
     auto* i8PtrTy = llvm::PointerType::getUnqual(context);
     llvm::Value* raw = pointer->getType() == i8PtrTy
         ? pointer
@@ -201,36 +259,22 @@ void CodeGenerator::emitCleanupEntry(llvm::Value* pointer, CleanupKind kind, llv
         // a Weak handle decrements weak. The block is freed only when BOTH counts reach zero (so a
         // live Weak keeps the block, and dropping the last Weak after all strong owners reclaims it).
         auto* i64Ty = llvm::Type::getInt64Ty(context);
-        llvm::Function* fn = builder.GetInsertBlock() ? builder.GetInsertBlock()->getParent() : nullptr;
-        if (!fn) return;
-        llvm::Value* strongPtr = pointer;  // strong is field 0 (offset 0)
+        llvm::Function* fn = builder.GetInsertBlock()->getParent();
+        llvm::Value* strongPtr = pointer;
         llvm::Value* weakPtr = builder.CreateGEP(i64Ty, pointer, llvm::ConstantInt::get(i64Ty, 1), "block.weak.ptr");
-        llvm::Value* counterPtr = kind == CleanupKind::SharedRelease ? strongPtr : weakPtr;
-        llvm::Value* count = builder.CreateLoad(i64Ty, counterPtr, "refcount");
-        llvm::Value* decremented = builder.CreateSub(count, llvm::ConstantInt::get(i64Ty, 1), "refcount.dec");
-        builder.CreateStore(decremented, counterPtr);
-        llvm::Value* strong = builder.CreateLoad(i64Ty, strongPtr, "block.strong");
-        llvm::Value* weak = builder.CreateLoad(i64Ty, weakPtr, "block.weak");
-        llvm::Value* zero = llvm::ConstantInt::get(i64Ty, 0);
-        llvm::Value* bothZero = builder.CreateAnd(
-            builder.CreateICmpEQ(strong, zero, "strong.zero"),
-            builder.CreateICmpEQ(weak, zero, "weak.zero"), "block.dead");
+        llvm::Value* one = llvm::ConstantInt::get(i64Ty, 1);
         auto* freeBB = llvm::BasicBlock::Create(context, "block.free", fn);
         auto* contBB = llvm::BasicBlock::Create(context, "block.cont", fn);
-        builder.CreateCondBr(bothZero, freeBB, contBB);
-        builder.SetInsertPoint(freeBB);
-        builder.CreateCall(freeFunction, { raw });
-        builder.CreateBr(contBB);
-        builder.SetInsertPoint(contBB);
-    }
-    else if (kind == CleanupKind::FlaggedFree) {
-        llvm::Function* fn = builder.GetInsertBlock() ? builder.GetInsertBlock()->getParent() : nullptr;
-        llvm::Value* flag = dropFlagInCurrentFunction(pointer);
-        if (!flag || !fn) return;
-        llvm::Value* live = builder.CreateLoad(llvm::Type::getInt1Ty(context), flag, "drop.live");
-        auto* freeBB = llvm::BasicBlock::Create(context, "drop.free", fn);
-        auto* contBB = llvm::BasicBlock::Create(context, "drop.cont", fn);
-        builder.CreateCondBr(live, freeBB, contBB);
+        if (kind == CleanupKind::SharedRelease) {
+            llvm::Value* strong = builder.CreateAtomicRMW(llvm::AtomicRMWInst::Sub, strongPtr, one, llvm::MaybeAlign(8),
+                                                          llvm::AtomicOrdering::AcquireRelease);
+            auto* lastStrongBB = llvm::BasicBlock::Create(context, "block.last.strong", fn);
+            builder.CreateCondBr(builder.CreateICmpEQ(strong, one, "strong.last"), lastStrongBB, contBB);
+            builder.SetInsertPoint(lastStrongBB);
+        }
+        llvm::Value* weak = builder.CreateAtomicRMW(llvm::AtomicRMWInst::Sub, weakPtr, one, llvm::MaybeAlign(8),
+                                                    llvm::AtomicOrdering::AcquireRelease);
+        builder.CreateCondBr(builder.CreateICmpEQ(weak, one, "weak.last"), freeBB, contBB);
         builder.SetInsertPoint(freeBB);
         builder.CreateCall(freeFunction, { raw });
         builder.CreateBr(contBB);
@@ -245,18 +289,44 @@ void CodeGenerator::emitCurrentScopeCleanups() {
     if (cleanupScopes.empty()) {
         return;
     }
+    const std::unordered_set<llvm::Value*> none;
     auto& cleanups = cleanupScopes.back();
     for (auto it = cleanups.rbegin(); it != cleanups.rend(); ++it) {
-        emitCleanupEntry(it->first, it->second, nullptr);
+        emitCleanupEntry(it->first, it->second, none);
     }
     cleanups.clear();
+}
+
+llvm::Value* CodeGenerator::copyStackBufferToHeap(llvm::Value* value) {
+    auto* stack = llvm::dyn_cast_or_null<llvm::AllocaInst>(value);
+    if (!stack || !builder.GetInsertBlock()) return value;
+    auto* i64Ty = llvm::Type::getInt64Ty(context);
+    const llvm::DataLayout& layout = module->getDataLayout();
+    llvm::Value* elementBytes = llvm::ConstantInt::get(i64Ty, layout.getTypeAllocSize(stack->getAllocatedType()));
+    llvm::Value* elements = builder.CreateZExtOrTrunc(stack->getArraySize(), i64Ty, "stack.copy.count");
+    llvm::Value* bytes = builder.CreateMul(elementBytes, elements, "stack.copy.bytes");
+    llvm::Value* heap = builder.CreateCall(mallocFunction, { bytes }, "stack.copy.heap");
+    builder.CreateMemCpy(heap, llvm::MaybeAlign(1), stack, llvm::MaybeAlign(1), bytes);
+    return heap;
+}
+
+void CodeGenerator::releaseFromCurrentScope(llvm::Value* value) {
+    if (cleanupScopes.empty() || !value) return;
+    std::unordered_set<llvm::Value*> retained;
+    collectRetained(value, retained);
+    auto& scope = cleanupScopes.back();
+    scope.erase(std::remove_if(scope.begin(), scope.end(), [&](const auto& entry) {
+        if (!retained.count(entry.first)) return false;
+        dropFlags.erase(entry.first);
+        return true;
+    }), scope.end());
 }
 
 void CodeGenerator::emitAllCleanups() {
     emitAllCleanupsExcept(nullptr);
 }
 
-void CodeGenerator::emitAllCleanupsExcept(llvm::Value* retainedPointer) {
+void CodeGenerator::emitAllCleanupsExcept(llvm::Value* retainedValue) {
     // Emit drops for every live owned local along THIS return path, innermost scope first. Unlike a
     // normal scope exit, the lists are NOT cleared: a `return` is one runtime path among several, so
     // each early return and the fall-through exit must independently emit their own frees. Clearing
@@ -264,11 +334,13 @@ void CodeGenerator::emitAllCleanupsExcept(llvm::Value* retainedPointer) {
     // `if (c) { return 1; } return 0;` freed the box only on the `then` path). A single runtime path
     // reaches either a return or its block's normal scope-exit cleanup, never both, so leaving the
     // entries in place frees each local exactly once per path (M4 per-path drop elaboration).
+    std::unordered_set<llvm::Value*> retained;
+    collectRetained(retainedValue, retained);
     emitTemporaryDropsAbove(0);
     for (auto scopeIt = cleanupScopes.rbegin(); scopeIt != cleanupScopes.rend(); ++scopeIt) {
         auto& cleanups = *scopeIt;
         for (auto it = cleanups.rbegin(); it != cleanups.rend(); ++it) {
-            emitCleanupEntry(it->first, it->second, retainedPointer);
+            emitCleanupEntry(it->first, it->second, retained);
         }
     }
 }
@@ -286,21 +358,29 @@ llvm::AllocaInst* CodeGenerator::createEntryAlloca(llvm::Type* type, const std::
 }
 
 void CodeGenerator::emitCleanupsAbove(size_t depth) {
+    const std::unordered_set<llvm::Value*> none;
     emitTemporaryDropsAbove(depth);
     for (size_t i = cleanupScopes.size(); i > depth; --i) {
         auto& cleanups = cleanupScopes[i - 1];
         for (auto it = cleanups.rbegin(); it != cleanups.rend(); ++it) {
-            emitCleanupEntry(it->first, it->second, nullptr);
+            emitCleanupEntry(it->first, it->second, none);
         }
     }
 }
 
 namespace {
 const char* const freshTensorKind = "csec.fresh.tensor";
+const char* const tensorAllocationKind = "csec.tensor.allocation";
+}
+
+bool CodeGenerator::isTensorAllocation(llvm::Value* tensor) const {
+    auto* inst = llvm::dyn_cast_or_null<llvm::Instruction>(tensor);
+    return inst && inst->getMetadata(tensorAllocationKind) != nullptr;
 }
 
 void CodeGenerator::markFreshTensor(llvm::Value* tensor) {
     if (auto* inst = llvm::dyn_cast_or_null<llvm::Instruction>(tensor)) {
+        inst->setMetadata(tensorAllocationKind, llvm::MDNode::get(context, {}));
         inst->setMetadata(freshTensorKind, llvm::MDNode::get(context, {}));
         freshTensorMarks.emplace_back(inst);
     }
