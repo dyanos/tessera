@@ -212,7 +212,7 @@ void deliver(Process* target, long long message) {
         if (Process* watcher = findLive(monitor.first)) deliver(watcher, monitor.second);
     }
     self->monitors.clear();
-    if (self->ownsEnv) std::free(self->env);
+    if (self->ownsEnv) csecFree(self->env);
     self->env = nullptr;
     auto it = s.live.find(self->pid);
     s.zombies.push_back(std::move(it->second));
@@ -258,7 +258,7 @@ int csec_process_spawn(void* code, void* env, long long envSize) {
     // Share nothing: snapshot the closure environment so the child owns its own copy, independent of
     // the spawning frame's lifetime.
     if (env && envSize > 0) {
-        p->env = std::malloc(static_cast<size_t>(envSize));
+        p->env = csecAlloc(static_cast<size_t>(envSize));
         if (!p->env) return 0;
         std::memcpy(p->env, env, static_cast<size_t>(envSize));
         p->ownsEnv = true;
@@ -268,13 +268,13 @@ int csec_process_spawn(void* code, void* env, long long envSize) {
 #ifdef _WIN32
     p->fiber = CreateFiberEx(0, kProcessStackSize, FIBER_FLAG_FLOAT_SWITCH, fiberEntry, nullptr);
     if (!p->fiber) {
-        if (p->ownsEnv) std::free(p->env);
+        if (p->ownsEnv) csecFree(p->env);
         return 0;
     }
 #else
     p->stack = csecAllocateStack(kProcessStackSize, p->stackBytes);
     if (!p->stack) {
-        if (p->ownsEnv) std::free(p->env);
+        if (p->ownsEnv) csecFree(p->env);
         return 0;
     }
 #if CSEC_FAST_CONTEXT
@@ -282,7 +282,7 @@ int csec_process_spawn(void* code, void* env, long long envSize) {
 #else
     if (getcontext(&p->context) != 0) {
         csecFreeStack(p->stack, p->stackBytes);
-        if (p->ownsEnv) std::free(p->env);
+        if (p->ownsEnv) csecFree(p->env);
         return 0;
     }
     p->context.uc_stack.ss_sp = p->stack;
@@ -495,7 +495,7 @@ bool hasRunnableOthers() {
 }
 
 char* ownedText(const std::string& text) {
-    char* result = static_cast<char*>(std::malloc(text.size() + 1));
+    char* result = static_cast<char*>(csecAlloc(text.size() + 1));
     if (!result) return nullptr;
     std::memcpy(result, text.data(), text.size());
     result[text.size()] = '\0';

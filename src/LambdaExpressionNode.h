@@ -45,6 +45,7 @@ public:
     // many bytes into the new task. The size is emitted as a sizeof constant expression so it follows
     // the final target data layout (the module has no data layout yet during codegen).
     llvm::Type* environmentType = nullptr;
+    llvm::Function* generatedFunction = nullptr;
 
     void accept(ASTVisitor& visitor) override;
 

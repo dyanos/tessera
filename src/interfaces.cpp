@@ -2,6 +2,7 @@
 #include "codegen.h"
 
 #include "interfaces.h"
+#include "type_checker.h"
 #include "ast_walk.h"
 #include "source_map.h"
 #include "type_utils.h"
@@ -381,11 +382,51 @@ llvm::Value* InterfaceWrapNode::codegen() {
         object = cg.builder.CreateCall(cg.mallocFunction, llvm::ConstantInt::get(i64Ty, size), "iface.copy");
         cg.builder.CreateStore(aggregate, object);
     }
+    llvm::Value* objectDrop = llvm::ConstantPointerNull::get(ptrTy);
+    if (!isStructClassType(&classType)) {
+        if (!cg.isRefcountedType(&classType)) {
+            cg.takeOwned(object, &classType);
+            if (cg.hasDropFlag(object)) cg.noteMoved(object);
+            if (isStrictOwnership() && !typeIsCopy(&classType)) {
+                if (llvm::Function* drop = cg.classDropFunction(&classType)) objectDrop = drop;
+            }
+        }
+    }
+    else if (isStrictOwnership()) {
+        objectDrop = cg.freeFunction;
+    }
     llvm::Value* vtable = vtableFor(className, *info);
-    auto* pairTy = llvm::StructType::get(cg.context, {ptrTy, ptrTy});
-    llvm::Value* pair = cg.builder.CreateCall(cg.mallocFunction, llvm::ConstantInt::get(i64Ty, 16), "iface.value");
+    auto* pairTy = llvm::StructType::get(cg.context, {ptrTy, ptrTy, ptrTy});
+    llvm::Value* pair = cg.builder.CreateCall(cg.mallocFunction, llvm::ConstantInt::get(i64Ty, 24), "iface.value");
     cg.builder.CreateStore(object, cg.builder.CreateStructGEP(pairTy, pair, 0, "iface.object.ptr"));
     cg.builder.CreateStore(vtable, cg.builder.CreateStructGEP(pairTy, pair, 1, "iface.vtable.ptr"));
+    cg.builder.CreateStore(objectDrop, cg.builder.CreateStructGEP(pairTy, pair, 2, "iface.drop.ptr"));
+    if (isStrictOwnership()) {
+        llvm::Function* release = cg.module->getFunction("__csec_iface_release");
+        if (!release) {
+            release = llvm::Function::Create(llvm::FunctionType::get(llvm::Type::getVoidTy(cg.context), { ptrTy }, false),
+                                             llvm::Function::InternalLinkage, "__csec_iface_release", cg.module.get());
+            llvm::IRBuilderBase::InsertPointGuard guard(cg.builder);
+            cg.builder.SetCurrentDebugLocation(llvm::DebugLoc());
+            auto* entry = llvm::BasicBlock::Create(cg.context, "entry", release);
+            auto* dropBB = llvm::BasicBlock::Create(cg.context, "drop", release);
+            auto* doneBB = llvm::BasicBlock::Create(cg.context, "done", release);
+            cg.builder.SetInsertPoint(entry);
+            llvm::Value* held = cg.builder.CreateLoad(ptrTy, cg.builder.CreateStructGEP(pairTy, release->getArg(0), 0), "object");
+            llvm::Value* drop = cg.builder.CreateLoad(ptrTy, cg.builder.CreateStructGEP(pairTy, release->getArg(0), 2), "drop");
+            cg.builder.CreateCondBr(cg.builder.CreateIsNull(drop), doneBB, dropBB);
+            cg.builder.SetInsertPoint(dropBB);
+            cg.builder.CreateCall(llvm::FunctionType::get(llvm::Type::getVoidTy(cg.context), { ptrTy }, false), drop, { held });
+            cg.builder.CreateBr(doneBB);
+            cg.builder.SetInsertPoint(doneBB);
+            cg.builder.CreateRetVoid();
+        }
+        llvm::FunctionCallee adopt = cg.module->getOrInsertFunction(
+            "csec_rc_adopt_with", llvm::FunctionType::get(llvm::Type::getVoidTy(cg.context), { ptrTy, ptrTy }, false));
+        cg.requireSystemNative();
+        cg.builder.CreateCall(adopt, { pair, release });
+        cg.registerOwnedTemporary(pair, cg.rcReleaseFunction());
+    }
     return pair;
 }
 
@@ -421,5 +462,9 @@ llvm::Value* codegenInterfaceCall(MethodCallNode& call) {
     const bool isVoid = !method.returnType || method.returnType->getName() == "Unit" || method.returnType->isVoidTy();
     llvm::Type* ret = isVoid ? llvm::Type::getVoidTy(cg.context) : getABIStorageType(method.returnType.get());
     llvm::Value* result = cg.builder.CreateCall(llvm::FunctionType::get(ret, params, false), target, args);
+    if (!isVoid && isStrictOwnership() && result->getType()->isPointerTy()) {
+        if (cg.isRefcountedType(method.returnType.get())) cg.registerOwnedTemporary(result, cg.rcReleaseFunction());
+        else if (llvm::Function* drop = cg.ownedValueDropFunction(method.returnType.get())) cg.registerOwnedTemporary(result, drop);
+    }
     return isVoid ? llvm::ConstantInt::get(llvm::Type::getInt32Ty(cg.context), 0) : result;
 }

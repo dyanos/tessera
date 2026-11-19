@@ -423,7 +423,7 @@ char* csec_string_concat(const char* left, const char* right) {
     const char* rhs = right ? right : "";
     size_t lhsLen = std::strlen(lhs);
     size_t rhsLen = std::strlen(rhs);
-    char* result = static_cast<char*>(std::malloc(lhsLen + rhsLen + 1));
+    char* result = static_cast<char*>(csecAlloc(lhsLen + rhsLen + 1));
     if (!result) return nullptr;
     std::memcpy(result, lhs, lhsLen);
     std::memcpy(result + lhsLen, rhs, rhsLen);
@@ -435,7 +435,7 @@ char* csec_string_concat(const char* left, const char* right) {
 // concatenation recopies each prefix and becomes quadratic as a chain grows.
 char* csec_string_concat_many(const char* const* values, long long count) {
     if (!values || count <= 0) {
-        char* empty = static_cast<char*>(std::malloc(1));
+        char* empty = static_cast<char*>(csecAlloc(1));
         if (empty) empty[0] = '\0';
         return empty;
     }
@@ -448,7 +448,7 @@ char* csec_string_concat_many(const char* const* values, long long count) {
         total += length;
     }
 
-    char* result = static_cast<char*>(std::malloc(total + 1));
+    char* result = static_cast<char*>(csecAlloc(total + 1));
     if (!result) return nullptr;
     char* cursor = result;
     for (long long i = 0; i < count; ++i) {
@@ -487,7 +487,7 @@ char* csec_lex_float_text(const char* text) {
     std::snprintf(buffer, sizeof(buffer), "%.9g", static_cast<double>(value));
     std::string result = buffer;
     if (result.find_first_of(".eEn") == std::string::npos) result += ".0";  // keep it a decimal literal
-    char* copy = static_cast<char*>(std::malloc(result.size() + 1));
+    char* copy = static_cast<char*>(csecAlloc(result.size() + 1));
     std::memcpy(copy, result.c_str(), result.size() + 1);
     return copy;
 }

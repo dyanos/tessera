@@ -38,6 +38,7 @@ llvm::Value* ArrayLiteralNode::codegen() {
 	// Store first element
 	llvm::Value* idx0 = llvm::ConstantInt::get(cg.builder.getInt32Ty(), 0);
 	llvm::Value* elemPtr0 = cg.builder.CreateGEP(elementType, arrayPtr, idx0);
+	{ auto firstType = elements[0]->getType(); firstElem = cg.takeOwned(firstElem, firstType.get()); }
 	cg.builder.CreateStore(firstElem, elemPtr0);
 
 	// Store remaining elements
@@ -51,6 +52,7 @@ llvm::Value* ArrayLiteralNode::codegen() {
 		}
 		llvm::Value* index = llvm::ConstantInt::get(cg.builder.getInt32Ty(), i);
 		llvm::Value* elemPtr = cg.builder.CreateGEP(elementType, arrayPtr, index);
+		{ auto elemType = elements[i]->getType(); elemValue = cg.takeOwned(elemValue, elemType.get()); }
 		cg.builder.CreateStore(elemValue, elemPtr);
 	}
 

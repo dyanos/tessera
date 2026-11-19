@@ -1,5 +1,6 @@
 // enum_nodes.cpp -- code generation for enum values and the `?` operator (see enum_nodes.h).
 #include "codegen.h"
+#include "type_checker.h"
 
 #include "enum_nodes.h"
 #include "enums.h"
@@ -130,6 +131,7 @@ llvm::Value* EnumConstructNode::codegen() {
         CodeGenerator::getInstance().error("enum class '", className, "' has no tag field");
         return nullptr;
     }
+    const bool countedInstance = !symbol->isStruct && isStrictOwnership();
     cg.builder.CreateStore(llvm::ConstantInt::get(llvm::Type::getInt32Ty(cg.context), variant->tag),
                            cg.builder.CreateStructGEP(structType, instance, static_cast<unsigned>(tagIndex), "tag.ptr"));
     for (size_t k = 0; k < values.size() && k < variant->storageNames.size(); ++k) {
@@ -146,7 +148,21 @@ llvm::Value* EnumConstructNode::codegen() {
             CodeGenerator::getInstance().error("value for ", enumName, ".", variantName, " field '", variant->fieldNames[k], "' has an incompatible type");
             return nullptr;
         }
+        v = cg.takeOwned(v, param->second->type.get());
         cg.builder.CreateStore(v, cg.builder.CreateStructGEP(structType, instance, static_cast<unsigned>(index), field + ".ptr"));
+    }
+    if (countedInstance) {
+        ClassType instanceType(className);
+        if (cg.isRefcountedType(&instanceType)) {
+            llvm::Function* release = cg.enumFieldReleaseFunction(&instanceType);
+            auto* ptrTy = llvm::PointerType::getUnqual(cg.context);
+            llvm::FunctionCallee adopt = cg.module->getOrInsertFunction(
+                "csec_rc_adopt_with", llvm::FunctionType::get(llvm::Type::getVoidTy(cg.context), { ptrTy, ptrTy }, false));
+            cg.requireSystemNative();
+            cg.builder.CreateCall(adopt, { instance, release ? static_cast<llvm::Value*>(release)
+                                                             : llvm::ConstantPointerNull::get(ptrTy) });
+            cg.registerOwnedTemporary(instance, cg.rcReleaseFunction());
+        }
     }
     return instance;
 }

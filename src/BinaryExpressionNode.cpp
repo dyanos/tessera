@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "type_checker.h"
 #include "dict_support.h"
 #include "BinaryExpressionNode.h"
 #include "builtin_structs.h"
@@ -278,6 +279,11 @@ llvm::Value* codegenClassOperator(const std::string& op, llvm::Value* leftValue,
     if (!rightType->equals(funcType->parameterTypes[1]) && !rightType->isSubtypeOf(funcType->parameterTypes[1]) &&
         !isNumericWidening(*rightType, *funcType->parameterTypes[1])) {
         return nullptr;
+    }
+    if (funcType->parameterTypes[1] && !typeIsCopy(funcType->parameterTypes[1].get()) &&
+        funcType->parameterTypes[1]->getKind() != Type::Kind::BORROW &&
+        funcType->parameterTypes[1]->getKind() != Type::Kind::MUTABLE_BORROW) {
+        cg.noteMoved(rightValue);
     }
     // The overload may have been chosen through numeric widening (an Int literal for a Long or Double
     // parameter); Type::equals treats numeric types loosely, so convert by the LLVM types.

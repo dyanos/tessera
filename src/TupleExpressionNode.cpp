@@ -36,6 +36,7 @@ llvm::Value* TupleExpressionNode::codegen() {
             return nullptr;
         }
         value = coerceValueToLLVMType(value, structType->getElementType(static_cast<unsigned>(i)));
+        { auto elemType = elements[i]->getType(); value = cg.takeOwned(value, elemType.get()); }
         aggregate = cg.builder.CreateInsertValue(aggregate, value, { static_cast<unsigned>(i) }, "tuple.elt");
     }
     return aggregate;

@@ -1111,7 +1111,7 @@ inline Id parse(const char* text) {
 // ---------------------------------------------------------------------------
 
 inline char* dupStr(const std::string& s) {
-    char* out = static_cast<char*>(std::malloc(s.size() + 1));
+    char* out = static_cast<char*>(csecAlloc(s.size() + 1));
     if (!out) return nullptr;
     std::memcpy(out, s.c_str(), s.size() + 1);
     return out;

@@ -570,6 +570,8 @@ llvm::Value* ClassInstanceCreationNode::codegen() {
         if (!value) {
             value = llvm::Constant::getNullValue(targetType);
         }
+        if (targetType->isPointerTy()) value = cg.copyStackBufferToHeap(value);
+        value = cg.takeOwned(value, fieldType.get());
         value = coerceForStore(value, targetType);
         if (!value || value->getType() != targetType) {
             std::cerr << "Error: Constructor value for field '" << fieldName << "' has incompatible type" << std::endl;
@@ -666,6 +668,10 @@ llvm::Value* ClassInstanceCreationNode::codegen() {
             }
 
             cg.symbolTable.exitScope();
+            {
+                ClassType instanceType(resolvedClassName);
+                cg.registerOwnedTemporary(instance, cg.classDropFunction(&instanceType));
+            }
             return instance;
         }
     }
@@ -715,6 +721,7 @@ llvm::Value* ClassInstanceCreationNode::codegen() {
         std::cerr << "Error: class '" << resolvedClassName
                   << "' eagerly constructs its own type in a field initializer (infinite "
                      "construction); reference or nullable fields are not yet supported" << std::endl;
+        if (instance && llvm::isa<llvm::CallInst>(instance)) cg.builder.CreateCall(cg.freeFunction, { instance });
         return failInitialization();
     }
     cg.classesUnderConstruction.insert(resolvedClassName);
@@ -751,6 +758,10 @@ llvm::Value* ClassInstanceCreationNode::codegen() {
     }
 
     cg.symbolTable.exitScope();
+    {
+        ClassType instanceType(resolvedClassName);
+        cg.registerOwnedTemporary(instance, cg.classDropFunction(&instanceType));
+    }
 
     return instance;
 }

@@ -1,10 +1,4 @@
 // Self-host: set literals. Exit code 42.
-def countIn(s: Set<Int>, a: Int, b: Int): Int {
-    var n = 0;
-    if (s.contains(a)) { n = n + 1; }
-    if (s.contains(b)) { n = n + 1; }
-    return n;
-}
 def main(): Int {
     val primes = {2, 3, 5, 7};
     if (primes.size() != 4) { return 1; }
@@ -21,7 +15,10 @@ def main(): Int {
     if (names.size() != 2 or !names.contains("bob")) { return 5; }
     val added = names.add("cy");
     if (!added) { return 6; }
-    if (countIn(primes, 3, 4) != 1) { return 7; }
+    var hits = 0;
+    if (primes.contains(3)) { hits = hits + 1; }
+    if (primes.contains(4)) { hits = hits + 1; }
+    if (hits != 1) { return 7; }
     val empty = names.isEmpty();
     if (empty) { return 8; }
     return 42;

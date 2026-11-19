@@ -140,7 +140,7 @@ long long csec_thread_start(void* code, void* env, long long envSize) {
     using namespace csec_threads;
     auto record = std::make_shared<ThreadRecord>();
     if (env && envSize > 0) {
-        record->env = std::malloc(static_cast<size_t>(envSize));
+        record->env = csecAlloc(static_cast<size_t>(envSize));
         if (!record->env) return 0;
         std::memcpy(record->env, env, static_cast<size_t>(envSize));
     } else {
@@ -154,13 +154,13 @@ long long csec_thread_start(void* code, void* env, long long envSize) {
         raw->thread = std::thread([record, code, ownsEnv]() {
             using Entry = int (*)(void*);
             record->result = reinterpret_cast<Entry>(code)(record->env);
-            if (ownsEnv) std::free(record->env);
+            if (ownsEnv) csecFree(record->env);
             record->env = nullptr;
             record->finished = true;
         });
     } catch (...) {
         threads().take(handle);
-        if (ownsEnv) std::free(raw->env);
+        if (ownsEnv) csecFree(raw->env);
         return 0;
     }
     return handle;
@@ -393,7 +393,7 @@ char* csec_os_process_output(const char* command) {
         if (output[i] == '\r' && i + 1 < output.size() && output[i + 1] == '\n') continue;
         normalised.push_back(output[i]);
     }
-    char* result = static_cast<char*>(std::malloc(normalised.size() + 1));
+    char* result = static_cast<char*>(csecAlloc(normalised.size() + 1));
     if (!result) return nullptr;
     std::memcpy(result, normalised.data(), normalised.size());
     result[normalised.size()] = '\0';

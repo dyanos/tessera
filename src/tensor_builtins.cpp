@@ -116,6 +116,7 @@ llvm::Value* codegenTensorBuiltin(FunctionCallNode& node, bool* handled) {
         llvm::Value* result = cg.builder.CreateCall(runtime(cg, "csec_tensor_reduce_axis", ptrTy, {ptrTy, i64, i32}),
                                                     {tensor, llvm::ConstantInt::get(i64, axis, true), llvm::ConstantInt::get(i32, op)},
                                                     name + ".axis");
+        cg.markFreshTensor(result);
         return borrowed(result);
     }
     if (name == "argmax" || name == "argmin") {
@@ -126,7 +127,9 @@ llvm::Value* codegenTensorBuiltin(FunctionCallNode& node, bool* handled) {
         llvm::Value* value = name == "zerosLike" ? llvm::ConstantFP::get(f64, 0.0)
                            : name == "onesLike"  ? llvm::ConstantFP::get(f64, 1.0)
                                                  : toDouble(node.arguments[1]->codegen());
-        return borrowed(cg.builder.CreateCall(runtime(cg, "csec_tensor_full_like", ptrTy, {ptrTy, f64}), {tensor, value}, name));
+        llvm::Value* like = cg.builder.CreateCall(runtime(cg, "csec_tensor_full_like", ptrTy, {ptrTy, f64}), {tensor, value}, name);
+        cg.markFreshTensor(like);
+        return borrowed(like);
     }
     // fillUniform / fillNormal
     llvm::Value* a = toDouble(node.arguments[1]->codegen());

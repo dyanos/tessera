@@ -49,7 +49,7 @@ struct MappedFile {
         data = nullptr;
     }
     ~MappedFile() {
-        if (copied) std::free(const_cast<char*>(data));
+        if (copied) csecFree(const_cast<char*>(data));
         else unmap();
 #ifdef _WIN32
         if (mapping) CloseHandle(mapping);
@@ -65,7 +65,7 @@ struct MappedFile {
         const long long page = static_cast<long long>(sysconf(_SC_PAGESIZE));
 #endif
         if (size == 0 || page <= 0 || size % page != 0) return true;
-        char* copy = static_cast<char*>(std::malloc(static_cast<size_t>(size) + 1));
+        char* copy = static_cast<char*>(csecAlloc(static_cast<size_t>(size) + 1));
         if (!copy) return false;
         std::memcpy(copy, data, static_cast<size_t>(size));
         copy[size] = 0;
@@ -123,7 +123,7 @@ int csec_io_seek(long long handle, long long offset) {
 char* csec_io_read(long long handle, int maxBytes) {
     auto input = csec_io::inputFiles().get(handle);
     const size_t want = maxBytes > 0 ? static_cast<size_t>(maxBytes) : 0;
-    char* buffer = static_cast<char*>(std::malloc(want + 1));
+    char* buffer = static_cast<char*>(csecAlloc(want + 1));
     if (!buffer) return nullptr;
     size_t read = 0;
     if (input && want > 0) read = std::fread(buffer, 1, want, input->file);
@@ -210,7 +210,8 @@ void csec_io_map_close(long long handle) {
 
 // Free a string the runtime allocated (e.g. a chunk from csec_io_read). Never pass a string literal.
 void csec_string_release(char* text) {
-    std::free(text);
+    if (csecRcTracked(text)) return;
+    csecFree(text);
 }
 
 } // extern "C"

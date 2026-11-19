@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "type_checker.h"
 #include "debug_info.h"
 #include "ClassDeclarationNode.h"
 #include "ASTVisitor.h"
@@ -277,6 +278,8 @@ void ClassDeclarationNode::declareMethod(FunctionDeclarationNode* method, ClassS
     llvm::FunctionType* funcType = llvm::FunctionType::get(returnType, paramTypes, false);
     std::string methodName = name + "_" + method->name; // 클래스 이름을 접두사로 사용
     llvm::Function* function = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, methodName, cg.module.get());
+    if (method->returnType && method->returnType->getName() == "String") cg.markStringFunction(function->getName().str(), false);
+    markOwnership(cg, function->getName().str(), method->returnType.get(), method->parameters, true, name, method->name);
 
     std::vector<std::unique_ptr<Type>> types;
     types.push_back(std::make_unique<ClassType>(name));
@@ -404,6 +407,7 @@ llvm::Function* ClassDeclarationNode::defineMethod(FunctionDeclarationNode* meth
         bindField(fieldName, found->second->type, found->second->isMutable);
     }
 
+    std::vector<std::pair<llvm::Value*, std::unique_ptr<Type>>> ownedParameters;
     for (auto& param : method->parameters) {
         auto* paramNode = dynamic_cast<ParameterNode*>(param.get());
         if (!paramNode || !paramNode->type || argIt == function->arg_end()) {
@@ -418,12 +422,21 @@ llvm::Function* ClassDeclarationNode::defineMethod(FunctionDeclarationNode* meth
             cg.builder.CreateStore(argValue, paramSlot);
             argValue = paramSlot;
         }
+        if (isStrictOwnership() && !isStructClassType(paramNode->type.get()) && !typeIsCopy(paramNode->type.get())) {
+            ownedParameters.emplace_back(argValue, paramNode->type->clone());
+        }
         cg.symbolTable.addSymbol(
             paramNode->name,
             std::make_unique<Symbol>(paramNode->name, paramNode->type->clone(), argValue, false, SymbolType::VARIABLE));
     }
 
+    cg.enterCleanupScope();
+    for (auto& owned : ownedParameters) cg.registerOwnedValueCleanup(owned.first, owned.second.get());
     method->body->codegen();
+    if (cg.builder.GetInsertBlock() && !csec_llvm::terminatorOrNull(cg.builder.GetInsertBlock())) {
+        cg.emitCurrentScopeCleanups();
+    }
+    cg.exitCleanupScope();
 
     llvm::BasicBlock* currentBlock = cg.builder.GetInsertBlock();
     if (currentBlock && !csec_llvm::terminatorOrNull(currentBlock)) {

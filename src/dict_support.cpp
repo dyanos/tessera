@@ -1,6 +1,7 @@
 #include "codegen.h"
 
 #include "dict_support.h"
+#include "type_checker.h"
 #include "ArrayLiteralNode.h"
 #include "ArrayAccessNode.h"
 #include "BinaryExpressionNode.h"
@@ -171,9 +172,18 @@ llvm::Value* heapArrayLiteral(ArrayLiteralNode* literal, const Type* elementType
         }
         llvm::Value* slot = cg.builder.CreateInBoundsGEP(
             elementLLVM, buffer, llvm::ConstantInt::get(i64Type(), i), "dict.list.slot");
+        { auto elemType = element ? element->getType() : nullptr; value = cg.takeOwned(value, elemType.get()); }
         cg.builder.CreateStore(value, slot);
     }
     return buffer;
+}
+
+void retainStringPayload(llvm::Value* payload, const Type* valueType) {
+    if (!payload || !valueType || unborrow(valueType)->getName() != "String") return;
+    auto& cg = CodeGenerator::getInstance();
+    llvm::Value* text = payload->getType()->isPointerTy()
+        ? payload : cg.builder.CreateIntToPtr(payload, llvm::PointerType::getUnqual(cg.context), "dict.string");
+    cg.takeOwnedString(text);
 }
 
 llvm::Value* codegenKeyPayload(ASTNode* keyExpr, const Type* keyType) {
@@ -306,7 +316,11 @@ llvm::Value* dictValueFromPayload(llvm::Value* payload, const Type* type) {
     return nullptr;
 }
 
+static bool consumePayload = false;
+
 llvm::Value* codegenDictPayload(ASTNode* expr, const Type* targetType, long long* lengthOut) {
+    const bool consume = consumePayload;
+    consumePayload = false;
     if (lengthOut) *lengthOut = -1;
     if (!expr || !targetType) return nullptr;
     targetType = unborrow(targetType);
@@ -326,6 +340,9 @@ llvm::Value* codegenDictPayload(ASTNode* expr, const Type* targetType, long long
     auto sourceType = expr->getType();
     value = loadHandleSlot(value, sourceType.get());
     if (!value) return nullptr;
+    if (consume && value->getType()->isPointerTy() && unborrow(targetType)->getName() != "String") {
+        value = CodeGenerator::getInstance().takeOwned(value, targetType);
+    }
     llvm::Type* target = slotType(targetType);
     if (target && (target->isIntegerTy() || target->isFloatingPointTy())) {
         value = convertScalar(value, target, sourceType.get());
@@ -365,6 +382,20 @@ llvm::Value* codegenDictNew(const Type* dictType) {
         llvm::ConstantInt::get(i32Type(), elementKind),
         llvm::ConstantInt::get(i32Type(), elementBytes),
     }, "dict.new");
+}
+
+llvm::Value* codegenDictNewOwning(const Type* dictType) {
+    auto& cg = CodeGenerator::getInstance();
+    llvm::Value* handle = codegenDictNew(dictType);
+    const Type* valueType = dictValueType(dictType);
+    if (handle && valueType && kindOf(valueType) == KindOpaque && isStrictOwnership() && !typeIsCopy(valueType)) {
+        if (llvm::Function* drop = cg.classDropFunction(valueType)) {
+            cg.builder.CreateCall(
+                runtimeFunction("csec_dict_set_value_drop", llvm::Type::getVoidTy(cg.context), {ptrType(), ptrType()}),
+                {handle, drop});
+        }
+    }
+    return handle;
 }
 
 llvm::Value* codegenDictToString(llvm::Value* handle) {
@@ -410,8 +441,11 @@ llvm::Value* codegenDictSet(ASTNode* dictExpr, ASTNode* keyExpr, ASTNode* valueE
     llvm::Value* handle = codegenDictHandle(dictExpr);
     llvm::Value* key = codegenKeyPayload(keyExpr, keyType);
     long long length = -1;
+    consumePayload = true;
     llvm::Value* payload = codegenDictPayload(valueExpr, valueType, &length);
+    consumePayload = false;
     if (!handle || !key || !payload) return nullptr;
+    retainStringPayload(payload, valueType);
     if (length >= 0) {
         cg.builder.CreateCall(
             runtimeFunction("csec_dict_set_array", llvm::Type::getVoidTy(cg.context), {ptrType(), i64Type(), i64Type(), i64Type()}),
@@ -518,7 +552,9 @@ llvm::Value* codegenDictMethod(ASTNode* dictExpr, const std::string& method,
         llvm::Value* payload = cg.builder.CreateCall(
             runtimeFunction(keys ? "csec_dict_key_at" : "csec_dict_value_at", i64Type(), {ptrType(), i64Type()}),
             {handle, index}, keys ? "dict.key" : "dict.value");
-        return dictValueFromPayload(payload, keys ? keyType : valueType);
+        llvm::Value* result = dictValueFromPayload(payload, keys ? keyType : valueType);
+        if (keys && keyType && keyType->getName() == "String") result = cg.adoptRuntimeString(result);
+        return result;
     }
     if (method == "clear") {
         cg.builder.CreateCall(runtimeFunction("csec_dict_clear", voidTy, {ptrType()}), {handle});
@@ -632,7 +668,7 @@ llvm::Value* DictLiteralNode::codegen() {
         std::cerr << "Type error: " << inferenceError() << std::endl;
         return nullptr;
     }
-    llvm::Value* handle = codegenDictNew(dictType.get());
+    llvm::Value* handle = codegenDictNewOwning(dictType.get());
     if (!handle) return nullptr;
     auto& cg = CodeGenerator::getInstance();
     const Type* keyType = dictKeyType(dictType.get());
@@ -640,7 +676,10 @@ llvm::Value* DictLiteralNode::codegen() {
     for (size_t i = 0; i < keys.size(); ++i) {
         llvm::Value* key = codegenKeyPayload(keys[i].get(), keyType);
         long long length = -1;
+        consumePayload = true;
         llvm::Value* value = codegenDictPayload(values[i].get(), valueType, &length);
+        consumePayload = false;
+        if (value) retainStringPayload(value, valueType);
         if (!key || !value) return nullptr;
         if (length >= 0) {
             cg.builder.CreateCall(
@@ -845,7 +884,9 @@ llvm::Value* codegenSetMethod(ASTNode* setExpr, const std::string& method,
         if (!index) return nullptr;
         llvm::Value* payload = cg.builder.CreateCall(
             runtimeFunction("csec_dict_key_at", i64Type(), {ptrType(), i64Type()}), {handle, index}, "set.element");
-        return dictValueFromPayload(payload, elementType);
+        llvm::Value* element = dictValueFromPayload(payload, elementType);
+        if (elementType && elementType->getName() == "String") element = cg.adoptRuntimeString(element);
+        return element;
     }
     if (method == "clear") {
         cg.builder.CreateCall(runtimeFunction("csec_dict_clear", llvm::Type::getVoidTy(cg.context), {ptrType()}), {handle});

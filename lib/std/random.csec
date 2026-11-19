@@ -16,12 +16,13 @@
 
 external def csec_rng_new(seed: Long): Long;
 external def csec_rng_seed(rng: Long, seed: Long): Void;
+external def csec_rng_free(rng: Long): Void;
 external def csec_rng_uniform(rng: Long): Double;
 external def csec_rng_int(rng: Long, low: Long, high: Long): Long;
 external def csec_rng_normal(rng: Long, mean: Double, sd: Double): Double;
 
 // A generator with its own state; equal seeds give equal sequences.
-struct Rng(handle: Long) {
+class Rng(handle: Long) {
     // Uniform in [low, high).
     def uniform(low: Double = 0.0, high: Double = 1.0): Double {
         val u: Double = csec_rng_uniform(handle);
@@ -39,6 +40,10 @@ struct Rng(handle: Long) {
     def chance(p: Double): Boolean {
         val u: Double = csec_rng_uniform(handle);
         return u < p;
+    }
+    def drop(): Int {
+        csec_rng_free(handle);
+        return 0;
     }
 }
 

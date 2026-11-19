@@ -205,7 +205,8 @@ bool isCopyType(const Type* type) {
         case Type::Kind::GENERIC: {
             const std::string& n = type->getName();
             return !(n == "Array" || n == "Vector" || n == "Map" ||
-                     n == "List" || n == "Shared" || n == "Weak");
+                     n == "List" || n == "Shared" || n == "Weak" ||
+                     n == "Tensor" || n.rfind("Tensor$", 0) == 0 || n == "Dict" || n == "Set");
         }
         case Type::Kind::TUPLE: {
             auto* t = dynamic_cast<const TupleType*>(type);
@@ -522,6 +523,41 @@ void TypeChecker::checkIdentifierUse(const std::string& name) {
     }
 }
 
+bool TypeChecker::isFieldPath(ASTNode* node) {
+    if (dynamic_cast<AccessFieldNode*>(node)) return true;
+    auto* id = dynamic_cast<IdentifierNode*>(node);
+    if (!id) return false;
+    if (id->value.find('.') != std::string::npos) return true;
+    if (findOwnership(id->value)) return false;
+    Symbol* symbol = CodeGenerator::getInstance().symbolTable.lookup(id->value);
+    return symbol && symbol->symbolType == SymbolType::FIELD;
+}
+
+static std::string fieldPathText(ASTNode* node) {
+    if (auto* access = dynamic_cast<AccessFieldNode*>(node)) {
+        const std::string base = fieldPathText(access->base.get());
+        const std::string field = fieldPathText(access->field.get());
+        return base.empty() ? field : base + "." + field;
+    }
+    return identifierName(node);
+}
+
+void TypeChecker::checkOwnedValueUse(ASTNode* node, const std::string& context) {
+    if (!node || !isStrictOwnership()) return;
+    if (isMoveExpression(node) || isBorrowExpression(node, nullptr)) return;
+    auto type = node->getType();
+    if (!type || !isMoveCheckedType(type.get())) return;
+    if (isFieldPath(node)) {
+        reportError("Type error: " + context + " cannot take the owned field '" + fieldPathText(node) +
+                    "' by value; borrow it with '&' or copy it with clone(...)");
+        return;
+    }
+    if (auto* id = dynamic_cast<IdentifierNode*>(node)) {
+        reportError("Type error: " + context + " needs '<-' to move '" + id->value +
+                    "' (or '&' to borrow it, clone(...) to copy it)");
+    }
+}
+
 void TypeChecker::markMoved(const std::string& name) {
     auto* state = findOwnership(name);
     if (!state) return;
@@ -589,7 +625,22 @@ void TypeChecker::checkFunctionArguments(const std::vector<std::unique_ptr<ASTNo
         const bool argIsNamedValue = arg && !identifierName(arg).empty();
 
         if (paramType && isMoveCheckedType(paramType)) {
-            if (!argIsMove && !argIsBorrow && argIsNamedValue) {
+            if (argIsBorrow) {
+                reportError("Type error: argument " + std::to_string(i + 1) + " to '" + callName +
+                            "' takes ownership; pass it with '<-', or declare the parameter as a borrow (&T)");
+            }
+            else if (!argIsMove && !argIsNamedValue && isStrictOwnership() &&
+                     (paramType->getKind() == Type::Kind::ARRAY ||
+                      (paramType->getKind() == Type::Kind::GENERIC &&
+                       (paramType->getName() == "Array" || paramType->getName() == "Vector"))) &&
+                     (dynamic_cast<ArrayAccessNode*>(arg) || dynamic_cast<AccessFieldNode*>(arg))) {
+                reportError("Type error: argument " + std::to_string(i + 1) + " to '" + callName +
+                            "' takes ownership of an array it does not own; pass a new array or move a local with '<-'");
+            }
+            else if (!argIsMove && argIsNamedValue && isFieldPath(arg)) {
+                checkOwnedValueUse(arg, "the call to '" + callName + "'");
+            }
+            else if (!argIsMove && !argIsBorrow && argIsNamedValue) {
                 reportError("Type error: ownership transfer to '" + callName + "' requires '<-'");
             }
         }
@@ -726,6 +777,26 @@ void TypeChecker::visit(VariableDeclarationNode& node) {
         }
     }
 
+    if (node.initializer && !node.isField) {
+        checkOwnedValueUse(node.initializer.get(), "initializing '" + node.name + "'");
+        std::vector<ASTNode*> branches;
+        if (auto* ifNode = dynamic_cast<IfStatementNode*>(node.initializer.get())) {
+            branches = { ifNode->thenBlock.get(), ifNode->elseBlock.get() };
+        }
+        else if (auto* match = dynamic_cast<MatchExpressionNode*>(node.initializer.get())) {
+            for (auto& item : match->cases) branches.push_back(item.second.get());
+        }
+        for (ASTNode* branch : branches) {
+            ASTNode* yielded = branch;
+            if (auto* block = dynamic_cast<BlockNode*>(branch)) {
+                yielded = block->statements.empty() ? nullptr : block->statements.back().get();
+            }
+            auto* id = dynamic_cast<IdentifierNode*>(yielded);
+            if (id && (findOwnership(id->value) || isFieldPath(id))) {
+                checkOwnedValueUse(id, "initializing '" + node.name + "'");
+            }
+        }
+    }
     bindVariable(node.name, node.type, node.isMutable, node.isField ? SymbolType::FIELD : SymbolType::VARIABLE);
     declareOwnership(node.name, node.type);
 }
@@ -778,6 +849,9 @@ void TypeChecker::visit(FunctionDeclarationNode& node) {
         // An expression-bodied `def f(): Float = 0.5` returns its last expression.
         if (node.returnType && !node.body->statements.empty()) {
             narrowToFloatTarget(node.returnType.get(), node.body->statements.back().get());
+            if (isFieldPath(node.body->statements.back().get())) {
+                checkOwnedValueUse(node.body->statements.back().get(), "the result of '" + node.name + "'");
+            }
         }
         auto bodyType = node.body->getType();
 
@@ -919,6 +993,14 @@ void TypeChecker::visitBinaryExpression(BinaryExpressionNode& node) {
         auto rightType = node.right->getType();
         if (!checkClassOperatorOperand(node.op, leftType.get(), rightType.get())) {
             return;
+        }
+        if (leftType && leftType->getKind() == Type::Kind::CLASS && rightType && isMoveCheckedType(rightType.get())) {
+            if (isFieldPath(node.right.get())) {
+                checkOwnedValueUse(node.right.get(), "the operator '" + node.op + "'");
+            }
+            else if (auto* id = dynamic_cast<IdentifierNode*>(node.right.get())) {
+                markMoved(id->value);
+            }
         }
         if ((node.op == "in" || node.op == "notin") && isSetType(rightType.get())) {
             checkDictValue(setElementType(rightType.get()), node.left.get(), "set element");
@@ -1241,6 +1323,17 @@ void TypeChecker::visit(ReturnStatementNode& node) {
                         "' escapes its function; return the value itself (move it with '<-' at the "
                         "call site) or return an owned copy with clone(" + name + ")");
         }
+        if (isFieldPath(node.expression.get())) checkOwnedValueUse(node.expression.get(), "return");
+        if (auto* id = dynamic_cast<IdentifierNode*>(node.expression.get())) {
+            Symbol* source = CodeGenerator::getInstance().symbolTable.lookup(id->value);
+            const bool returnsBorrow = currentReturnType && (currentReturnType->getKind() == Type::Kind::BORROW ||
+                                                              currentReturnType->getKind() == Type::Kind::MUTABLE_BORROW);
+            if (source && source->type && !returnsBorrow &&
+                (source->type->getKind() == Type::Kind::BORROW || source->type->getKind() == Type::Kind::MUTABLE_BORROW)) {
+                reportError("Type error: cannot return the borrow '" + id->value + "' as an owned value; return clone(" +
+                            id->value + ")");
+            }
+        }
         checkTypeResolved(node.expression->getType(), "return expression");
     }
 }
@@ -1272,6 +1365,13 @@ void TypeChecker::visit(BlockNode& node) {
     }
     exitOwnershipScope();
     cg.symbolTable.exitScope();
+}
+
+static bool copiesIntoTensorElements(ASTNode* target) {
+    auto* access = dynamic_cast<ArrayAccessNode*>(target);
+    if (!access || !access->array) return false;
+    auto container = access->array->getType();
+    return container && (container->getName() == "Tensor" || container->getName().rfind("Tensor$", 0) == 0);
 }
 
 static bool isRefcountHandleType(const Type* type) {
@@ -2427,7 +2527,8 @@ void TypeChecker::visit(AssignmentExpressionNode& node) {
             }
         }
     }
-    else if (rightIsMoveChecked && !rightName.empty()) {
+    else if (rightIsMoveChecked && !rightName.empty() && !copiesIntoTensorElements(node.left.get()) &&
+             !isMoveExpression(node.right.get())) {
         reportError("Type error: ownership transfer requires '<-'");
     }
     checkTypeResolved(node.getType(), "assignment expression");
@@ -2473,13 +2574,29 @@ void TypeChecker::visit(PrefixExpressionNode& node) {
     }
     const std::string sourceName = movedOrBorrowedIdentifier(&node);
     if (node.op == "<-") {
+        if (auto* id = dynamic_cast<IdentifierNode*>(node.expression.get())) {
+            Symbol* source = CodeGenerator::getInstance().symbolTable.lookup(id->value);
+            if (source && source->type && (source->type->getKind() == Type::Kind::BORROW ||
+                                           source->type->getKind() == Type::Kind::MUTABLE_BORROW)) {
+                reportError("Type error: cannot move out of the borrow '" + id->value +
+                            "'; pass it on with '&' or copy it with clone(...)");
+            }
+        }
+        if (isStrictOwnership() && isFieldPath(node.expression.get())) {
+            auto movedType = node.expression->getType();
+            if (movedType && isMoveCheckedType(movedType.get())) {
+                reportError("Type error: cannot move out of the field '" + fieldPathText(node.expression.get()) +
+                            "'; borrow it with '&' or copy it with clone(...)");
+            }
+        }
         if (!sourceName.empty()) {
             markMoved(sourceName);
         }
     }
     else if (node.op == "&" || node.op == "&mut") {
         if (!sourceName.empty()) {
-            markBorrowed(sourceName, node.op == "&mut");
+            const size_t dot = sourceName.find('.');
+            markBorrowed(dot == std::string::npos ? sourceName : sourceName.substr(0, dot), node.op == "&mut");
         }
     }
     else if (node.op == "async" || node.op == "go") {
@@ -2562,6 +2679,21 @@ void TypeChecker::visit(LambdaExpressionNode& node) {
     const int savedLoopDepth = loopDepth;
     loopDepth = 0;
     struct RestoreLoopDepth { int& depth; int saved; ~RestoreLoopDepth() { depth = saved; } } restoreLoopDepth{loopDepth, savedLoopDepth};
+    if (!node.capturesByReference && node.body) {
+        std::set<std::string> captured;
+        ast_walk::walk(node.body.get(), nullptr, [&](ASTNode* n, std::unique_ptr<ASTNode>*) {
+            if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
+                const std::string root = id->value.substr(0, id->value.find('.'));
+                OwnershipState* state = findOwnership(root);
+                if (state && state->owned && !state->moved) captured.insert(root);
+            }
+            return true;
+        });
+        for (const auto& name : captured) {
+            if (node.escapes) markMoved(name);
+            else markBorrowed(name, false);
+        }
+    }
     cg.symbolTable.enterScope();
     enterOwnershipScope();
     for (auto& capture : node.captureVariables) {
@@ -2833,3 +2965,5 @@ void TypeChecker::visit(TemplateDeclarationNode& node) {
     }
     ensureTemplateSymbol(node);
 }
+
+bool typeIsCopy(const Type* type) { return isCopyType(type); }

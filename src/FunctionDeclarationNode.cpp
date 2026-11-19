@@ -1,4 +1,6 @@
 #include "codegen.h"
+#include "type_checker.h"
+#include "default_arguments.h"
 #include "debug_info.h"
 
 #include "FunctionDeclarationNode.h"
@@ -97,6 +99,34 @@ std::string overloadUniqueFunctionName(CodeGenerator& cg, const std::string& nam
 }
 }
 
+void markOwnership(CodeGenerator& cg, const std::string& functionName, const Type* returnType,
+                   const std::vector<std::unique_ptr<ASTNode>>& parameters, bool hasReceiver,
+                   const std::string& className, const std::string& methodName) {
+    if (!isStrictOwnership()) return;
+    if (returnType && !typeIsCopy(returnType)) {
+        if (llvm::Function* drop = cg.ownedValueDropFunction(returnType)) cg.markOwnedResultFunction(functionName, drop);
+    }
+    if (returnType && returnType->getName() != "String" && cg.isRefcountedType(returnType)) {
+        cg.markStringFunction(functionName, false);
+    }
+    std::vector<bool> mask;
+    if (hasReceiver) {
+        ClassType receiverType(className);
+        std::string declared = className;
+        std::string templateName;
+        if (templateInstanceArguments(className, &templateName, nullptr)) declared = templateName;
+        mask.push_back(!cg.isRefcountedType(&receiverType) && !typeIsCopy(&receiverType) &&
+                       methodMayKeepThis(declared, methodName));
+    }
+    for (const auto& parameter : parameters) {
+        auto type = parameter ? parameter->getType() : nullptr;
+        const bool owned = type && !typeIsCopy(type.get()) && type->getName() != "String" &&
+                           type->getKind() != Type::Kind::BORROW && type->getKind() != Type::Kind::MUTABLE_BORROW;
+        mask.push_back(owned);
+    }
+    cg.markOwnedParameters(functionName, std::move(mask));
+}
+
 llvm::Function* FunctionDeclarationNode::declarePrototype() {
     if (this->isExternal) return nullptr;
     auto& cg = CodeGenerator::getInstance();
@@ -119,6 +149,8 @@ llvm::Function* FunctionDeclarationNode::declarePrototype() {
             function->addFnAttr(llvm::Attribute::AlwaysInline);
         }
     }
+    if (this->returnType && this->returnType->getName() == "String") cg.markStringFunction(funcName, false);
+    markOwnership(cg, funcName, this->returnType.get(), this->parameters, false, "", "");
     updateOrRegisterFunctionSymbolNamed(this->name, this->getType(), function, false);
     return function;
 }
@@ -194,6 +226,8 @@ llvm::Value* FunctionDeclarationNode::codegen() {
     if (!function) {
         function = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, cg.module.get());
     }
+    if (this->returnType && this->returnType->getName() == "String") cg.markStringFunction(funcName, false);
+    markOwnership(cg, funcName, this->returnType.get(), this->parameters, false, "", "");
 
     if (this->isConstexpr) {
         function->addFnAttr(llvm::Attribute::AlwaysInline);
@@ -213,6 +247,7 @@ llvm::Value* FunctionDeclarationNode::codegen() {
     debuginfo::beginFunction(function, this->name, this->line);
 
     int cnt = 0;
+    std::vector<std::pair<llvm::Value*, std::unique_ptr<Type>>> ownedParameters;
     for (auto& arg : this->parameters) {
         auto* paramNode = dynamic_cast<ParameterNode*>(arg.get());
         if (!paramNode) {
@@ -228,14 +263,23 @@ llvm::Value* FunctionDeclarationNode::codegen() {
             cg.builder.CreateStore(paramValue, paramSlot);
             paramValue = paramSlot;
         }
+        if (isStrictOwnership() && paramType && !isStructClassType(paramType.get()) && !typeIsCopy(paramType.get())) {
+            ownedParameters.emplace_back(paramValue, paramType->clone());
+        }
         auto paramSymbol = std::make_unique<Symbol>(paramNode->name, std::move(paramType), paramValue, false, SymbolType::VARIABLE);
         cg.symbolTable.addSymbol(paramNode->name, std::move(paramSymbol));
         cnt += 1;
     }
 
+    cg.enterCleanupScope();
+    for (auto& owned : ownedParameters) cg.registerOwnedValueCleanup(owned.first, owned.second.get());
     if (this->body) {
         this->body->codegen();
     }
+    if (cg.builder.GetInsertBlock() && !csec_llvm::terminatorOrNull(cg.builder.GetInsertBlock())) {
+        cg.emitCurrentScopeCleanups();
+    }
+    cg.exitCleanupScope();
 
     llvm::BasicBlock* currentBlock = cg.builder.GetInsertBlock();
     if (currentBlock && !csec_llvm::terminatorOrNull(currentBlock)) {

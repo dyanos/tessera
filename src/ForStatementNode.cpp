@@ -104,6 +104,7 @@ llvm::Value* ForStatementNode::codegenDictLoop() {
     const std::string keyName = (tokenValue.empty() || isSet) ? variable : tokenValue;
     llvm::Value* keyPayload = cg.builder.CreateCall(runtime("csec_dict_key_at", i64Ty, {ptrTy, i64Ty}), {handle, index}, "dict.iter.key");
     llvm::Value* key = dictValueFromPayload(keyPayload, keyType);
+    if (key && keyType && keyType->getName() == "String") key = cg.adoptRuntimeString(key);
     if (!key) {
         cg.symbolTable.exitScope();
         return nullptr;

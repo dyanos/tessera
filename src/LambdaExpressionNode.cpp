@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "type_checker.h"
 #include "debug_info.h"
 #include "LambdaExpressionNode.h"
 #include "ASTVisitor.h"
@@ -171,6 +172,11 @@ struct EscapeMarker {
             }
             else if (auto* construct = dynamic_cast<EnumConstructNode*>(node)) {
                 for (auto& a : construct->arguments) mark(a.get(), line);
+            }
+            else if (auto* call = dynamic_cast<FunctionCallNode*>(node)) {
+                if ((call->functionName == "spawn" || call->functionName == "threadStart") && !call->arguments.empty()) {
+                    mark(call->arguments[0].get(), line);
+                }
             }
             return true;
         });
@@ -360,7 +366,8 @@ llvm::Value* LambdaExpressionNode::codegen() {
             }
             if (escapes) {
                 value = cg.copyStackBufferToHeap(value);
-                cg.noteMoved(captured[i].outerValue);
+                if (!cg.isRefcountedType(captured[i].semanticType.get())) cg.noteMoved(captured[i].outerValue);
+                value = cg.takeOwned(value, captured[i].semanticType.get());
             }
             cg.builder.CreateStore(value, slot);
         }
@@ -370,5 +377,33 @@ llvm::Value* LambdaExpressionNode::codegen() {
                                    : cg.createEntryAlloca(closureType, "lambda.closure");
     cg.builder.CreateStore(lambdaFunc, cg.builder.CreateStructGEP(closureType, closure, 0, "closure.code"));
     cg.builder.CreateStore(environment, cg.builder.CreateStructGEP(closureType, closure, 1, "closure.env"));
+    generatedFunction = lambdaFunc;
+    if (escapes && isStrictOwnership()) {
+        auto* ptrTy = llvm::PointerType::getUnqual(cg.context);
+        static int closureReleaseCount = 0;
+        llvm::Function* release = llvm::Function::Create(
+            llvm::FunctionType::get(llvm::Type::getVoidTy(cg.context), { ptrTy }, false),
+            llvm::Function::InternalLinkage, "__csec_closure_release." + std::to_string(closureReleaseCount++), cg.module.get());
+        {
+            llvm::IRBuilderBase::InsertPointGuard guard(cg.builder);
+            cg.builder.SetCurrentDebugLocation(llvm::DebugLoc());
+            cg.builder.SetInsertPoint(llvm::BasicBlock::Create(cg.context, "entry", release));
+            llvm::Value* env = cg.builder.CreateLoad(ptrTy, cg.builder.CreateStructGEP(closureType, release->getArg(0), 1), "env");
+            for (size_t i = 0; i < captured.size(); ++i) {
+                const Type* semantic = captured[i].semanticType.get();
+                if (!captured[i].fieldType->isPointerTy() || !semantic) continue;
+                llvm::Value* value = cg.builder.CreateLoad(captured[i].fieldType, cg.builder.CreateStructGEP(envType, env, static_cast<unsigned>(i)), "captured");
+                if (cg.isRefcountedType(semantic)) cg.releaseString(value);
+                else if (!typeIsCopy(semantic)) cg.emitOwnedValueDrop(value, semantic);
+            }
+            cg.builder.CreateCall(cg.freeFunction, { env });
+            cg.builder.CreateRetVoid();
+        }
+        llvm::FunctionCallee adopt = cg.module->getOrInsertFunction(
+            "csec_rc_adopt_with", llvm::FunctionType::get(llvm::Type::getVoidTy(cg.context), { ptrTy, ptrTy }, false));
+        cg.requireSystemNative();
+        cg.builder.CreateCall(adopt, { closure, release });
+        cg.registerOwnedTemporary(closure, cg.rcReleaseFunction());
+    }
     return closure;
 }

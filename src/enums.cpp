@@ -1,5 +1,6 @@
 // enums.cpp -- lowering of `enum` declarations and variant constructions (see enum_nodes.h).
 #include "enums.h"
+#include "type_checker.h"
 
 #include "ast_walk.h"
 #include "codegen.h"
@@ -11,6 +12,8 @@
 #include <iostream>
 #include <map>
 #include <set>
+
+static bool trivialPayloadType(const Type* type);
 
 namespace {
 
@@ -107,6 +110,7 @@ std::unique_ptr<ASTNode> lowerEnumDeclaration(EnumDeclarationNode& decl, int& er
             v.storageNames.push_back("__" + variant.name + "_" + field->name);
             v.fieldTypes.push_back(field->type ? field->type->clone() : std::make_unique<UnknownType>());
             if (mentionsType(field->type.get(), decl.name)) info.isReference = true;
+            if (isStrictOwnership() && !trivialPayloadType(field->type.get())) info.isReference = true;
             info.hasPayload = true;
         }
         info.variants.push_back(std::move(v));
@@ -452,6 +456,14 @@ bool programMentions(ASTNode* program, const std::set<std::string>& names) {
 const EnumVariantInfo* EnumInfo::variant(const std::string& variantName) const {
     for (const auto& v : variants) if (v.name == variantName) return &v;
     return nullptr;
+}
+
+
+static bool trivialPayloadType(const Type* type) {
+    if (!type || type->getKind() != Type::Kind::BASIC) return false;
+    static const std::set<std::string> scalars = {
+        "Int", "Long", "Short", "Byte", "Double", "Float", "Real", "Bool", "Boolean", "Char", "Natural", "Integer"};
+    return scalars.count(type->getName()) != 0;
 }
 
 const EnumInfo* findEnum(const std::string& name) {

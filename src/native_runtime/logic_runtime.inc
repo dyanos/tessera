@@ -485,7 +485,7 @@ void requireSame(long long actual, long long expected, const char* rule) {
 }
 
 char* ownedString(const std::string& s) {
-    char* out = static_cast<char*>(std::malloc(s.size() + 1));
+    char* out = static_cast<char*>(csecAlloc(s.size() + 1));
     if (out) std::memcpy(out, s.c_str(), s.size() + 1);
     return out;
 }

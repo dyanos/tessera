@@ -76,6 +76,7 @@ llvm::Value* lowerConcurrentCall(FunctionCallNode* call, bool wantFuture) {
         }
         auto type = arg->getType();
         value = cg.copyStackBufferToHeap(value);
+        value = cg.takeOwned(value, type.get());
         values.push_back(value);
         types.push_back(type ? type->clone() : std::make_unique<UnknownType>());
         fields.push_back(value->getType());
@@ -183,7 +184,13 @@ llvm::Value* PrefixExpressionNode::codegen() {
         return value;
     }
     else if (op == "<-") {
-        CodeGenerator::getInstance().noteMoved(value);
+        auto& cg = CodeGenerator::getInstance();
+        cg.noteMoved(value);
+        if (auto* id = dynamic_cast<IdentifierNode*>(expression.get())) {
+            if (Symbol* symbol = cg.symbolTable.lookup(id->value)) {
+                if (symbol->value && llvm::isa<llvm::AllocaInst>(symbol->value)) cg.noteMoved(symbol->value);
+            }
+        }
         return value;
     }
     else if (op == "await") {

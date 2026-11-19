@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "type_checker.h"
 #include "AssignmentExpressionNode.h"
 #include "ASTVisitor.h"
 #include "IdentifierNode.h"
@@ -41,7 +42,9 @@ llvm::Value* AssignmentExpressionNode::codegen() {
                 return nullptr;
             }
             auto rightType = right->getType();
-            return access->codegenSliceAssign(rightValue, rightType.get());
+            llvm::Value* assigned = access->codegenSliceAssign(rightValue, rightType.get());
+            CodeGenerator::getInstance().dropTemporary(rightValue);
+            return assigned;
         }
     }
     llvm::Value* leftValue = left->codegen();
@@ -134,6 +137,9 @@ llvm::Value* AssignmentExpressionNode::codegen() {
     }
 
     llvm::Type* targetType = CodeGenerator::getInstance().getLLVMType(left->getType().get());
+    if (auto leftType = left->getType(); leftType && leftType->getKind() == Type::Kind::CLASS && !isStructClassType(leftType.get())) {
+        targetType = getABIStorageType(leftType.get());
+    }
     // Tensor elements are stored as doubles whatever the declared element type.
     if (auto* access = dynamic_cast<ArrayAccessNode*>(left.get())) {
         auto container = access->array ? access->array->getType() : nullptr;
@@ -164,6 +170,58 @@ llvm::Value* AssignmentExpressionNode::codegen() {
         else if (op == "*=") rightValue = CodeGenerator::getInstance().builder.CreateMul(oldValue, rightValue, "assign.next");
         else if (op == "/=") rightValue = CodeGenerator::getInstance().builder.CreateSDiv(oldValue, rightValue, "assign.next");
         else rightValue = CodeGenerator::getInstance().builder.CreateSRem(oldValue, rightValue, "assign.next");
+    }
+    if ((op == "=" || op == "<-") && targetType->isPointerTy()) {
+        auto& cg = CodeGenerator::getInstance();
+        bool fieldTarget = dynamic_cast<AccessFieldNode*>(left.get()) != nullptr;
+        bool stringLocal = false;
+        if (auto* id = dynamic_cast<IdentifierNode*>(left.get())) {
+            Symbol* symbol = cg.symbolTable.lookup(id->value);
+            fieldTarget = symbol && symbol->symbolType == SymbolType::FIELD;
+            stringLocal = symbol && !fieldTarget && symbol->value && llvm::isa<llvm::AllocaInst>(symbol->value);
+        }
+        auto fieldType = left->getType();
+        if (!fieldType || !cg.isRefcountedType(fieldType.get())) rightValue = cg.takeOwned(rightValue, fieldType.get());
+        if (stringLocal && fieldType && fieldType->getKind() == Type::Kind::GENERIC &&
+            (fieldType->getName() == "Dict" || fieldType->getName() == "Set") && isStrictOwnership()) {
+            llvm::Value* previous = cg.builder.CreateLoad(targetType, targetPtr, "dict.previous");
+            cg.builder.CreateStore(rightValue, targetPtr);
+            cg.builder.CreateCall(cg.dictFreeFunction(), { previous });
+            return rightValue;
+        }
+        if (stringLocal && fieldType && fieldType->getName() == "Tensor" && isStrictOwnership()) {
+            llvm::Value* previous = cg.builder.CreateLoad(targetType, targetPtr, "tensor.previous");
+            cg.builder.CreateStore(rightValue, targetPtr);
+            CodeGenerator::clearFreshTensor(rightValue);
+            cg.dropTensorValue(previous);
+            return rightValue;
+        }
+        if (stringLocal && fieldType && fieldType->getKind() == Type::Kind::CLASS && !typeIsCopy(fieldType.get()) &&
+            !isStructClassType(fieldType.get()) && isStrictOwnership()) {
+            llvm::Value* previous = cg.builder.CreateLoad(targetType, targetPtr, "object.previous");
+            cg.builder.CreateStore(rightValue, targetPtr);
+            if (llvm::Function* drop = cg.classDropFunction(fieldType.get())) cg.builder.CreateCall(drop, { previous });
+            return rightValue;
+        }
+        if (fieldType && cg.isRefcountedType(fieldType.get())) {
+            rightValue = cg.takeOwnedString(rightValue);
+            if (fieldTarget || stringLocal) {
+                llvm::Value* previous = cg.builder.CreateLoad(targetType, targetPtr, "string.previous");
+                cg.builder.CreateStore(rightValue, targetPtr);
+                cg.releaseString(previous);
+                return rightValue;
+            }
+            cg.builder.CreateStore(rightValue, targetPtr);
+            return rightValue;
+        }
+        if (fieldTarget && fieldType && !typeIsCopy(fieldType.get())) {
+            rightValue = cg.copyStackBufferToHeap(rightValue);
+            llvm::Value* previous = cg.builder.CreateLoad(targetType, targetPtr, "field.previous");
+            cg.builder.CreateStore(rightValue, targetPtr);
+            cg.emitOwnedValueDrop(previous, fieldType.get());
+            CodeGenerator::clearFreshTensor(rightValue);
+            return rightValue;
+        }
     }
     CodeGenerator::getInstance().builder.CreateStore(rightValue, targetPtr);
     CodeGenerator::clearFreshTensor(rightValue);

@@ -45,6 +45,8 @@ llvm::Value* ReturnStatementNode::codegen() {
         }
 
         if (returnType->isPointerTy()) returnValue = cg.copyStackBufferToHeap(returnValue);
+        auto returnedType = expression->getType();
+        returnValue = cg.takeOwned(returnValue, returnedType.get());
         cg.emitAllCleanupsExcept(returnValue);
         cg.builder.CreateRet(returnValue);
     }

@@ -4,6 +4,11 @@
 #include "ParameterNode.h"
 #include "BlockNode.h"
 
+class CodeGenerator;
+void markOwnership(CodeGenerator& cg, const std::string& functionName, const Type* returnType,
+                   const std::vector<std::unique_ptr<ASTNode>>& parameters, bool hasReceiver,
+                   const std::string& className, const std::string& methodName);
+
 class FunctionDeclarationNode : public ASTNode {
 public:
     FunctionDeclarationNode() {

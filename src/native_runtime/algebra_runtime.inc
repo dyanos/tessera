@@ -409,7 +409,7 @@ i64 sameCharacteristic(const PolyEntry& a, const PolyEntry& b) {
 }
 
 char* ownedString(const std::string& text) {
-    char* out = static_cast<char*>(std::malloc(text.size() + 1));
+    char* out = static_cast<char*>(csecAlloc(text.size() + 1));
     if (out) std::memcpy(out, text.c_str(), text.size() + 1);
     return out;
 }
