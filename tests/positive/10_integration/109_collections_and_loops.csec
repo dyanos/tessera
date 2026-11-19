@@ -1,12 +1,5 @@
 /* Comprehensive collections usage */
 
-def sumArray(xs: Vector[Int]): Int {
-    reduce (x <- xs, 0) {
-        x + 1;
-    }
-    return 0;
-}
-
 def main(): Int {
     /* various array literals */
     val small = [1, 2, 3];

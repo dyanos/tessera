@@ -680,18 +680,21 @@ Symbol* SymbolTable::lookupMethod(const ClassSymbol& symbol, const std::string& 
     while (current) {
         for (const auto& pair : current->methods) {
             Symbol* candidate = pair.second.get();
-            if (!candidate || candidate->name != methodName || candidate->symbolType != SymbolType::METHOD) {
+            if (!candidate || candidate->name != methodName ||
+                (candidate->symbolType != SymbolType::METHOD && candidate->symbolType != SymbolType::FUNCTION)) {
                 continue;
             }
             auto* funcType = dynamic_cast<FunctionType*>(candidate->type.get());
-            if (!funcType || funcType->parameterTypes.size() != argTypes.size() + 1) {
-                continue;
-            }
+            if (!funcType) continue;
+            if (candidate->symbolType == SymbolType::FUNCTION && candidate->value) continue;
+            size_t offset = 1;
+            if (funcType->parameterTypes.size() == argTypes.size() && !candidate->value) offset = 0;
+            else if (funcType->parameterTypes.size() != argTypes.size() + 1) continue;
             int cost = 0;
             bool matches = true;
             for (size_t i = 0; i < argTypes.size(); ++i) {
                 const auto& argType = argTypes[i];
-                const auto& paramType = funcType->parameterTypes[i + 1];
+                const auto& paramType = funcType->parameterTypes[i + offset];
                 if (!argType || !paramType) {
                     matches = false;
                     break;
@@ -702,7 +705,11 @@ Symbol* SymbolTable::lookupMethod(const ClassSymbol& symbol, const std::string& 
                     cost += widen;
                     continue;
                 }
-                if (argType->equals(paramType) || argType->isSubtypeOf(paramType)) {
+                if ((argType->equals(paramType) && argType->getName() == paramType->getName()) || argType->isSubtypeOf(paramType)) {
+                    continue;
+                }
+                if (argType->equals(paramType)) {
+                    cost += 100;
                     continue;
                 }
                 matches = false;

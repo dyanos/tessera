@@ -1,6 +1,6 @@
 /* Comprehensive program using many language features */
 
-import std.math
+import std.math.real
 
 constexpr val MAX: Int = 100;
 

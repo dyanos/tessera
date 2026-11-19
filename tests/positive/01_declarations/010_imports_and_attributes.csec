@@ -1,5 +1,5 @@
-import math.core
-import algebra.linear.matrix
+import std.math.real
+import std.math.algebra
 
 [@entry]
 def main(): Int = 0

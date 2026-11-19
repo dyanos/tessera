@@ -1,5 +1,5 @@
 /* top-level block comment */
-import io.console
+import std.io
 
 // attribute with call form
 [@native("fast")]

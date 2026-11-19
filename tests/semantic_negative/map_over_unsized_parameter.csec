@@ -1,0 +1,11 @@
+def doubleAll(xs: &Vector[Int]): Int {
+    map (x <- xs) {
+        x * 2;
+    }
+    return 0;
+}
+
+def main(): Int {
+    val data = [1, 2, 3];
+    return doubleAll(&data);
+}
