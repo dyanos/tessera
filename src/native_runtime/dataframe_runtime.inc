@@ -25,7 +25,9 @@
 #include <cstring>
 #include <fstream>
 #include <functional>
+#include <exception>
 #include <limits>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -153,6 +155,7 @@ long long store(DataFrame&& frame) {
 FramePtr frameOf(long long handle) {
     auto frame = frames().get(handle);
     if (!frame) lastError = "unknown data frame handle";
+    else frame->normalize();
     return frame;
 }
 
@@ -208,31 +211,44 @@ void parallelFor(size_t count, size_t work, Body body) {
         return;
     }
     std::atomic<size_t> next{0};
-    std::vector<std::thread> pool;
-    pool.reserve(workers);
-    for (size_t w = 0; w < workers; ++w) {
-        pool.emplace_back([&] {
+    std::mutex failureMutex;
+    std::exception_ptr failure;
+    auto drain = [&] {
+        try {
             for (size_t k = next++; k < count; k = next++) body(k);
-        });
+        } catch (...) {
+            std::lock_guard<std::mutex> lock(failureMutex);
+            if (!failure) failure = std::current_exception();
+            next = count;
+        }
+    };
+    std::vector<std::thread> pool;
+    try {
+        pool.reserve(workers);
+        for (size_t w = 1; w < workers; ++w) pool.emplace_back(drain);
+    } catch (...) {
     }
+    drain();
     for (auto& t : pool) t.join();
+    if (failure) std::rethrow_exception(failure);
 }
 
 // Gather `rows` of one column (tight per-type loops instead of appendFrom per cell).
 Column gatherColumn(const Column& column, const std::vector<size_t>& rows) {
     Column copy = column.emptyLike();
     const size_t n = rows.size();
+    const size_t have = column.size();
     copy.valid.resize(n);
-    for (size_t k = 0; k < n; ++k) copy.valid[k] = column.valid[rows[k]];
+    for (size_t k = 0; k < n; ++k) copy.valid[k] = rows[k] < have ? column.valid[rows[k]] : 0;
     if (column.usesLongs()) {
         copy.longs.resize(n);
-        for (size_t k = 0; k < n; ++k) copy.longs[k] = column.longs[rows[k]];
+        for (size_t k = 0; k < n; ++k) copy.longs[k] = rows[k] < have ? column.longs[rows[k]] : 0;
     } else if (column.type == ColType::Double) {
         copy.doubles.resize(n);
-        for (size_t k = 0; k < n; ++k) copy.doubles[k] = column.doubles[rows[k]];
+        for (size_t k = 0; k < n; ++k) copy.doubles[k] = rows[k] < have ? column.doubles[rows[k]] : 0.0;
     } else {
         copy.strings.reserve(n);
-        for (size_t k = 0; k < n; ++k) copy.strings.push_back(column.strings[rows[k]]);
+        for (size_t k = 0; k < n; ++k) copy.strings.push_back(rows[k] < have ? column.strings[rows[k]] : std::string());
     }
     return copy;
 }
@@ -265,8 +281,9 @@ struct Leaf {
     ColType out = ColType::Long;
 };
 
-void collectLeaves(const std::vector<TValue>& schema, size_t& index, const std::string& prefix, int def, int rep, bool nested,
-                   std::vector<Leaf>& leaves, int children) {
+bool collectLeaves(const std::vector<TValue>& schema, size_t& index, const std::string& prefix, int def, int rep, bool nested,
+                   std::vector<Leaf>& leaves, int children, int depth) {
+    if (depth > 64) return false;
     for (int child = 0; child < children && index < schema.size(); ++child) {
         const TValue& element = schema[index++];
         const int repetition = static_cast<int>(element.intOr(3, 0));  // 0 required, 1 optional, 2 repeated
@@ -275,7 +292,7 @@ void collectLeaves(const std::vector<TValue>& schema, size_t& index, const std::
         const std::string name = prefix.empty() ? element.stringOr(4) : prefix + "." + element.stringOr(4);
         const int grandchildren = static_cast<int>(element.intOr(5, 0));
         if (grandchildren > 0 || !element.has(1)) {
-            collectLeaves(schema, index, name, elementDef, elementRep, true, leaves, grandchildren);
+            if (!collectLeaves(schema, index, name, elementDef, elementRep, true, leaves, grandchildren, depth + 1)) return false;
             continue;
         }
         Leaf leaf;
@@ -306,6 +323,7 @@ void collectLeaves(const std::vector<TValue>& schema, size_t& index, const std::
         }
         leaves.push_back(leaf);
     }
+    return true;
 }
 
 double decimalFromBytes(const std::string& bytes) {
@@ -319,6 +337,7 @@ double decimalFromBytes(const std::string& bytes) {
 }
 
 double halfToDouble(const std::string& bytes) {
+    if (bytes.size() < 2) return std::numeric_limits<double>::quiet_NaN();
     const unsigned bits = static_cast<unsigned char>(bytes[0]) | (static_cast<unsigned>(static_cast<unsigned char>(bytes[1])) << 8);
     const int sign = (bits >> 15) ? -1 : 1;
     const int exponent = (bits >> 10) & 0x1f;
@@ -411,7 +430,7 @@ bool decodeValues(int encoding, const uint8_t* p, size_t size, size_t count, con
     }
     case kDeltaBinaryPacked: {
         size_t used = 0;
-        if ((leaf.physical != kInt32 && leaf.physical != kInt64) || !decodeDeltaBinary(p, size, values.ints, used)) {
+        if ((leaf.physical != kInt32 && leaf.physical != kInt64) || !decodeDeltaBinary(p, size, values.ints, used, count)) {
             error = "corrupt DELTA_BINARY_PACKED page";
             return false;
         }
@@ -422,14 +441,14 @@ bool decodeValues(int encoding, const uint8_t* p, size_t size, size_t count, con
     }
     case kDeltaLengthByteArray: {
         size_t used = 0;
-        if (!decodeDeltaLengthByteArray(p, size, values.bytes, used)) {
+        if (!decodeDeltaLengthByteArray(p, size, values.bytes, used, count)) {
             error = "corrupt DELTA_LENGTH_BYTE_ARRAY page";
             return false;
         }
         return true;
     }
     case kDeltaByteArray:
-        if (!decodeDeltaByteArray(p, size, values.bytes)) {
+        if (!decodeDeltaByteArray(p, size, values.bytes, count)) {
             error = "corrupt DELTA_BYTE_ARRAY page";
             return false;
         }
@@ -547,7 +566,8 @@ bool readColumnChunk(const uint8_t* file, size_t fileSize, const TValue& chunk, 
             const long long defLength = dataHeader->intOr(5, 0);
             const long long repLength = dataHeader->intOr(6, 0);
             const bool compressed = dataHeader->intOr(7, 1) != 0;
-            if (defLength < 0 || repLength < 0 || static_cast<size_t>(defLength + repLength) > bodySize) {
+            if (defLength < 0 || repLength < 0 || static_cast<unsigned long long>(defLength) > bodySize ||
+                static_cast<unsigned long long>(repLength) > bodySize - static_cast<size_t>(defLength)) {
                 error = "corrupt data page v2 level sizes";
                 return false;
             }
@@ -572,6 +592,10 @@ bool readColumnChunk(const uint8_t* file, size_t fileSize, const TValue& chunk, 
             }
         }
 
+        if (count > static_cast<unsigned long long>(totalValues - read)) {
+            error = "page holds more values than its column chunk";
+            return false;
+        }
         size_t present = count;
         if (leaf.maxDef > 0) {
             present = 0;
@@ -722,7 +746,10 @@ bool parseParquetMeta(const uint8_t* file, size_t size, const std::string& path,
     }
     leaves.clear();
     size_t index = 1;
-    collectLeaves(schema->list, index, "", 0, 0, false, leaves, static_cast<int>(schema->list[0].intOr(5, 0)));
+    if (!collectLeaves(schema->list, index, "", 0, 0, false, leaves, static_cast<int>(schema->list[0].intOr(5, 0)), 0)) {
+        error = "Parquet schema is nested too deeply";
+        return false;
+    }
     return true;
 }
 
@@ -768,8 +795,8 @@ using RowGroupFilter = std::function<bool(const std::vector<Leaf>& leaves, const
 // Read a Parquet file into `frame`. `columns` (null = every column) projects and orders the result;
 // `keepGroup` (may be empty) can skip row groups, e.g. by their statistics; a non-negative `limit`
 // stops after the row groups that hold the first `limit` rows (the caller trims the rest).
-bool readParquetInto(const std::string& path, const std::vector<std::string>* columns, const RowGroupFilter& keepGroup,
-                     long long limit, DataFrame& frame, std::string& error) {
+bool readParquetIntoUnchecked(const std::string& path, const std::vector<std::string>* columns, const RowGroupFilter& keepGroup,
+                              long long limit, DataFrame& frame, std::string& error) {
     using namespace csec_parquet;
     std::string data;
     if (!readFile(path, data)) {
@@ -838,16 +865,20 @@ bool readParquetInto(const std::string& path, const std::vector<std::string>* co
     // Decode the columns in parallel; each worker takes whole columns.
     auto decodeColumn = [&](size_t k) {
         const size_t leafIndex = selected[k];
-        for (const TValue* group : groups) {
-            const TValue* chunks = group->field(1);
-            if (!chunks || leafIndex >= chunks->list.size()) {
-                errors[k] = "row group without column '" + leaves[leafIndex].name + "'";
-                return;
+        try {
+            for (const TValue* group : groups) {
+                const TValue* chunks = group->field(1);
+                if (!chunks || leafIndex >= chunks->list.size()) {
+                    errors[k] = "row group without column '" + leaves[leafIndex].name + "'";
+                    return;
+                }
+                if (!readColumnChunk(file, size, chunks->list[leafIndex], leaves[leafIndex], frame.columns[k], errors[k])) {
+                    errors[k] = "column '" + leaves[leafIndex].name + "': " + errors[k];
+                    return;
+                }
             }
-            if (!readColumnChunk(file, size, chunks->list[leafIndex], leaves[leafIndex], frame.columns[k], errors[k])) {
-                errors[k] = "column '" + leaves[leafIndex].name + "': " + errors[k];
-                return;
-            }
+        } catch (const std::exception& e) {
+            errors[k] = "column '" + leaves[leafIndex].name + "': " + e.what();
         }
     };
     const unsigned hardware = std::max(1u, std::thread::hardware_concurrency());
@@ -856,13 +887,16 @@ bool readParquetInto(const std::string& path, const std::vector<std::string>* co
         for (size_t k = 0; k < selected.size(); ++k) decodeColumn(k);
     } else {
         std::atomic<size_t> nextColumn{0};
+        auto drain = [&] {
+            for (size_t k = nextColumn++; k < selected.size(); k = nextColumn++) decodeColumn(k);
+        };
         std::vector<std::thread> pool;
-        pool.reserve(workers);
-        for (size_t w = 0; w < workers; ++w) {
-            pool.emplace_back([&] {
-                for (size_t k = nextColumn++; k < selected.size(); k = nextColumn++) decodeColumn(k);
-            });
+        try {
+            pool.reserve(workers);
+            for (size_t w = 1; w < workers; ++w) pool.emplace_back(drain);
+        } catch (...) {
         }
+        drain();
         for (auto& t : pool) t.join();
     }
     for (const auto& e : errors) {
@@ -879,6 +913,16 @@ bool readParquetInto(const std::string& path, const std::vector<std::string>* co
         }
     }
     return true;
+}
+
+bool readParquetInto(const std::string& path, const std::vector<std::string>* columns, const RowGroupFilter& keepGroup,
+                     long long limit, DataFrame& frame, std::string& error) {
+    try {
+        return readParquetIntoUnchecked(path, columns, keepGroup, limit, frame, error);
+    } catch (const std::exception& e) {
+        error = path + ": " + e.what();
+        return false;
+    }
 }
 
 long long readParquet(const char* path, const char* columnSpec) {
@@ -1661,8 +1705,9 @@ int csec_df_add_column(long long handle, const char* name, const char* type) {
     return 1;
 }
 
-static csec_df::Column* csecDfAppendTarget(long long handle, const char* name) {
-    auto frame = csec_df::frameOf(handle);
+static csec_df::Column* csecDfAppendTarget(long long handle, const char* name, csec_df::FramePtr& frame) {
+    frame = csec_df::frames().get(handle);
+    if (!frame) csec_df::lastError = "unknown data frame handle";
     const int index = frame && name ? frame->find(name) : -1;
     if (index < 0) {
         if (frame) csec_df::fail(std::string("no column '") + (name ? name : "") + "'");
@@ -1672,7 +1717,8 @@ static csec_df::Column* csecDfAppendTarget(long long handle, const char* name) {
 }
 
 int csec_df_append_long(long long handle, const char* name, long long value) {
-    csec_df::Column* column = csecDfAppendTarget(handle, name);
+    csec_df::FramePtr frame;
+    csec_df::Column* column = csecDfAppendTarget(handle, name, frame);
     if (!column) return 0;
     if (column->type == csec_df::ColType::Long) column->pushLong(value);
     else if (column->type == csec_df::ColType::Bool) column->pushBool(value != 0);
@@ -1682,7 +1728,8 @@ int csec_df_append_long(long long handle, const char* name, long long value) {
 }
 
 int csec_df_append_double(long long handle, const char* name, double value) {
-    csec_df::Column* column = csecDfAppendTarget(handle, name);
+    csec_df::FramePtr frame;
+    csec_df::Column* column = csecDfAppendTarget(handle, name, frame);
     if (!column) return 0;
     if (column->type == csec_df::ColType::Double) column->pushDouble(value);
     else if (column->type == csec_df::ColType::Long) column->pushLong(static_cast<long long>(value));
@@ -1692,7 +1739,8 @@ int csec_df_append_double(long long handle, const char* name, double value) {
 }
 
 int csec_df_append_string(long long handle, const char* name, const char* value) {
-    csec_df::Column* column = csecDfAppendTarget(handle, name);
+    csec_df::FramePtr frame;
+    csec_df::Column* column = csecDfAppendTarget(handle, name, frame);
     if (!column) return 0;
     const std::string text = value ? value : "";
     if (column->type == csec_df::ColType::String) {
@@ -1710,7 +1758,8 @@ int csec_df_append_string(long long handle, const char* name, const char* value)
 }
 
 int csec_df_append_null(long long handle, const char* name) {
-    csec_df::Column* column = csecDfAppendTarget(handle, name);
+    csec_df::FramePtr frame;
+    csec_df::Column* column = csecDfAppendTarget(handle, name, frame);
     if (!column) return 0;
     column->pushNull();
     return 1;

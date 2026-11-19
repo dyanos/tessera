@@ -36,6 +36,15 @@ public:
 private:
     const std::string& s;
     size_t p = 0;
+    int depth = 0;
+
+    struct Nest {
+        int& depth;
+        explicit Nest(int& d) : depth(d) {
+            if (++depth > 64) throw std::runtime_error(".npy header is nested too deeply");
+        }
+        ~Nest() { --depth; }
+    };
 
     void skipSpace() {
         while (p < s.size() && (s[p] == ' ' || s[p] == '\t' || s[p] == '\n' || s[p] == '\r')) ++p;
@@ -61,6 +70,7 @@ private:
     }
 
     PyValue parseValue() {
+        Nest nest(depth);
         skipSpace();
         if (p >= s.size()) throw std::runtime_error("truncated .npy header");
         const char c = s[p];
@@ -175,7 +185,10 @@ Field parseTypeString(const std::string& descr) {
     if (f.kind == 'O') throw std::runtime_error("object arrays (dtype 'O') need pickle and are not supported");
     size_t count = 0;
     const size_t digitsStart = i;
-    while (i < descr.size() && std::isdigit(static_cast<unsigned char>(descr[i]))) count = count * 10 + static_cast<size_t>(descr[i++] - '0');
+    while (i < descr.size() && std::isdigit(static_cast<unsigned char>(descr[i]))) {
+        if (count > (std::numeric_limits<size_t>::max() / 4 - 9) / 10) throw std::runtime_error("dtype size too large in .npy header: " + descr);
+        count = count * 10 + static_cast<size_t>(descr[i++] - '0');
+    }
     if (i == digitsStart) throw std::runtime_error("dtype without size in .npy header: " + descr);
     if (i < descr.size() && descr[i] != '[') throw std::runtime_error("unsupported .npy dtype: " + descr);
     f.size = f.kind == 'U' ? count * 4 : count;
@@ -245,6 +258,7 @@ std::vector<Field> parseFields(const PyValue& descr, bool& structured) {
         Field f = parseTypeString(item.items[1].text);
         f.name = name;
         f.offset = offset;
+        if (f.size > std::numeric_limits<size_t>::max() - offset) throw std::runtime_error("structured .npy dtype too large");
         offset += f.size;
         if (name.empty() && f.kind == 'V') f.skip = true;
         else if (f.skip) throw std::runtime_error("void field '" + name + "' is not supported");
@@ -403,13 +417,18 @@ long long readNpy(const std::string& path) {
     const std::vector<Field> fields = parseFields(*descr, structured);
     if (structured && shape.size() > 1) return fail(path + ": 2-D structured .npy arrays are not supported");
     size_t itemSize = 0;
-    for (const auto& f : fields) itemSize += f.size;
+    for (const auto& f : fields) {
+        if (f.size > std::numeric_limits<size_t>::max() - itemSize) return fail(path + ": .npy dtype too large");
+        itemSize += f.size;
+    }
 
     const size_t rows = shape.empty() ? 1 : shape[0];
     const size_t width = shape.size() == 2 ? shape[1] : 1;
+    if (width > (size_t(1) << 20)) return fail(path + ": .npy array has too many columns");
     size_t count = rows;
     if (width != 0 && count > std::numeric_limits<size_t>::max() / width) return fail(path + ": .npy array too large");
     count *= width;
+    if (itemSize == 0 && count > 0) return fail(path + ": .npy dtype has no bytes");
     if (itemSize != 0 && count > std::numeric_limits<size_t>::max() / itemSize) return fail(path + ": .npy array too large");
     const size_t dataStart = headerStart + headerLength;
     if (count * itemSize > data.size() - dataStart) return fail(path + ": .npy data is shorter than its shape");
