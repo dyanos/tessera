@@ -146,7 +146,7 @@ llvm::Value* VariableDeclarationNode::codegen() {
         if (!initValue || !initValue->getType()->isPointerTy()) {
             initValue = llvm::ConstantPointerNull::get(handleTy);
         }
-        llvm::Value* slot = cg.builder.CreateAlloca(handleTy, nullptr, name + ".nat");
+        llvm::Value* slot = cg.createEntryAlloca(handleTy, name + ".nat");
         cg.builder.CreateStore(initValue, slot);
         cg.symbolTable.addSymbol(
             name, std::make_unique<Symbol>(name, type->clone(), slot, isMutable, SymbolType::VARIABLE));
@@ -261,7 +261,8 @@ llvm::Value* VariableDeclarationNode::codegen() {
                     if (!generic->typeArguments.empty() && generic->typeArguments[0]) elementType = generic->typeArguments[0]->clone();
                 }
             }
-            if (elementType && llvm::cast<llvm::AllocaInst>(initValue)->getAllocatedType()->isPointerTy()) {
+            if (elementType && (llvm::cast<llvm::AllocaInst>(initValue)->getAllocatedType()->isPointerTy() ||
+                                cg.structHoldsCounted(elementType.get()))) {
                 cg.registerArrayElementsCleanup(initValue, elementType.get(), static_cast<unsigned>(literal->elements.size()));
             }
         }
@@ -388,7 +389,7 @@ llvm::Value* VariableDeclarationNode::codegen() {
         return global;
     }
 
-    llvm::AllocaInst* alloc = cg.builder.CreateAlloca(varType, nullptr, name.c_str());
+    llvm::AllocaInst* alloc = cg.createEntryAlloca(varType, name);
 
     const bool stringLocal = type && type->getName() == "String" && !isField && varType->isPointerTy() && !borrowsValue;
     if (stringLocal) initValue = cg.takeOwnedString(initValue);

@@ -1,0 +1,26 @@
+// The last Shared owner releases the payload: strings and structs held by a Shared are freed once
+// no strong owner remains, even while a Weak handle still points at the block (checked with --leak-check).
+struct Point(label: String, x: Int) { }
+
+def labelled(i: Int): Shared<String> {
+    val made: Shared<String> = Shared("shared" + i);
+    return <- made;
+}
+
+def round(i: Int): Int {
+    val s = labelled(i);
+    val t = s.clone();
+    val w = Weak(t);
+    val p = Shared(new Point("p" + i, i));
+    val q = p.clone();
+    val text = t.get();
+    var total = text.length() + q.get().x + w.get().length();
+    return total;
+}
+
+def main(): Int {
+    var total = 0;
+    for (i <- 0 until 10) { total = total + round(i); }
+    if (total != 185) { return 1; }
+    return 0;
+}

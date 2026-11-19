@@ -35,7 +35,15 @@ llvm::Value* ArrayCreationExpressionNode::codegen() {
     if (isPrimitiveType(typeName)) {
 		BasicType basicType(typeName);
         llvm::Type* type = cg.getLLVMType(&basicType);
-        return heapAllocate(type);
+        llvm::Value* memory = heapAllocate(type);
+        if (memory && type && type->isPointerTy() && cg.isRefcountedType(&basicType)) {
+            llvm::Value* count = cg.builder.CreateZExtOrTrunc(array_size, i64Ty, "array.count");
+            llvm::Value* bytes = cg.builder.CreateMul(
+                count, llvm::ConstantInt::get(i64Ty, cg.module->getDataLayout().getTypeAllocSize(type)), "array.bytes");
+            cg.builder.CreateMemSet(memory, cg.builder.getInt8(0), bytes, llvm::MaybeAlign(8));
+            cg.trackArrayElements(memory, count);
+        }
+        return memory;
     }
 
     // Template Class인지 확인은 나중에 코드 추가되면...

@@ -2084,6 +2084,7 @@ llvm::Value* FunctionCallNode::codegen() {
             llvm::Value* raw = cg.builder.CreateBitCast(
                 argValues[0], llvm::PointerType::getUnqual(cg.context), "free.ptr");
             llvm::Function* drop = !argTypes.empty() && argTypes[0] ? cg.classDropFunction(argTypes[0].get()) : nullptr;
+            if (!drop && !argTypes.empty() && argTypes[0]) drop = cg.arrayDropFunction(argTypes[0].get());
             cg.builder.CreateCall(drop ? drop : cg.freeFunction, { raw });
         }
         else {
@@ -2121,7 +2122,7 @@ llvm::Value* FunctionCallNode::codegen() {
         return newBox;
     }
 
-    // Shared(x): explicit shared ownership. Allocate a control block { i64 strong, payload }, set
+    // Shared(x): explicit shared ownership. Allocate a control block { i64 strong, i64 weak, drop, payload }, set
     // strong = 1, store the payload, and return the block pointer (the Shared<T> value). Duplicate
     // it with `.clone()` (retain); it is released at each owner's scope exit and freed at zero.
     if (functionName == "Shared") {
@@ -2130,11 +2131,17 @@ llvm::Value* FunctionCallNode::codegen() {
             return nullptr;
         }
         llvm::Value* payload = argValues[0];
+        if (!argTypes.empty() && argTypes[0] && isStructClassType(argTypes[0].get()) && payload->getType()->isPointerTy()) {
+            payload = cg.builder.CreateLoad(cg.getLLVMType(argTypes[0].get()), payload, "shared.struct");
+        }
         if (!argTypes.empty() && argTypes[0]) payload = cg.takeOwned(payload, argTypes[0].get());
         auto* i64Ty = llvm::Type::getInt64Ty(cg.context);
-        // Control block { strong, weak, payload }. strong keeps the payload alive; weak keeps only
+        // Control block { strong, weak, payload drop, payload }. strong keeps the payload alive; weak keeps only
         // the block alive (for Weak<T> handles), so a cycle with a Weak edge is still reclaimed.
-        llvm::StructType* blockType = llvm::StructType::get(cg.context, { i64Ty, i64Ty, payload->getType() });
+        auto* ptrTy = llvm::PointerType::getUnqual(cg.context);
+        llvm::StructType* blockType = llvm::StructType::get(cg.context, { i64Ty, i64Ty, ptrTy, payload->getType() });
+        llvm::Function* payloadDrop = !argTypes.empty() && argTypes[0]
+            ? cg.sharedPayloadDropFunction(argTypes[0].get(), payload->getType()) : nullptr;
         const llvm::DataLayout& dl = cg.module->getDataLayout();
         llvm::Value* size = llvm::ConstantInt::get(i64Ty, dl.getTypeAllocSize(blockType));
         llvm::Value* raw = cg.builder.CreateCall(cg.mallocFunction, size, "shared.malloc");
@@ -2143,8 +2150,10 @@ llvm::Value* FunctionCallNode::codegen() {
             cg.builder.CreateStructGEP(blockType, block, 0, "shared.strong.ptr"));
         cg.builder.CreateStore(llvm::ConstantInt::get(i64Ty, 1),
             cg.builder.CreateStructGEP(blockType, block, 1, "shared.weak.ptr"));
+        cg.builder.CreateStore(payloadDrop ? static_cast<llvm::Value*>(payloadDrop) : llvm::ConstantPointerNull::get(ptrTy),
+            cg.builder.CreateStructGEP(blockType, block, 2, "shared.drop.ptr"));
         cg.builder.CreateStore(payload,
-            cg.builder.CreateStructGEP(blockType, block, 2, "shared.payload.ptr"));
+            cg.builder.CreateStructGEP(blockType, block, 3, "shared.payload.ptr"));
         return block;
     }
 

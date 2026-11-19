@@ -203,9 +203,17 @@ llvm::Value* AssignmentExpressionNode::codegen() {
             if (llvm::Function* drop = cg.classDropFunction(fieldType.get())) cg.builder.CreateCall(drop, { previous });
             return rightValue;
         }
+        bool arrayElementTarget = false;
+        if (auto* access = dynamic_cast<ArrayAccessNode*>(left.get())) {
+            auto container = access->array ? access->array->getType() : nullptr;
+            const Type* base = container.get();
+            if (auto* borrowed = dynamic_cast<const BorrowType*>(base)) base = borrowed->baseType.get();
+            arrayElementTarget = base && (base->getKind() == Type::Kind::ARRAY ||
+                (base->getKind() == Type::Kind::GENERIC && base->getName() == "Array"));
+        }
         if (fieldType && cg.isRefcountedType(fieldType.get())) {
             rightValue = cg.takeOwnedString(rightValue);
-            if (fieldTarget || stringLocal) {
+            if (fieldTarget || stringLocal || arrayElementTarget) {
                 llvm::Value* previous = cg.builder.CreateLoad(targetType, targetPtr, "string.previous");
                 cg.builder.CreateStore(rightValue, targetPtr);
                 cg.releaseString(previous);
@@ -228,7 +236,7 @@ llvm::Value* AssignmentExpressionNode::codegen() {
         auto assignedType = left->getType();
         if (cg.structHoldsCounted(assignedType.get())) {
             cg.takeOwned(rightValue, assignedType.get());
-            if (!dynamic_cast<ArrayAccessNode*>(left.get())) cg.emitStructCount(targetPtr, assignedType.get(), false);
+            cg.emitStructCount(targetPtr, assignedType.get(), false);
         }
     }
     CodeGenerator::getInstance().builder.CreateStore(rightValue, targetPtr);

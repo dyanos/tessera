@@ -52,8 +52,15 @@ lower learning cost, which is the stated goal.
 One rule covers the two owned categories: a value that can change has exactly one owner and moves;
 a value that cannot change is copied freely. Shared immutable values are reference counted by the
 runtime (`csec_rc_*`, keyed by address); values the runtime does not track (literals, borrowed
-runtime pointers, foreign externals) are never freed. Cycles can only be formed through
-`Shared<T>`; use `Weak<T>` for back references.
+runtime pointers, foreign externals) are never freed. Reference cycles cannot form: shared
+immutable values cannot point back at themselves, and a `Shared<T>` payload must be a Copy or shared
+immutable value (`Shared(new Node(...))` is a type error), so nothing reachable from a `Shared` can be
+changed to point at it. The last strong owner releases the payload; `Weak<T>` keeps only the block.
+
+An array owns the shared values and structs stored in its elements: overwriting an element releases
+the old value, and dropping an array releases its elements. `new T[n]` zero-fills the elements and
+records `n` with the runtime (`csec_array_track`), since an array value carries no length; array
+literals release their fixed number of elements.
 
 A `struct` may hold numbers, other structs and shared immutable values (`String`, enums, closures,
 interface values); every copy of the struct retains them and every struct storage that goes away
@@ -356,10 +363,9 @@ definite-init, drop *placement*. These vanish after type-checking.
 
 **Runtime support required:**
 - Destructors: emitted `Drop` calls invoke type dtors / `free` (already: box → `free`). **[impl]**
-- `Shared<T>`: a heap control block `{ strong:i64, weak:i64, value:T }`; `.clone()` bumps `strong`,
-  drop decrements and frees `value` at 0 and the block at 0/0. Non-atomic by default; `SharedSync<T>`
-  uses atomic counters. Cycles leak unless broken with `Weak<T>` (weak does not keep `value` alive).
-  **[plan]**
+- `Shared<T>`: a heap control block `{ strong:i64, weak:i64, drop:ptr, value:T }`; `.clone()` bumps
+  `strong` atomically, the last strong owner calls `drop` on `value` (null when `T` holds nothing to
+  release) and the block is freed at 0/0. The payload is immutable, so cycles cannot form. **[impl]**
 - Globals: a deterministic init list and a reverse-order shutdown dtor list. **[plan]**
 - Unwind/panic: a personality-driven cleanup path that runs the same emitted `Drop`s. csec today
   uses scope cleanup lists (`registerCleanup`/`emitAllCleanups`); the panic path reuses them. **[partial]**

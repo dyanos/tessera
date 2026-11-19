@@ -1,0 +1,6 @@
+class Node(value: Int) { }
+
+def main(): Int {
+    val shared = Shared(new Node(1));
+    return 0;
+}
