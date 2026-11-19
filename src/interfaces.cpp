@@ -393,7 +393,9 @@ llvm::Value* InterfaceWrapNode::codegen() {
         }
     }
     else if (isStrictOwnership()) {
-        objectDrop = cg.freeFunction;
+        cg.takeOwned(object, &classType);
+        llvm::Function* heapDrop = cg.structHeapDropFunction(&classType);
+        objectDrop = heapDrop ? heapDrop : cg.freeFunction;
     }
     llvm::Value* vtable = vtableFor(className, *info);
     auto* pairTy = llvm::StructType::get(cg.context, {ptrTy, ptrTy, ptrTy});

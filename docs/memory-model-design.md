@@ -44,7 +44,7 @@ lower learning cost, which is the stated goal.
 
 | Category | Examples | Assignment | Passed to fn | Destroyed |
 |---|---|---|---|---|
-| **Copy** | `Int Long Float Double Bool Char Byte Short`, structs of Copy fields | implicit copy | by value (copy) | trivially (no dtor) |
+| **Copy** | `Int Long Float Double Bool Char Byte Short`, structs | implicit copy (a struct retains the shared values it holds) | by value (copy) | a struct releases the shared values it holds |
 | **Owned (move)** | `box T`, reference classes, arrays/vectors, `Tensor`, `Dict`, `Set`, `Map`, `List`, `Shared<T>`, `Weak<T>` | **move** (`<-`) | move (`<-`, callee drops it) or `&`/`&mut` (borrow) | scope exit, reassignment, or the owner's drop |
 | **Shared immutable** | `String`, heap enums (recursive or with non-scalar payloads, e.g. `Option<String>`), escaping closures, interface values | implicit copy (reference count +1) | borrowed (+0) | when the last reference goes |
 | **Borrow** | `&T`, `&mut T` | copy of the reference (still lexically bound) | by value | nothing (non-owning) |
@@ -54,6 +54,11 @@ a value that cannot change is copied freely. Shared immutable values are referen
 runtime (`csec_rc_*`, keyed by address); values the runtime does not track (literals, borrowed
 runtime pointers, foreign externals) are never freed. Cycles can only be formed through
 `Shared<T>`; use `Weak<T>` for back references.
+
+A `struct` may hold numbers, other structs and shared immutable values (`String`, enums, closures,
+interface values); every copy of the struct retains them and every struct storage that goes away
+(local, field, temporary, boxed interface value) releases them. A struct cannot hold an owned
+(move) value; declare it as a class instead.
 
 Rules the type checker enforces for owned values: binding or passing a named owned value needs `<-`
 (or `&`, or `clone(...)`); an owned field cannot be taken by value or moved out (borrow it with

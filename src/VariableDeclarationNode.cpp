@@ -134,7 +134,8 @@ llvm::Value* VariableDeclarationNode::codegen() {
     // Where a Nat is declared but an integer initializes it (`val n: Nat = 5`, or a literal larger than
     // 64 bits), promote the value to an arbitrary-precision handle before it is stored/bound.
     initValue = coerceToNat(initValue, type.get(), this->initializer.get());
-    if (initValue && initValue->getType()->isPointerTy() && (!type || type->getName() != "String") && !borrowsValue) {
+    if (initValue && (initValue->getType()->isPointerTy() || cg.structHoldsCounted(type.get())) &&
+        (!type || type->getName() != "String") && !borrowsValue) {
         initValue = cg.takeOwned(initValue, type.get());
     }
 
@@ -243,6 +244,11 @@ llvm::Value* VariableDeclarationNode::codegen() {
          arrayVectorFromCall || tensorMoveInitializer || freshTensorInitializer);
 
     if (bindPointerBackedValueDirectly) {
+        if (declaredStructClass && !borrowsValue && declBlock && declBlock->getParent() != cg.mainFunction) {
+            if (llvm::Function* release = cg.structCountFunction(type.get(), false)) {
+                cg.registerStructCleanup(initValue, release);
+            }
+        }
         if (auto* literal = dynamic_cast<ArrayLiteralNode*>(initializer.get());
             literal && isStrictOwnership() && !borrowsValue && llvm::isa<llvm::AllocaInst>(initValue) && !literal->elements.empty() &&
             declBlock && declBlock->getParent() != cg.mainFunction && initValue->getType()->isPointerTy()) {
@@ -388,6 +394,11 @@ llvm::Value* VariableDeclarationNode::codegen() {
     if (stringLocal) initValue = cg.takeOwnedString(initValue);
     cg.builder.CreateStore(initValue, alloc);
     if (stringLocal) cg.registerStringSlotCleanup(alloc);
+    if (declaredStructClass && !borrowsValue && !isField && cg.builder.GetInsertBlock()->getParent() != cg.mainFunction) {
+        if (llvm::Function* release = cg.structCountFunction(type.get(), false)) {
+            cg.registerStructCleanup(alloc, release);
+        }
+    }
     if (type && type->getKind() == Type::Kind::GENERIC && (type->getName() == "Shared" || type->getName() == "Weak") &&
         varType->isPointerTy() && isStrictOwnership() && !borrowsValue &&
         cg.builder.GetInsertBlock()->getParent() != cg.mainFunction) {

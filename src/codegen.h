@@ -111,6 +111,7 @@ public:
     llvm::Function* classDropFunction(const Type* type);
     void emitOwnedValueDrop(llvm::Value* value, const Type* type);
     void registerOwnedValueCleanup(llvm::Value* value, const Type* type);
+    void registerStructCleanup(llvm::Value* storage, llvm::Function* release);
     void markStringFunction(const std::string& name, bool runtimeAllocated);
     llvm::Value* takeOwnedString(llvm::Value* value);
     void promoteTemporaryString(llvm::Value* value);
@@ -122,6 +123,12 @@ public:
     llvm::Function* ownedValueDropFunction(const Type* type);
     bool isRefcountedType(const Type* type);
     bool ownsParameter(const std::string& function, unsigned index) const;
+    std::unordered_map<std::string, std::vector<std::unique_ptr<Type>>> declaredStructFields;
+    std::vector<std::unique_ptr<Type>> structFieldTypes(const Type* type);
+    bool structHoldsCounted(const Type* type, int depth = 0);
+    llvm::Function* structCountFunction(const Type* type, bool retain);
+    void emitStructCount(llvm::Value* storage, const Type* type, bool retain);
+    llvm::Function* structHeapDropFunction(const Type* type);
     llvm::Function* rcReleaseFunction();
     llvm::Function* enumFieldReleaseFunction(const Type* type);
     void finalizeOwnershipFunctions();
@@ -191,6 +198,9 @@ private:
     std::unordered_set<std::string> userStringFunctions;
     std::unordered_set<std::string> runtimeStringFunctions;
     std::unordered_map<std::string, llvm::Function*> ownedResultFunctions;
+public:
+    std::unordered_map<std::string, llvm::Function*> structResultFunctions;
+private:
     std::unordered_map<std::string, std::vector<bool>> ownedParameterMasks;
     std::unordered_map<llvm::AllocaInst*, llvm::Function*> temporaryDrops;
     std::vector<std::string> dictProducerNames;

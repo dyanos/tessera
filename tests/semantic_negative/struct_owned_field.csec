@@ -1,0 +1,6 @@
+class Node(v: Int) { def get(): Int = v }
+struct Wrapper(node: Node) { }
+def main(): Int {
+    val w = new Wrapper(new Node(1));
+    return w.node.get();
+}

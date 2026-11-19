@@ -109,6 +109,9 @@ void markOwnership(CodeGenerator& cg, const std::string& functionName, const Typ
     if (returnType && returnType->getName() != "String" && cg.isRefcountedType(returnType)) {
         cg.markStringFunction(functionName, false);
     }
+    if (llvm::Function* release = cg.structCountFunction(returnType, false)) {
+        cg.structResultFunctions[functionName] = release;
+    }
     std::vector<bool> mask;
     if (hasReceiver) {
         ClassType receiverType(className);

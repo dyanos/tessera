@@ -1089,6 +1089,22 @@ void TypeChecker::visit(ClassDeclarationNode& node) {
         std::unique_ptr<Type> thisType = std::make_unique<ClassType>(node.name);
         bindVariable("this", thisType, false);
     }
+    if (node.isStruct && isStrictOwnership()) {
+        auto rejectOwned = [&](const std::string& fieldName, const Type* fieldType) {
+            if (fieldType && fieldType->getKind() != Type::Kind::UNKNOWN && isMoveCheckedType(fieldType)) {
+                reportError("Type error: struct '" + node.name + "' cannot hold the owned field '" + fieldName + "' of type '" +
+                            fieldType->getName() + "'; structs are copied, so declare '" + node.name + "' as a class");
+            }
+        };
+        for (auto& param : node.constructorParams) {
+            if (auto* p = dynamic_cast<ParameterNode*>(param.get())) rejectOwned(p->name, p->type.get());
+        }
+        if (auto* body = dynamic_cast<ClassBodyNode*>(node.body.get())) {
+            for (auto& field : body->fields) {
+                if (auto* f = dynamic_cast<VariableDeclarationNode*>(field.get())) rejectOwned(f->name, f->type.get());
+            }
+        }
+    }
 
     for (auto& param : node.constructorParams) {
         if (param) {

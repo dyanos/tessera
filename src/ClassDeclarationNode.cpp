@@ -237,6 +237,16 @@ bool ClassDeclarationNode::predeclareLayout() {
         }
     }
     existing->setBody(fieldTypes, false);
+    if (isStruct) {
+        std::vector<std::unique_ptr<Type>> declared;
+        for (auto& field : constructorParams) {
+            if (auto* f = dynamic_cast<ParameterNode*>(field.get())) declared.push_back(f->type ? f->type->clone() : nullptr);
+        }
+        for (auto& field : classBody->fields) {
+            if (auto* f = dynamic_cast<VariableDeclarationNode*>(field.get())) declared.push_back(f->type ? f->type->clone() : nullptr);
+        }
+        cg.declaredStructFields[name] = std::move(declared);
+    }
     // Constructor parameters too, so `new Later(...)` works in classes declared before `Later`.
     // codegen() refills these when it reaches this class.
     if (classSymbol->constructorParamOrder.empty()) {

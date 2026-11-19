@@ -14,6 +14,10 @@
 #include <algorithm>
 
 #include "ProgramNode.h"
+#include "ClassDeclarationNode.h"
+#include "ClassBodyNode.h"
+#include "ParameterNode.h"
+#include "VariableDeclarationNode.h"
 
 
 namespace {
@@ -518,6 +522,10 @@ void CodeGenerator::emitClassDropBody(llvm::Function* fn, const Type* type) {
     for (auto& slot : slots) {
         if (slot.first >= layout->getNumElements()) continue;
         llvm::Type* storage = layout->getElementType(slot.first);
+        if (storage->isStructTy() && structHoldsCounted(slot.second.get())) {
+            emitStructCount(builder.CreateStructGEP(layout, object, slot.first, "drop.struct"), slot.second.get(), false);
+            continue;
+        }
         if (!storage->isPointerTy()) continue;
         llvm::Value* fieldPtr = builder.CreateStructGEP(layout, object, slot.first, "drop.field");
         llvm::Value* fieldValue = builder.CreateLoad(storage, fieldPtr, "drop.value");
@@ -740,6 +748,15 @@ void CodeGenerator::onInstructionInserted(llvm::Instruction* inst) {
         }
         --stringHookDepth;
     }
+    if (auto counted = structResultFunctions.find(name); counted != structResultFunctions.end() &&
+        call->getType()->isStructTy() && !temporaryFrames.empty() && temporaryFrames.back().function == call->getFunction()) {
+        ++stringHookDepth;
+        llvm::AllocaInst* spill = createEntryAlloca(call->getType(), "tmp.struct");
+        builder.CreateStore(call, spill);
+        registerOwnedTemporary(spill, counted->second);
+        --stringHookDepth;
+        return;
+    }
     if (!call->getType()->isPointerTy()) return;
     if (auto owned = ownedResultFunctions.find(name); owned != ownedResultFunctions.end()) {
         ++stringHookDepth;
@@ -847,6 +864,119 @@ void CodeGenerator::markOwnedParameters(const std::string& name, std::vector<boo
     if (!name.empty() && any) ownedParameterMasks[name] = std::move(mask);
 }
 
+std::vector<std::unique_ptr<Type>> CodeGenerator::structFieldTypes(const Type* type) {
+    std::vector<std::unique_ptr<Type>> result;
+    if (!type || !isStructClassType(type)) return result;
+    auto found = declaredStructFields.find(type->getName());
+    if (found != declaredStructFields.end()) {
+        for (const auto& field : found->second) result.push_back(field ? field->clone() : nullptr);
+        return result;
+    }
+    std::string templateName;
+    std::vector<std::unique_ptr<Type>> arguments;
+    if (!templateInstanceArguments(type->getName(), &templateName, &arguments)) return result;
+    auto* templateSymbol = dynamic_cast<TemplateSymbol*>(symbolTable.lookup(templateName));
+    auto* declaration = templateSymbol ? dynamic_cast<ClassDeclarationNode*>(templateSymbol->declaration.get()) : nullptr;
+    if (!declaration) return result;
+    auto substitute = [&](const std::unique_ptr<Type>& fieldType) -> std::unique_ptr<Type> {
+        if (!fieldType) return nullptr;
+        for (size_t k = 0; k < templateSymbol->typeParameters.size() && k < arguments.size(); ++k) {
+            if (fieldType->getName() == templateSymbol->typeParameters[k] && arguments[k]) return arguments[k]->clone();
+        }
+        return fieldType->clone();
+    };
+    for (auto& field : declaration->constructorParams) {
+        if (auto* f = dynamic_cast<ParameterNode*>(field.get())) result.push_back(substitute(f->type));
+    }
+    if (auto* body = dynamic_cast<ClassBodyNode*>(declaration->body.get())) {
+        for (auto& field : body->fields) {
+            if (auto* f = dynamic_cast<VariableDeclarationNode*>(field.get())) result.push_back(substitute(f->type));
+        }
+    }
+    return result;
+}
+
+bool CodeGenerator::structHoldsCounted(const Type* type, int depth) {
+    if (!isStrictOwnership() || depth > 8 || !type || !isStructClassType(type)) return false;
+    for (const auto& field : structFieldTypes(type)) {
+        if (!field) continue;
+        if (isRefcountedType(field.get())) return true;
+        if (isStructClassType(field.get()) && structHoldsCounted(field.get(), depth + 1)) return true;
+    }
+    return false;
+}
+
+llvm::Function* CodeGenerator::structCountFunction(const Type* type, bool retain) {
+    if (!structHoldsCounted(type)) return nullptr;
+    const std::string name = std::string(retain ? "__csec_struct_retain." : "__csec_struct_release.") + type->getName();
+    if (llvm::Function* existing = module->getFunction(name)) return existing;
+    auto* ptrTy = llvm::PointerType::getUnqual(context);
+    auto* fn = llvm::Function::Create(llvm::FunctionType::get(llvm::Type::getVoidTy(context), { ptrTy }, false),
+                                      llvm::Function::InternalLinkage, name, module.get());
+    auto* layout = llvm::dyn_cast_or_null<llvm::StructType>(getLLVMType(type));
+    llvm::IRBuilderBase::InsertPointGuard guard(builder);
+    builder.SetCurrentDebugLocation(llvm::DebugLoc());
+    ++stringHookDepth;
+    auto* entryBB = llvm::BasicBlock::Create(context, "entry", fn);
+    auto* bodyBB = llvm::BasicBlock::Create(context, "count", fn);
+    auto* doneBB = llvm::BasicBlock::Create(context, "done", fn);
+    builder.SetInsertPoint(entryBB);
+    builder.CreateCondBr(builder.CreateIsNull(fn->getArg(0)), doneBB, bodyBB);
+    builder.SetInsertPoint(bodyBB);
+    if (layout && !layout->isOpaque()) {
+        auto fields = structFieldTypes(type);
+        for (unsigned i = 0; i < fields.size() && i < layout->getNumElements(); ++i) {
+            const Type* field = fields[i].get();
+            if (!field) continue;
+            llvm::Value* fieldPtr = builder.CreateStructGEP(layout, fn->getArg(0), i, "struct.field");
+            if (isRefcountedType(field)) {
+                llvm::Value* value = builder.CreateLoad(ptrTy, fieldPtr, "struct.value");
+                builder.CreateCall(rcFunction(retain ? "csec_rc_retain" : "csec_rc_release"), { value });
+            }
+            else if (isStructClassType(field)) {
+                if (llvm::Function* nested = structCountFunction(field, retain)) builder.CreateCall(nested, { fieldPtr });
+            }
+        }
+    }
+    builder.CreateBr(doneBB);
+    builder.SetInsertPoint(doneBB);
+    builder.CreateRetVoid();
+    --stringHookDepth;
+    return fn;
+}
+
+void CodeGenerator::emitStructCount(llvm::Value* storage, const Type* type, bool retain) {
+    llvm::Function* fn = structCountFunction(type, retain);
+    if (!fn || !storage || !builder.GetInsertBlock()) return;
+    llvm::Value* pointer = storage;
+    if (!storage->getType()->isPointerTy()) {
+        pointer = createEntryAlloca(storage->getType(), "struct.copy");
+        builder.CreateStore(storage, pointer);
+    }
+    ++stringHookDepth;
+    builder.CreateCall(fn, { pointer });
+    --stringHookDepth;
+}
+
+llvm::Function* CodeGenerator::structHeapDropFunction(const Type* type) {
+    llvm::Function* release = structCountFunction(type, false);
+    if (!release) return nullptr;
+    const std::string name = "__csec_struct_heap_drop." + type->getName();
+    if (llvm::Function* existing = module->getFunction(name)) return existing;
+    auto* ptrTy = llvm::PointerType::getUnqual(context);
+    auto* fn = llvm::Function::Create(llvm::FunctionType::get(llvm::Type::getVoidTy(context), { ptrTy }, false),
+                                      llvm::Function::InternalLinkage, name, module.get());
+    llvm::IRBuilderBase::InsertPointGuard guard(builder);
+    builder.SetCurrentDebugLocation(llvm::DebugLoc());
+    ++stringHookDepth;
+    builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", fn));
+    builder.CreateCall(release, { fn->getArg(0) });
+    builder.CreateCall(freeFunction, { fn->getArg(0) });
+    builder.CreateRetVoid();
+    --stringHookDepth;
+    return fn;
+}
+
 bool CodeGenerator::ownsParameter(const std::string& function, unsigned index) const {
     auto found = ownedParameterMasks.find(function);
     return found != ownedParameterMasks.end() && index < found->second.size() && found->second[index];
@@ -890,6 +1020,12 @@ void CodeGenerator::registerArrayElementsCleanup(llvm::Value* array, const Type*
     }
     registerOwned(array, CleanupKind::Free);
     dropFunctions[array] = fn;
+}
+
+void CodeGenerator::registerStructCleanup(llvm::Value* storage, llvm::Function* release) {
+    if (!storage || !release) return;
+    registerOwned(storage, CleanupKind::Free);
+    dropFunctions[storage] = release;
 }
 
 void CodeGenerator::registerHandleSlotCleanup(llvm::Value* slot, bool weak) {
@@ -940,6 +1076,10 @@ void CodeGenerator::emitEnumReleaseBody(llvm::Function* fn, const Type* type) {
     for (auto& slot : slots) {
         if (slot.first >= layout->getNumElements()) continue;
         llvm::Type* storage = layout->getElementType(slot.first);
+        if (storage->isStructTy() && structHoldsCounted(slot.second.get())) {
+            emitStructCount(builder.CreateStructGEP(layout, object, slot.first), slot.second.get(), false);
+            continue;
+        }
         if (!storage->isPointerTy()) continue;
         llvm::Value* fieldValue = builder.CreateLoad(storage, builder.CreateStructGEP(layout, object, slot.first), "enum.field");
         if (isRefcountedType(slot.second.get())) builder.CreateCall(rcReleaseFunction(), { fieldValue });
@@ -958,6 +1098,10 @@ llvm::Function* CodeGenerator::ownedValueDropFunction(const Type* type) {
 }
 
 llvm::Value* CodeGenerator::takeOwned(llvm::Value* value, const Type* type) {
+    if (value && builder.GetInsertBlock() && structHoldsCounted(type)) {
+        emitStructCount(value, type, true);
+        return value;
+    }
     if (!value || !value->getType()->isPointerTy() || !builder.GetInsertBlock()) return value;
     if (isRefcountedType(type)) return takeOwnedString(value);
     if (transferTemporary(value)) return value;
