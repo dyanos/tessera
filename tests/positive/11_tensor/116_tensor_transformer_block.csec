@@ -1,36 +1,36 @@
 def linear(
-    x: Tensor<Double, 2, 4>,
-    weight: Tensor<Double, 4, 4>,
-    bias: Tensor<Double, 2, 4>
+    x: &Tensor<Double, 2, 4>,
+    weight: &Tensor<Double, 4, 4>,
+    bias: &Tensor<Double, 2, 4>
 ): Tensor<Double, 2, 4> {
     return (x @ weight) + bias;
 }
 
 def feedForward(
-    x: Tensor<Double, 2, 4>,
-    w1: Tensor<Double, 4, 8>,
-    b1: Tensor<Double, 2, 8>,
-    w2: Tensor<Double, 8, 4>,
-    b2: Tensor<Double, 2, 4>
+    x: &Tensor<Double, 2, 4>,
+    w1: &Tensor<Double, 4, 8>,
+    b1: &Tensor<Double, 2, 8>,
+    w2: &Tensor<Double, 8, 4>,
+    b2: &Tensor<Double, 2, 4>
 ): Tensor<Double, 2, 4> {
     val hidden: Tensor<Double, 2, 8> = (x @ w1) + b1;
     return (hidden @ w2) + b2;
 }
 
 def scaledDotProductAttention(
-    query: Tensor<Double, 2, 4>,
-    key: Tensor<Double, 2, 4>,
-    value: Tensor<Double, 2, 4>
+    query: &Tensor<Double, 2, 4>,
+    key: &Tensor<Double, 2, 4>,
+    value: &Tensor<Double, 2, 4>
 ): Tensor<Double, 2, 4> {
     val scale = 0.5;
     val scores: Tensor<Double, 2, 2> = (query @ transpose(key)) * scale;
-    val probabilities: Tensor<Double, 2, 2> = scores;
+    val probabilities: Tensor<Double, 2, 2> = <- scores;
     return probabilities @ value;
 }
 
 def residualAdd(
-    input: Tensor<Double, 2, 4>,
-    update: Tensor<Double, 2, 4>
+    input: &Tensor<Double, 2, 4>,
+    update: &Tensor<Double, 2, 4>
 ): Tensor<Double, 2, 4> {
     return input + update;
 }
@@ -40,77 +40,75 @@ def randomInit(seed: Double): Double {
 }
 
 def transformerBlock(
-    tokens: Tensor<Double, 2, 4>,
-    wq: Tensor<Double, 4, 4>,
-    wk: Tensor<Double, 4, 4>,
-    wv: Tensor<Double, 4, 4>,
-    wo: Tensor<Double, 4, 4>,
-    attentionBias: Tensor<Double, 2, 4>,
-    ffnW1: Tensor<Double, 4, 8>,
-    ffnB1: Tensor<Double, 2, 8>,
-    ffnW2: Tensor<Double, 8, 4>,
-    ffnB2: Tensor<Double, 2, 4>
+    tokens: &Tensor<Double, 2, 4>,
+    wq: &Tensor<Double, 4, 4>,
+    wk: &Tensor<Double, 4, 4>,
+    wv: &Tensor<Double, 4, 4>,
+    wo: &Tensor<Double, 4, 4>,
+    attentionBias: &Tensor<Double, 2, 4>,
+    ffnW1: &Tensor<Double, 4, 8>,
+    ffnB1: &Tensor<Double, 2, 8>,
+    ffnW2: &Tensor<Double, 8, 4>,
+    ffnB2: &Tensor<Double, 2, 4>
 ): Tensor<Double, 2, 4> {
     val query = tokens @ wq;
     val key = tokens @ wk;
     val value = tokens @ wv;
-    val context = scaledDotProductAttention(query, key, value);
-    val projected = linear(context, wo, attentionBias);
-    val attentionResidual = residualAdd(tokens, projected);
-    val ffnUpdate = feedForward(attentionResidual, ffnW1, ffnB1, ffnW2, ffnB2);
-    return residualAdd(attentionResidual, ffnUpdate);
+    val context = scaledDotProductAttention(&query, &key, &value);
+    val projected = linear(&context, &wo, &attentionBias);
+    val attentionResidual = residualAdd(&tokens, &projected);
+    val ffnUpdate = feedForward(&attentionResidual, &ffnW1, &ffnB1, &ffnW2, &ffnB2);
+    return residualAdd(&attentionResidual, &ffnUpdate);
 }
 
 def transformerEncoder2Layer(
-    tokens: Tensor<Double, 2, 4>,
-    layer1Wq: Tensor<Double, 4, 4>,
-    layer1Wk: Tensor<Double, 4, 4>,
-    layer1Wv: Tensor<Double, 4, 4>,
-    layer1Wo: Tensor<Double, 4, 4>,
-    layer1AttentionBias: Tensor<Double, 2, 4>,
-    layer1FfnW1: Tensor<Double, 4, 8>,
-    layer1FfnB1: Tensor<Double, 2, 8>,
-    layer1FfnW2: Tensor<Double, 8, 4>,
-    layer1FfnB2: Tensor<Double, 2, 4>,
-    layer2Wq: Tensor<Double, 4, 4>,
-    layer2Wk: Tensor<Double, 4, 4>,
-    layer2Wv: Tensor<Double, 4, 4>,
-    layer2Wo: Tensor<Double, 4, 4>,
-    layer2AttentionBias: Tensor<Double, 2, 4>,
-    layer2FfnW1: Tensor<Double, 4, 8>,
-    layer2FfnB1: Tensor<Double, 2, 8>,
-    layer2FfnW2: Tensor<Double, 8, 4>,
-    layer2FfnB2: Tensor<Double, 2, 4>
+    tokens: &Tensor<Double, 2, 4>,
+    layer1Wq: &Tensor<Double, 4, 4>,
+    layer1Wk: &Tensor<Double, 4, 4>,
+    layer1Wv: &Tensor<Double, 4, 4>,
+    layer1Wo: &Tensor<Double, 4, 4>,
+    layer1AttentionBias: &Tensor<Double, 2, 4>,
+    layer1FfnW1: &Tensor<Double, 4, 8>,
+    layer1FfnB1: &Tensor<Double, 2, 8>,
+    layer1FfnW2: &Tensor<Double, 8, 4>,
+    layer1FfnB2: &Tensor<Double, 2, 4>,
+    layer2Wq: &Tensor<Double, 4, 4>,
+    layer2Wk: &Tensor<Double, 4, 4>,
+    layer2Wv: &Tensor<Double, 4, 4>,
+    layer2Wo: &Tensor<Double, 4, 4>,
+    layer2AttentionBias: &Tensor<Double, 2, 4>,
+    layer2FfnW1: &Tensor<Double, 4, 8>,
+    layer2FfnB1: &Tensor<Double, 2, 8>,
+    layer2FfnW2: &Tensor<Double, 8, 4>,
+    layer2FfnB2: &Tensor<Double, 2, 4>
 ): Tensor<Double, 2, 4> {
     val hidden1 = transformerBlock(
-        tokens,
-        layer1Wq,
-        layer1Wk,
-        layer1Wv,
-        layer1Wo,
-        layer1AttentionBias,
-        layer1FfnW1,
-        layer1FfnB1,
-        layer1FfnW2,
-        layer1FfnB2
-    );
+        &tokens,
+        &layer1Wq,
+        &layer1Wk,
+        &layer1Wv,
+        &layer1Wo,
+        &layer1AttentionBias,
+        &layer1FfnW1,
+        &layer1FfnB1,
+        &layer1FfnW2,
+        &layer1FfnB2);
     return transformerBlock(
-        hidden1,
-        layer2Wq,
-        layer2Wk,
-        layer2Wv,
-        layer2Wo,
-        layer2AttentionBias,
-        layer2FfnW1,
-        layer2FfnB1,
-        layer2FfnW2,
-        layer2FfnB2
-    );
+        &hidden1,
+        &layer2Wq,
+        &layer2Wk,
+        &layer2Wv,
+        &layer2Wo,
+        &layer2AttentionBias,
+        &layer2FfnW1,
+        &layer2FfnB1,
+        &layer2FfnW2,
+        &layer2FfnB2);
 }
 
 def mseLoss(
-    prediction: Tensor<Double, 2, 4>,
-    target: Tensor<Double, 2, 4>
+    prediction: &Tensor<Double, 2, 4>,
+    target: &Tensor<Double, 2, 4>
 ): Double {
     val d00 = prediction[0, 0] - target[0, 0];
     val d01 = prediction[0, 1] - target[0, 1];
@@ -133,7 +131,7 @@ def mseLoss(
 }
 
 def sgd4x4(
-    weight: Tensor<Double, 4, 4>,
+    weight: &Tensor<Double, 4, 4>,
     learningRate: Double,
     loss: Double
 ): Tensor<Double, 4, 4> {
@@ -142,7 +140,7 @@ def sgd4x4(
 }
 
 def sgd4x8(
-    weight: Tensor<Double, 4, 8>,
+    weight: &Tensor<Double, 4, 8>,
     learningRate: Double,
     loss: Double
 ): Tensor<Double, 4, 8> {
@@ -151,7 +149,7 @@ def sgd4x8(
 }
 
 def sgd8x4(
-    weight: Tensor<Double, 8, 4>,
+    weight: &Tensor<Double, 8, 4>,
     learningRate: Double,
     loss: Double
 ): Tensor<Double, 8, 4> {
@@ -187,64 +185,62 @@ def main(): Int {
     val layer2FfnB2: Tensor<Double, 2, 4> = new Tensor<Double, 2, 4>(0.0);
 
     var encoded: Tensor<Double, 2, 4> = transformerEncoder2Layer(
-        tokens,
-        layer1Wq,
-        layer1Wk,
-        layer1Wv,
-        layer1Wo,
-        layer1AttentionBias,
-        layer1FfnW1,
-        layer1FfnB1,
-        layer1FfnW2,
-        layer1FfnB2,
-        layer2Wq,
-        layer2Wk,
-        layer2Wv,
-        layer2Wo,
-        layer2AttentionBias,
-        layer2FfnW1,
-        layer2FfnB1,
-        layer2FfnW2,
-        layer2FfnB2
-    );
+        &tokens,
+        &layer1Wq,
+        &layer1Wk,
+        &layer1Wv,
+        &layer1Wo,
+        &layer1AttentionBias,
+        &layer1FfnW1,
+        &layer1FfnB1,
+        &layer1FfnW2,
+        &layer1FfnB2,
+        &layer2Wq,
+        &layer2Wk,
+        &layer2Wv,
+        &layer2Wo,
+        &layer2AttentionBias,
+        &layer2FfnW1,
+        &layer2FfnB1,
+        &layer2FfnW2,
+        &layer2FfnB2);
 
     while (epoch < 3) {
         encoded = transformerEncoder2Layer(
-            tokens,
-            layer1Wq,
-            layer1Wk,
-            layer1Wv,
-            layer1Wo,
-            layer1AttentionBias,
-            layer1FfnW1,
-            layer1FfnB1,
-            layer1FfnW2,
-            layer1FfnB2,
-            layer2Wq,
-            layer2Wk,
-            layer2Wv,
-            layer2Wo,
-            layer2AttentionBias,
-            layer2FfnW1,
-            layer2FfnB1,
-            layer2FfnW2,
-            layer2FfnB2
-        );
-        loss = mseLoss(encoded, target);
+            &tokens,
+            &layer1Wq,
+            &layer1Wk,
+            &layer1Wv,
+            &layer1Wo,
+            &layer1AttentionBias,
+            &layer1FfnW1,
+            &layer1FfnB1,
+            &layer1FfnW2,
+            &layer1FfnB2,
+            &layer2Wq,
+            &layer2Wk,
+            &layer2Wv,
+            &layer2Wo,
+            &layer2AttentionBias,
+            &layer2FfnW1,
+            &layer2FfnB1,
+            &layer2FfnW2,
+            &layer2FfnB2);
+        loss = mseLoss(&encoded, &target);
 
-        layer1Wq = sgd4x4(layer1Wq, learningRate, loss);
-        layer1Wk = sgd4x4(layer1Wk, learningRate, loss);
-        layer1Wv = sgd4x4(layer1Wv, learningRate, loss);
-        layer1Wo = sgd4x4(layer1Wo, learningRate, loss);
-        layer1FfnW1 = sgd4x8(layer1FfnW1, learningRate, loss);
-        layer1FfnW2 = sgd8x4(layer1FfnW2, learningRate, loss);
+        layer1Wq = sgd4x4(&layer1Wq, learningRate, loss);
+        layer1Wk = sgd4x4(&layer1Wk, learningRate, loss);
+        layer1Wv = sgd4x4(&layer1Wv, learningRate, loss);
+        layer1Wo = sgd4x4(&layer1Wo, learningRate, loss);
+        layer1FfnW1 = sgd4x8(&layer1FfnW1, learningRate, loss);
+        layer1FfnW2 = sgd8x4(&layer1FfnW2, learningRate, loss);
 
-        layer2Wq = sgd4x4(layer2Wq, learningRate, loss);
-        layer2Wk = sgd4x4(layer2Wk, learningRate, loss);
-        layer2Wv = sgd4x4(layer2Wv, learningRate, loss);
-        layer2Wo = sgd4x4(layer2Wo, learningRate, loss);
-        layer2FfnW1 = sgd4x8(layer2FfnW1, learningRate, loss);
-        layer2FfnW2 = sgd8x4(layer2FfnW2, learningRate, loss);
+        layer2Wq = sgd4x4(&layer2Wq, learningRate, loss);
+        layer2Wk = sgd4x4(&layer2Wk, learningRate, loss);
+        layer2Wv = sgd4x4(&layer2Wv, learningRate, loss);
+        layer2Wo = sgd4x4(&layer2Wo, learningRate, loss);
+        layer2FfnW1 = sgd4x8(&layer2FfnW1, learningRate, loss);
+        layer2FfnW2 = sgd8x4(&layer2FfnW2, learningRate, loss);
 
         epoch = epoch + 1;
     }

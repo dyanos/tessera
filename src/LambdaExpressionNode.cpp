@@ -362,7 +362,7 @@ llvm::Value* LambdaExpressionNode::codegen() {
                 value = cg.copyStackBufferToHeap(value);
                 cg.noteMoved(captured[i].outerValue);
             }
-            if (captured[i].semanticType && captured[i].semanticType->getName() == "String") value = cg.takeOwnedString(value);
+            value = cg.takeOwned(value, captured[i].semanticType.get());
             cg.builder.CreateStore(value, slot);
         }
     }

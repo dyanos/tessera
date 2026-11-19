@@ -52,6 +52,7 @@ public:
     // Free the instance at scope exit (set by BlockNode for a `new` local used only in ways that
     // keep it the sole owner of the allocation).
     bool autoDrop = false;
+    bool borrowsValue = false;
 
     void accept(ASTVisitor& visitor) override;
     llvm::Value* codegen() override;

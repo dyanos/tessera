@@ -2066,6 +2066,11 @@ llvm::Value* FunctionCallNode::codegen() {
     // is read (not moved), so `b = clone(a)` leaves `a` usable — this is the explicit-clone escape
     // hatch from the ownership model. MVP semantics are a shallow copy of the boxed payload; a deep
     // clone of nested heap references is a future refinement.
+    if (functionName == "clone" && !argTypes.empty() && argTypes[0] && !argValues.empty() && argValues[0] &&
+        TensorRuntime::isTensorTypeName(stripBorrow(argTypes[0])->getName())) {
+        return TensorRuntime::elementwiseTensorScalar(
+            cg, argValues[0], llvm::ConstantFP::get(llvm::Type::getDoubleTy(cg.context), 0.0), "+", true);
+    }
     if (functionName == "clone") {
         BoxType* boxType = (!argTypes.empty() && argTypes[0])
             ? dynamic_cast<BoxType*>(argTypes[0].get()) : nullptr;
@@ -2095,7 +2100,7 @@ llvm::Value* FunctionCallNode::codegen() {
             return nullptr;
         }
         llvm::Value* payload = argValues[0];
-        if (!argTypes.empty() && argTypes[0] && argTypes[0]->getName() == "String") payload = cg.takeOwnedString(payload);
+        if (!argTypes.empty() && argTypes[0]) payload = cg.takeOwned(payload, argTypes[0].get());
         auto* i64Ty = llvm::Type::getInt64Ty(cg.context);
         // Control block { strong, weak, payload }. strong keeps the payload alive; weak keeps only
         // the block alive (for Weak<T> handles), so a cycle with a Weak edge is still reclaimed.
@@ -2567,7 +2572,7 @@ std::unique_ptr<Type> FunctionCallNode::getType() {
     // clone(x) yields a fresh independently-owned value of the same type as x; it does not move x.
     if (functionName == "clone") {
         if (!arguments.empty() && arguments[0]) {
-            return arguments[0]->getType();
+            return stripBorrow(arguments[0]->getType());
         }
         return std::make_unique<UnknownType>();
     }

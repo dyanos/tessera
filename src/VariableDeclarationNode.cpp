@@ -1,4 +1,7 @@
 #include "codegen.h"
+#include "type_checker.h"
+#include "IdentifierNode.h"
+#include "AccessFieldNode.h"
 
 #include "VariableDeclarationNode.h"
 #include "ASTVisitor.h"
@@ -130,6 +133,9 @@ llvm::Value* VariableDeclarationNode::codegen() {
     // Where a Nat is declared but an integer initializes it (`val n: Nat = 5`, or a literal larger than
     // 64 bits), promote the value to an arbitrary-precision handle before it is stored/bound.
     initValue = coerceToNat(initValue, type.get(), this->initializer.get());
+    if (initValue && initValue->getType()->isPointerTy() && (!type || type->getName() != "String") && !borrowsValue) {
+        initValue = cg.takeOwned(initValue, type.get());
+    }
 
     // A Nat variable lives in a slot holding its handle (a ptr), so a `var` can be reassigned
     // (`fact = fact * i`). Reads load the handle (IdentifierNode); assignments store a new one.
@@ -207,13 +213,19 @@ llvm::Value* VariableDeclarationNode::codegen() {
     const bool tensorMoveInitializer = type && type->getName() == "Tensor" &&
         prefixInitializer && prefixInitializer->op == "<-";
     llvm::BasicBlock* declBlock = cg.builder.GetInsertBlock();
+    const bool ownsTensorResult = cg.isFreshTensor(initValue) ||
+        (isStrictOwnership() && !dynamic_cast<IdentifierNode*>(initializer.get()) &&
+         !dynamic_cast<AccessFieldNode*>(initializer.get()) &&
+         !(prefixInitializer && (prefixInitializer->op == "&" || prefixInitializer->op == "&mut")));
     const bool freshTensorInitializer = autoDrop && type && type->getName() == "Tensor" &&
-        cg.isFreshTensor(initValue) && declBlock && declBlock->getParent() != cg.mainFunction;
+        initValue && initValue->getType()->isPointerTy() && ownsTensorResult &&
+        declBlock && declBlock->getParent() != cg.mainFunction;
 
     const bool bindPointerBackedValueDirectly =
         initValue &&
         initValue->getType()->isPointerTy() &&
         !(isMutable && type && type->getName() == "Tensor") &&
+        !(isMutable && type && type->getKind() == Type::Kind::CLASS && !declaredStructClass) &&
         (dynamic_cast<ClassInstanceCreationNode*>(initializer.get()) != nullptr ||
          dynamic_cast<ArrayCreationExpressionNode*>(initializer.get()) != nullptr ||
          dynamic_cast<ArrayLiteralNode*>(initializer.get()) != nullptr ||
@@ -238,16 +250,23 @@ llvm::Value* VariableDeclarationNode::codegen() {
             if (moveInitializer) cg.forgetCleanup(initValue);
             cg.registerCleanup(initValue);
         }
+        else if (cg.isRefcountedType(type.get()) && isStrictOwnership() && declBlock && !borrowsValue &&
+                 declBlock->getParent() != cg.mainFunction) {
+            llvm::AllocaInst* holder = cg.createEntryAlloca(initValue->getType(), name + ".owner");
+            cg.builder.CreateStore(initValue, holder);
+            cg.registerStringSlotCleanup(holder);
+        }
         else if (autoDrop && type->getKind() == Type::Kind::CLASS && !declaredStructClass) {
             if (!moveInitializer || cg.hasCleanup(initValue)) cg.registerOwnedValueCleanup(initValue, type.get());
         }
         else if (type->getName() == "Tensor") {
+            bool sourceOwned = true;
             if (tensorMoveInitializer) {
                 // The source and destination denote the same allocation. Transfer its one drop
                 // obligation to this binding instead of keeping two stale registrations.
-                cg.forgetCleanup(initValue);
+                sourceOwned = cg.forgetCleanup(initValue) || cg.isTensorAllocation(initValue);
             }
-            if (autoDrop && (!tensorMoveInitializer || cg.isTensorAllocation(initValue))) {
+            if (autoDrop && sourceOwned) {
                 cg.registerTensorCleanup(initValue);
             }
         }
@@ -284,7 +303,8 @@ llvm::Value* VariableDeclarationNode::codegen() {
         return constVal;
     }
 
-    llvm::Type* varType = cg.getLLVMType(type.get());
+    llvm::Type* varType = (type && type->getKind() == Type::Kind::CLASS && !declaredStructClass)
+        ? getABIStorageType(type.get()) : cg.getLLVMType(type.get());
     if (!varType) {
         std::cerr << "Error: Unsupported variable type '" << type->getName() << "'" << std::endl;
         return nullptr;
@@ -336,10 +356,38 @@ llvm::Value* VariableDeclarationNode::codegen() {
 
     llvm::AllocaInst* alloc = cg.builder.CreateAlloca(varType, nullptr, name.c_str());
 
-    const bool stringLocal = type && type->getName() == "String" && !isField && varType->isPointerTy();
+    const bool stringLocal = type && type->getName() == "String" && !isField && varType->isPointerTy() && !borrowsValue;
     if (stringLocal) initValue = cg.takeOwnedString(initValue);
     cg.builder.CreateStore(initValue, alloc);
     if (stringLocal) cg.registerStringSlotCleanup(alloc);
+    const bool referenceLocal = !borrowsValue && type && type->getKind() == Type::Kind::CLASS && !declaredStructClass &&
+        varType->isPointerTy() && cg.builder.GetInsertBlock()->getParent() != cg.mainFunction && isStrictOwnership();
+    if (referenceLocal && cg.isRefcountedType(type.get())) {
+        cg.registerStringSlotCleanup(alloc);
+    }
+    else if (referenceLocal && autoDrop && !typeIsCopy(type.get())) {
+        cg.registerOwnedSlotCleanup(alloc, cg.classDropFunction(type.get()));
+    }
+    const bool dictLocal = type && type->getKind() == Type::Kind::GENERIC &&
+        (type->getName() == "Dict" || type->getName() == "Set");
+    if (dictLocal && isStrictOwnership() && varType->isPointerTy() &&
+        cg.builder.GetInsertBlock()->getParent() != cg.mainFunction && initializer) {
+        bool owning = !dynamic_cast<IdentifierNode*>(initializer.get()) &&
+            !dynamic_cast<AccessFieldNode*>(initializer.get()) &&
+            !dynamic_cast<ArrayAccessNode*>(initializer.get()) &&
+            !(prefixInitializer && (prefixInitializer->op == "&" || prefixInitializer->op == "&mut"));
+        if (auto* call = dynamic_cast<MethodCallNode*>(initializer.get())) {
+            owning = owning && call->methodName != "get" && call->methodName != "getOr" &&
+                     call->methodName != "valueAt" && call->methodName != "value";
+        }
+        if (owning) cg.registerDictSlotCleanup(alloc);
+    }
+    if (type && type->getName() == "Tensor" && isMutable && isStrictOwnership() && ownsTensorResult &&
+        varType->isPointerTy() && cg.builder.GetInsertBlock()->getParent() != cg.mainFunction) {
+        if (!tensorMoveInitializer || cg.forgetCleanup(initValue) || cg.isTensorAllocation(initValue)) {
+            cg.registerTensorSlotCleanup(alloc);
+        }
+    }
 
     cg.symbolTable.addSymbol(
         name,

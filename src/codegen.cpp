@@ -114,6 +114,9 @@ CodeGenerator::CodeGenerator()
     runtimeStringFunctions.insert("csec_sym_solve");
     runtimeStringFunctions.insert("csec_sym_to_string");
     runtimeStringFunctions.insert("csec_sym_to_latex");
+    for (const char* producer : { "csec_dict_new", "csec_set_new", "csec_dict_copy", "csec_dict_keys" }) {
+        dictProducerNames.push_back(producer);
+    }
     this->mallocFunction = module->getFunction("malloc");
     if (!mallocFunction) {
         mallocFunction = llvm::Function::Create(
@@ -284,6 +287,9 @@ void collectRetained(llvm::Value* value, std::unordered_set<llvm::Value*>& retai
     else if (auto* cast = llvm::dyn_cast<llvm::CastInst>(value)) {
         collectRetained(cast->getOperand(0), retained);
     }
+    else if (auto* load = llvm::dyn_cast<llvm::LoadInst>(value)) {
+        retained.insert(load->getPointerOperand());
+    }
 }
 
 bool belongsToOtherFunction(llvm::Value* value, llvm::Function* fn) {
@@ -295,7 +301,7 @@ bool belongsToOtherFunction(llvm::Value* value, llvm::Function* fn) {
 
 void CodeGenerator::emitCleanupEntry(llvm::Value* pointer, CleanupKind kind,
                                      const std::unordered_set<llvm::Value*>& retained) {
-    if (!pointer || retained.count(pointer)) {
+    if (!pointer || (kind != CleanupKind::StringSlotRelease && retained.count(pointer))) {
         return;
     }
     llvm::BasicBlock* block = builder.GetInsertBlock();
@@ -359,6 +365,19 @@ void CodeGenerator::emitCleanupBody(llvm::Value* pointer, CleanupKind kind) {
         builder.CreateCall(freeFunction, { raw });
         builder.CreateBr(contBB);
         builder.SetInsertPoint(contBB);
+    }
+    else if (kind == CleanupKind::OwnedSlotDrop) {
+        llvm::Value* held = builder.CreateLoad(i8PtrTy, pointer, "owned.local");
+        auto found = dropFunctions.find(pointer);
+        if (found != dropFunctions.end()) builder.CreateCall(found->second, { held });
+    }
+    else if (kind == CleanupKind::DictSlotFree) {
+        llvm::Value* held = builder.CreateLoad(i8PtrTy, pointer, "dict.local");
+        builder.CreateCall(dictFreeFunction(), { held });
+    }
+    else if (kind == CleanupKind::TensorSlotDrop) {
+        llvm::Value* held = builder.CreateLoad(i8PtrTy, pointer, "tensor.local");
+        builder.CreateCall(getTensorDropFunction(), { held });
     }
     else if (kind == CleanupKind::StringSlotRelease) {
         ++stringHookDepth;
@@ -475,8 +494,12 @@ void CodeGenerator::emitOwnedValueDrop(llvm::Value* value, const Type* type) {
         builder.CreateCall(getTensorDropFunction(), { value });
         return;
     }
-    if (type->getName() == "String") {
+    if (isRefcountedType(type)) {
         releaseString(value);
+        return;
+    }
+    if (type->getKind() == Type::Kind::GENERIC && (type->getName() == "Dict" || type->getName() == "Set")) {
+        builder.CreateCall(dictFreeFunction(), { value });
         return;
     }
     if (type->getKind() == Type::Kind::GENERIC && (type->getName() == "Shared" || type->getName() == "Weak")) {
@@ -493,12 +516,23 @@ void CodeGenerator::emitOwnedValueDrop(llvm::Value* value, const Type* type) {
 
 void CodeGenerator::registerOwnedValueCleanup(llvm::Value* value, const Type* type) {
     if (!value || !type) return;
+    if (isRefcountedType(type)) {
+        registerOwned(value, CleanupKind::Free);
+        dropFunctions[value] = rcReleaseFunction();
+        return;
+    }
     if (llvm::Function* drop = classDropFunction(type)) {
         registerOwned(value, CleanupKind::Free);
         dropFunctions[value] = drop;
         return;
     }
-    if (type->getKind() == Type::Kind::BOX) registerOwned(value, CleanupKind::Free);
+    if (type->getKind() == Type::Kind::GENERIC && (type->getName() == "Dict" || type->getName() == "Set")) {
+        registerOwned(value, CleanupKind::Free);
+        dropFunctions[value] = dictFreeFunction();
+        return;
+    }
+    if (TensorRuntime::isTensorTypeName(type->getName())) registerOwned(value, CleanupKind::TensorFree);
+    else if (type->getKind() == Type::Kind::BOX) registerOwned(value, CleanupKind::Free);
     else if (type->getKind() == Type::Kind::GENERIC && type->getName() == "Shared") registerOwned(value, CleanupKind::SharedRelease);
     else if (type->getKind() == Type::Kind::GENERIC && type->getName() == "Weak") registerOwned(value, CleanupKind::WeakRelease);
     else if (ownedReferenceClass(type)) registerOwned(value, CleanupKind::Free);
@@ -648,8 +682,28 @@ void CodeGenerator::onInstructionInserted(llvm::Instruction* inst) {
     if (stringHookDepth > 0) return;
     auto* call = llvm::dyn_cast<llvm::CallInst>(inst);
     llvm::Function* callee = call ? call->getCalledFunction() : nullptr;
-    if (!callee || !call->getType()->isPointerTy()) return;
+    if (!callee) return;
     const std::string name = callee->getName().str();
+    if (auto mask = ownedParameterMasks.find(name); mask != ownedParameterMasks.end()) {
+        ++stringHookDepth;
+        for (unsigned i = 0; i < call->arg_size() && i < mask->second.size(); ++i) {
+            if (mask->second[i]) transferTemporary(call->getArgOperand(i));
+        }
+        --stringHookDepth;
+    }
+    if (!call->getType()->isPointerTy()) return;
+    if (auto owned = ownedResultFunctions.find(name); owned != ownedResultFunctions.end()) {
+        ++stringHookDepth;
+        registerOwnedTemporary(call, owned->second);
+        --stringHookDepth;
+        return;
+    }
+    if (std::find(dictProducerNames.begin(), dictProducerNames.end(), name) != dictProducerNames.end()) {
+        ++stringHookDepth;
+        registerOwnedTemporary(call, dictFreeFunction());
+        --stringHookDepth;
+        return;
+    }
     const bool runtime = runtimeStringFunctions.count(name) != 0;
     if (!runtime && !userStringFunctions.count(name)) return;
     ++stringHookDepth;
@@ -672,7 +726,9 @@ void CodeGenerator::emitStringSlotRelease(llvm::AllocaInst* slot) {
     ++stringHookDepth;
     auto* ptrTy = llvm::PointerType::getUnqual(context);
     llvm::Value* held = builder.CreateLoad(ptrTy, slot, "tmp.string.held");
-    builder.CreateCall(rcFunction("csec_rc_release"), { held });
+    auto drop = temporaryDrops.find(slot);
+    if (drop != temporaryDrops.end() && drop->second) builder.CreateCall(drop->second, { held });
+    else builder.CreateCall(rcFunction("csec_rc_release"), { held });
     builder.CreateStore(llvm::ConstantPointerNull::get(ptrTy), slot);
     --stringHookDepth;
 }
@@ -696,6 +752,149 @@ llvm::Value* CodeGenerator::takeOwnedString(llvm::Value* value) {
     return value;
 }
 
+bool CodeGenerator::transferTemporary(llvm::Value* value) {
+    llvm::BasicBlock* block = builder.GetInsertBlock();
+    if (!value || !block) return false;
+    llvm::Function* fn = block->getParent();
+    for (auto frameIt = temporaryFrames.rbegin(); frameIt != temporaryFrames.rend(); ++frameIt) {
+        if (frameIt->function != fn) continue;
+        auto found = frameIt->strings.find(value);
+        if (found == frameIt->strings.end()) continue;
+        ++stringHookDepth;
+        builder.CreateStore(llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(context)), found->second);
+        --stringHookDepth;
+        frameIt->strings.erase(found);
+        return true;
+    }
+    return false;
+}
+
+void CodeGenerator::registerOwnedTemporary(llvm::Value* value, llvm::Function* drop) {
+    llvm::BasicBlock* block = builder.GetInsertBlock();
+    if (!value || !drop || !block || !value->getType()->isPointerTy()) return;
+    if (temporaryFrames.empty() || temporaryFrames.back().function != block->getParent()) return;
+    TemporaryFrame& frame = temporaryFrames.back();
+    ++stringHookDepth;
+    auto* ptrTy = llvm::PointerType::getUnqual(context);
+    llvm::AllocaInst* slot = createEntryAlloca(ptrTy, "tmp.owned.slot");
+    llvm::IRBuilder<> init(slot->getParent(), std::next(slot->getIterator()));
+    init.CreateStore(llvm::ConstantPointerNull::get(ptrTy), slot);
+    llvm::Value* previous = builder.CreateLoad(ptrTy, slot, "tmp.owned.previous");
+    builder.CreateCall(drop, { previous });
+    builder.CreateStore(value, slot);
+    temporaryDrops[slot] = drop;
+    frame.stringSlots.push_back(slot);
+    frame.strings[value] = slot;
+    --stringHookDepth;
+}
+
+void CodeGenerator::markOwnedResultFunction(const std::string& name, llvm::Function* drop) {
+    if (!name.empty() && drop) ownedResultFunctions[name] = drop;
+}
+
+void CodeGenerator::markOwnedParameters(const std::string& name, std::vector<bool> mask) {
+    bool any = false;
+    for (bool owned : mask) any = any || owned;
+    if (!name.empty() && any) ownedParameterMasks[name] = std::move(mask);
+}
+
+bool CodeGenerator::isRefcountedType(const Type* type) {
+    if (!type) return false;
+    if (type->getName() == "String") return true;
+    const EnumInfo* info = enumOfType(type);
+    return info && info->isReference;
+}
+
+llvm::Function* CodeGenerator::rcReleaseFunction() {
+    return llvm::cast<llvm::Function>(rcFunction("csec_rc_release").getCallee());
+}
+
+void CodeGenerator::registerOwnedSlotCleanup(llvm::Value* slot, llvm::Function* drop) {
+    if (!slot || !drop) return;
+    registerOwned(slot, CleanupKind::OwnedSlotDrop);
+    dropFunctions[slot] = drop;
+}
+
+llvm::Function* CodeGenerator::enumFieldReleaseFunction(const Type* type) {
+    if (!isRefcountedType(type) || type->getName() == "String") return nullptr;
+    ClassSymbol* classSymbol = symbolTable.lookupClass(type->getName());
+    auto* layout = classSymbol ? llvm::dyn_cast_or_null<llvm::StructType>(classSymbol->classType) : nullptr;
+    if (!layout || layout->isOpaque()) return nullptr;
+    const std::string name = "__csec_enum_release." + type->getName();
+    if (llvm::Function* existing = module->getFunction(name)) return existing;
+    auto* ptrTy = llvm::PointerType::getUnqual(context);
+    auto* fn = llvm::Function::Create(llvm::FunctionType::get(llvm::Type::getVoidTy(context), { ptrTy }, false),
+                                      llvm::Function::InternalLinkage, name, module.get());
+    std::vector<std::pair<unsigned, std::unique_ptr<Type>>> slots;
+    unsigned index = 0;
+    for (const auto& paramName : classSymbol->constructorParamOrder) {
+        auto found = classSymbol->constructorParams.find(paramName);
+        if (found != classSymbol->constructorParams.end() && found->second && found->second->type) {
+            slots.emplace_back(index, found->second->type->clone());
+        }
+        ++index;
+    }
+    llvm::IRBuilderBase::InsertPointGuard guard(builder);
+    builder.SetCurrentDebugLocation(llvm::DebugLoc());
+    ++stringHookDepth;
+    builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", fn));
+    llvm::Value* object = fn->getArg(0);
+    for (auto& slot : slots) {
+        if (slot.first >= layout->getNumElements()) continue;
+        llvm::Type* storage = layout->getElementType(slot.first);
+        if (!storage->isPointerTy()) continue;
+        llvm::Value* fieldValue = builder.CreateLoad(storage, builder.CreateStructGEP(layout, object, slot.first), "enum.field");
+        if (isRefcountedType(slot.second.get())) builder.CreateCall(rcReleaseFunction(), { fieldValue });
+        else if (!typeIsCopy(slot.second.get())) emitOwnedValueDrop(fieldValue, slot.second.get());
+    }
+    builder.CreateRetVoid();
+    --stringHookDepth;
+    return fn;
+}
+
+llvm::Function* CodeGenerator::ownedValueDropFunction(const Type* type) {
+    if (!type) return nullptr;
+    if (type->getKind() == Type::Kind::GENERIC && (type->getName() == "Dict" || type->getName() == "Set")) {
+        return dictFreeFunction();
+    }
+    return classDropFunction(type);
+}
+
+llvm::Value* CodeGenerator::takeOwned(llvm::Value* value, const Type* type) {
+    if (!value || !value->getType()->isPointerTy() || !builder.GetInsertBlock()) return value;
+    if (isRefcountedType(type)) return takeOwnedString(value);
+    if (transferTemporary(value)) return value;
+    if (auto* phi = llvm::dyn_cast<llvm::PHINode>(value)) {
+        for (llvm::Value* incoming : phi->incoming_values()) transferTemporary(incoming);
+    }
+    else if (auto* select = llvm::dyn_cast<llvm::SelectInst>(value)) {
+        transferTemporary(select->getTrueValue());
+        transferTemporary(select->getFalseValue());
+    }
+    return value;
+}
+
+llvm::Value* CodeGenerator::adoptRuntimeString(llvm::Value* text) {
+    if (!text || !text->getType()->isPointerTy() || !builder.GetInsertBlock()) return text;
+    ++stringHookDepth;
+    builder.CreateCall(rcFunction("csec_rc_adopt"), { text });
+    llvm::Function* fn = builder.GetInsertBlock()->getParent();
+    if (!temporaryFrames.empty() && temporaryFrames.back().function == fn) {
+        TemporaryFrame& frame = temporaryFrames.back();
+        auto* ptrTy = llvm::PointerType::getUnqual(context);
+        llvm::AllocaInst* slot = createEntryAlloca(ptrTy, "tmp.string.slot");
+        llvm::IRBuilder<> init(slot->getParent(), std::next(slot->getIterator()));
+        init.CreateStore(llvm::ConstantPointerNull::get(ptrTy), slot);
+        llvm::Value* previous = builder.CreateLoad(ptrTy, slot, "tmp.string.previous");
+        builder.CreateCall(rcFunction("csec_rc_release"), { previous });
+        builder.CreateStore(text, slot);
+        frame.stringSlots.push_back(slot);
+        frame.strings[text] = slot;
+    }
+    --stringHookDepth;
+    return text;
+}
+
 void CodeGenerator::promoteTemporaryString(llvm::Value* value) {
     if (!value || temporaryFrames.size() < 2) return;
     TemporaryFrame& current = temporaryFrames.back();
@@ -716,6 +915,27 @@ void CodeGenerator::releaseString(llvm::Value* value) {
     ++stringHookDepth;
     builder.CreateCall(rcFunction("csec_rc_release"), { value });
     --stringHookDepth;
+}
+
+llvm::Function* CodeGenerator::dictFreeFunction() {
+    requireSystemNative();
+    auto* ptrTy = llvm::PointerType::getUnqual(context);
+    llvm::FunctionCallee callee = module->getOrInsertFunction(
+        "csec_dict_free", llvm::FunctionType::get(llvm::Type::getVoidTy(context), { ptrTy }, false));
+    return llvm::cast<llvm::Function>(callee.getCallee());
+}
+
+void CodeGenerator::registerDictSlotCleanup(llvm::Value* slot) {
+    registerOwned(slot, CleanupKind::DictSlotFree);
+}
+
+void CodeGenerator::registerTensorSlotCleanup(llvm::Value* slot) {
+    registerOwned(slot, CleanupKind::TensorSlotDrop);
+}
+
+void CodeGenerator::dropTensorValue(llvm::Value* tensor) {
+    if (!tensor || !builder.GetInsertBlock()) return;
+    builder.CreateCall(getTensorDropFunction(), { tensor });
 }
 
 void CodeGenerator::registerStringSlotCleanup(llvm::Value* slot) {
@@ -747,6 +967,7 @@ void CodeGenerator::dropTemporary(llvm::Value* tensor, llvm::Value* result) {
 }
 
 void CodeGenerator::enterTemporaryFrame() {
+
     llvm::BasicBlock* block = builder.GetInsertBlock();
     temporaryFrames.push_back({ block ? block->getParent() : nullptr, cleanupScopes.size(), {} });
 }

@@ -38,9 +38,20 @@ struct Entry {
     long long value = 0;
     long long length = -1;  // element count for an array value, when known
     bool live = true;
+    bool ownsValue = true;
 };
 
+inline void releaseValue(int valueKind, const Entry& entry, void (*valueDrop)(void*) = nullptr) {
+    if (!entry.ownsValue || entry.value == 0) return;
+    void* value = reinterpret_cast<void*>(static_cast<intptr_t>(entry.value));
+    if (valueKind == KindString) csec_rc_release(value);
+    else if (valueKind == KindDict) csec_dict_free(value);
+    else if (valueKind == KindArray) csecFree(value);
+    else if (valueKind == KindOpaque && valueDrop) valueDrop(value);
+}
+
 struct Dict {
+    void (*valueDrop)(void*) = nullptr;
     int keyKind = KindInt;
     int valueKind = KindInt;
     int elementKind = KindInt;  // for KindArray values
@@ -87,8 +98,11 @@ struct Dict {
     void set(long long key, long long value, long long length) {
         long long at = find(key);
         if (at >= 0) {
-            entries[static_cast<size_t>(at)].value = value;
-            entries[static_cast<size_t>(at)].length = length;
+            Entry& existing = entries[static_cast<size_t>(at)];
+            if (existing.value != value) releaseValue(valueKind, existing, valueDrop);
+            existing.value = value;
+            existing.length = length;
+            existing.ownsValue = true;
             return;
         }
         Entry entry;
@@ -115,6 +129,7 @@ struct Dict {
         long long at = find(key);
         if (at < 0) return false;
         Entry& entry = entries[static_cast<size_t>(at)];
+        releaseValue(valueKind, entry, valueDrop);
         if (textKeys()) {
             textIndex.erase(text(entry.key));
             csecFree(reinterpret_cast<void*>(static_cast<intptr_t>(entry.key)));
@@ -297,9 +312,16 @@ void* csec_dict_new(int keyKind, int valueKind, int elementKind, int elementByte
     return dict;
 }
 
+void csec_dict_set_value_drop(void* handle, void* drop) {
+    if (auto* dict = csec_dict::asDict(handle)) dict->valueDrop = reinterpret_cast<void (*)(void*)>(drop);
+}
+
 void csec_dict_free(void* handle) {
     auto* dict = csec_dict::asDict(handle);
     if (!dict) return;
+    for (const auto& entry : dict->entries) {
+        if (entry.live) csec_dict::releaseValue(dict->valueKind, entry, dict->valueDrop);
+    }
     if (dict->textKeys()) {
         for (const auto& entry : dict->entries) {
             csecFree(reinterpret_cast<void*>(static_cast<intptr_t>(entry.key)));
@@ -307,6 +329,7 @@ void csec_dict_free(void* handle) {
     }
     delete dict;
 }
+
 
 void csec_dict_set(void* handle, long long key, long long value) {
     if (auto* dict = csec_dict::asDict(handle)) dict->set(key, value, -1);
@@ -378,6 +401,9 @@ long long csec_dict_value_at(void* handle, long long index) {
 void csec_dict_clear(void* handle) {
     auto* dict = csec_dict::asDict(handle);
     if (!dict) return;
+    for (const auto& entry : dict->entries) {
+        if (entry.live) csec_dict::releaseValue(dict->valueKind, entry, dict->valueDrop);
+    }
     if (dict->textKeys()) {
         for (const auto& entry : dict->entries) {
             csecFree(reinterpret_cast<void*>(static_cast<intptr_t>(entry.key)));
@@ -397,7 +423,34 @@ void* csec_dict_copy(void* handle) {
     if (!dict) return copy;
     dict->compact();
     copy->isSet = dict->isSet;
-    for (const auto& entry : dict->entries) copy->set(entry.key, entry.value, entry.length);
+    for (const auto& entry : dict->entries) {
+        long long value = entry.value;
+        bool owns = true;
+        if (dict->valueKind == csec_dict::KindString) {
+            csec_rc_retain(reinterpret_cast<void*>(static_cast<intptr_t>(value)));
+        }
+        else if (dict->valueKind == csec_dict::KindDict && value) {
+            value = static_cast<long long>(reinterpret_cast<intptr_t>(csec_dict_copy(reinterpret_cast<void*>(static_cast<intptr_t>(value)))));
+        }
+        else if (dict->valueKind == csec_dict::KindArray && value) {
+            if (entry.length >= 0) {
+                const size_t bytes = static_cast<size_t>(entry.length) * static_cast<size_t>(dict->elementBytes);
+                void* buffer = csecAlloc(bytes);
+                if (buffer) std::memcpy(buffer, reinterpret_cast<void*>(static_cast<intptr_t>(value)), bytes);
+                value = static_cast<long long>(reinterpret_cast<intptr_t>(buffer));
+            }
+            else {
+                owns = false;
+            }
+        }
+        else if (dict->valueKind == csec_dict::KindOpaque) {
+            owns = false;
+        }
+        copy->valueDrop = dict->valueDrop;
+        copy->set(entry.key, value, entry.length);
+        long long at = copy->find(entry.key);
+        if (at >= 0) copy->entries[static_cast<size_t>(at)].ownsValue = owns;
+    }
     return copy;
 }
 

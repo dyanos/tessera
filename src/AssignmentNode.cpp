@@ -49,6 +49,7 @@ llvm::Value* AssignmentNode::codegen() {
         cg.releaseString(previous);
         return exprValue;
     }
+    if (exprValue->getType()->isPointerTy()) exprValue = cg.takeOwned(exprValue, symbol->type.get());
     CodeGenerator::getInstance().builder.CreateStore(exprValue, symbol->value);
     CodeGenerator::clearFreshTensor(exprValue);
 

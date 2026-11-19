@@ -114,7 +114,21 @@ public:
     void markStringFunction(const std::string& name, bool runtimeAllocated);
     llvm::Value* takeOwnedString(llvm::Value* value);
     void promoteTemporaryString(llvm::Value* value);
+    llvm::Value* adoptRuntimeString(llvm::Value* text);
+    llvm::Value* takeOwned(llvm::Value* value, const Type* type);
+    void registerOwnedTemporary(llvm::Value* value, llvm::Function* drop);
+    void markOwnedResultFunction(const std::string& name, llvm::Function* drop);
+    void markOwnedParameters(const std::string& name, std::vector<bool> mask);
+    llvm::Function* ownedValueDropFunction(const Type* type);
+    bool isRefcountedType(const Type* type);
+    llvm::Function* rcReleaseFunction();
+    llvm::Function* enumFieldReleaseFunction(const Type* type);
+    void registerOwnedSlotCleanup(llvm::Value* slot, llvm::Function* drop);
     void registerStringSlotCleanup(llvm::Value* slot);
+    void registerTensorSlotCleanup(llvm::Value* slot);
+    void registerDictSlotCleanup(llvm::Value* slot);
+    llvm::Function* dictFreeFunction();
+    void dropTensorValue(llvm::Value* tensor);
     void releaseString(llvm::Value* value);
     void emitAllCleanups();
     void emitAllCleanupsExcept(llvm::Value* retainedValue);
@@ -150,7 +164,7 @@ private:
     // Each cleanup is a (pointer, kind) pair: Free drops a single heap allocation, TensorFree also
     // frees the tensor's separate dims/data buffers, and SharedRelease/WeakRelease decrement a
     // Shared/Weak control block (freeing it only when both counts reach zero).
-    enum class CleanupKind { Free = 0, TensorFree = 1, SharedRelease = 2, WeakRelease = 3, StringSlotRelease = 4 };
+    enum class CleanupKind { Free = 0, TensorFree = 1, SharedRelease = 2, WeakRelease = 3, StringSlotRelease = 4, TensorSlotDrop = 5, DictSlotFree = 6, OwnedSlotDrop = 7 };
     std::unordered_map<llvm::Value*, llvm::Value*> dropFlags;  // owned pointer -> its i1 drop flag
     std::unordered_map<llvm::Value*, llvm::Function*> dropFunctions;
     std::vector<std::vector<std::pair<llvm::Value*, CleanupKind>>> cleanupScopes;
@@ -168,6 +182,12 @@ private:
     int stringHookDepth = 0;
     std::unordered_set<std::string> userStringFunctions;
     std::unordered_set<std::string> runtimeStringFunctions;
+    std::unordered_map<std::string, llvm::Function*> ownedResultFunctions;
+    std::unordered_map<std::string, std::vector<bool>> ownedParameterMasks;
+    std::unordered_map<llvm::AllocaInst*, llvm::Function*> temporaryDrops;
+    std::vector<std::string> dictProducerNames;
+    bool dictProducersMarked = false;
+    bool transferTemporary(llvm::Value* value);
     void onInstructionInserted(llvm::Instruction* inst);
     llvm::FunctionCallee rcFunction(const char* name);
     void emitStringSlotRelease(llvm::AllocaInst* slot);

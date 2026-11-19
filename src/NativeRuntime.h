@@ -21,6 +21,7 @@ extern "C" {
 CSEC_NATIVE_API void* csec_alloc(long long size);
 CSEC_NATIVE_API void csec_free(void* block);
 CSEC_NATIVE_API void csec_rc_adopt(const void* block);
+CSEC_NATIVE_API void csec_rc_adopt_with(const void* block, void* destructor);
 CSEC_NATIVE_API void csec_rc_retain(const void* block);
 CSEC_NATIVE_API void csec_rc_release(const void* block);
 CSEC_NATIVE_API void csec_print_string(const char* value);
@@ -585,6 +586,7 @@ CSEC_NATIVE_API char* csec_html_links(const char* html, const char* base);
 // Dictionaries (dict_runtime.inc): the `{key: value}` literal and Dict<K, V>.
 CSEC_NATIVE_API void* csec_dict_new(int keyKind, int valueKind, int elementKind, int elementBytes);
 CSEC_NATIVE_API void csec_dict_free(void* dict);
+CSEC_NATIVE_API void csec_dict_set_value_drop(void* dict, void* drop);
 CSEC_NATIVE_API void csec_dict_set(void* dict, long long key, long long value);
 CSEC_NATIVE_API void csec_dict_set_array(void* dict, long long key, long long value, long long length);
 CSEC_NATIVE_API long long csec_dict_get(void* dict, long long key);

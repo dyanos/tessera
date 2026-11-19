@@ -571,7 +571,7 @@ llvm::Value* ClassInstanceCreationNode::codegen() {
             value = llvm::Constant::getNullValue(targetType);
         }
         if (targetType->isPointerTy()) value = cg.copyStackBufferToHeap(value);
-        if (fieldType && fieldType->getName() == "String") value = cg.takeOwnedString(value);
+        value = cg.takeOwned(value, fieldType.get());
         value = coerceForStore(value, targetType);
         if (!value || value->getType() != targetType) {
             std::cerr << "Error: Constructor value for field '" << fieldName << "' has incompatible type" << std::endl;
@@ -668,6 +668,10 @@ llvm::Value* ClassInstanceCreationNode::codegen() {
             }
 
             cg.symbolTable.exitScope();
+            {
+                ClassType instanceType(resolvedClassName);
+                cg.registerOwnedTemporary(instance, cg.classDropFunction(&instanceType));
+            }
             return instance;
         }
     }
@@ -753,6 +757,10 @@ llvm::Value* ClassInstanceCreationNode::codegen() {
     }
 
     cg.symbolTable.exitScope();
+    {
+        ClassType instanceType(resolvedClassName);
+        cg.registerOwnedTemporary(instance, cg.classDropFunction(&instanceType));
+    }
 
     return instance;
 }

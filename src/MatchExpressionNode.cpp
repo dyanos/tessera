@@ -133,6 +133,7 @@ bool emitPatternBindings(PatternNode& pattern, const ValueRef& ref) {
         VariableDeclarationNode binding(pattern.name, pattern.valueType ? pattern.valueType->clone() : std::make_unique<UnknownType>(),
                                         ref(), false);
         binding.hasExplicitType = pattern.valueType && pattern.valueType->getKind() != Type::Kind::UNKNOWN;
+        binding.borrowsValue = true;
         binding.codegen();
         return true;
     }

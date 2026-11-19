@@ -2,10 +2,10 @@
 // Previously the result was a bogus string pointer, and using it in a later tensor op
 // (here, a matmul) read that pointer as a tensor and segfaulted.
 def feedForward(
-    x: Tensor<Double, 2, 4>,
-    w1: Tensor<Double, 4, 8>,
-    b1: Tensor<Double, 2, 8>,
-    w2: Tensor<Double, 8, 4>
+    x: &Tensor<Double, 2, 4>,
+    w1: &Tensor<Double, 4, 8>,
+    b1: &Tensor<Double, 2, 8>,
+    w2: &Tensor<Double, 8, 4>
 ): Tensor<Double, 2, 4> {
     val hidden: Tensor<Double, 2, 8> = (x @ w1) + b1;
     return hidden @ w2;
@@ -16,7 +16,7 @@ def main(): Int {
     val w1: Tensor<Double, 4, 8> = new Tensor<Double, 4, 8>(0.1);
     val b1: Tensor<Double, 2, 8> = new Tensor<Double, 2, 8>(0.5);
     val w2: Tensor<Double, 8, 4> = new Tensor<Double, 8, 4>(0.1);
-    val out = feedForward(x, w1, b1, w2);
+    val out = feedForward(&x, &w1, &b1, &w2);
     val probe = out[0, 0];
     return 0;
 }

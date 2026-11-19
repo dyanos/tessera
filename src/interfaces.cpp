@@ -381,6 +381,7 @@ llvm::Value* InterfaceWrapNode::codegen() {
         object = cg.builder.CreateCall(cg.mallocFunction, llvm::ConstantInt::get(i64Ty, size), "iface.copy");
         cg.builder.CreateStore(aggregate, object);
     }
+    if (!isStructClassType(&classType)) cg.takeOwned(object, &classType);
     llvm::Value* vtable = vtableFor(className, *info);
     auto* pairTy = llvm::StructType::get(cg.context, {ptrTy, ptrTy});
     llvm::Value* pair = cg.builder.CreateCall(cg.mallocFunction, llvm::ConstantInt::get(i64Ty, 16), "iface.value");

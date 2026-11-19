@@ -135,6 +135,9 @@ llvm::Value* AssignmentExpressionNode::codegen() {
     }
 
     llvm::Type* targetType = CodeGenerator::getInstance().getLLVMType(left->getType().get());
+    if (auto leftType = left->getType(); leftType && leftType->getKind() == Type::Kind::CLASS && !isStructClassType(leftType.get())) {
+        targetType = getABIStorageType(leftType.get());
+    }
     // Tensor elements are stored as doubles whatever the declared element type.
     if (auto* access = dynamic_cast<ArrayAccessNode*>(left.get())) {
         auto container = access->array ? access->array->getType() : nullptr;
@@ -176,7 +179,29 @@ llvm::Value* AssignmentExpressionNode::codegen() {
             stringLocal = symbol && !fieldTarget && symbol->value && llvm::isa<llvm::AllocaInst>(symbol->value);
         }
         auto fieldType = left->getType();
-        if (fieldType && fieldType->getName() == "String") {
+        if (!fieldType || !cg.isRefcountedType(fieldType.get())) rightValue = cg.takeOwned(rightValue, fieldType.get());
+        if (stringLocal && fieldType && fieldType->getKind() == Type::Kind::GENERIC &&
+            (fieldType->getName() == "Dict" || fieldType->getName() == "Set") && isStrictOwnership()) {
+            llvm::Value* previous = cg.builder.CreateLoad(targetType, targetPtr, "dict.previous");
+            cg.builder.CreateStore(rightValue, targetPtr);
+            cg.builder.CreateCall(cg.dictFreeFunction(), { previous });
+            return rightValue;
+        }
+        if (stringLocal && fieldType && fieldType->getName() == "Tensor" && isStrictOwnership()) {
+            llvm::Value* previous = cg.builder.CreateLoad(targetType, targetPtr, "tensor.previous");
+            cg.builder.CreateStore(rightValue, targetPtr);
+            CodeGenerator::clearFreshTensor(rightValue);
+            cg.dropTensorValue(previous);
+            return rightValue;
+        }
+        if (stringLocal && fieldType && fieldType->getKind() == Type::Kind::CLASS && !typeIsCopy(fieldType.get()) &&
+            !isStructClassType(fieldType.get()) && isStrictOwnership()) {
+            llvm::Value* previous = cg.builder.CreateLoad(targetType, targetPtr, "object.previous");
+            cg.builder.CreateStore(rightValue, targetPtr);
+            if (llvm::Function* drop = cg.classDropFunction(fieldType.get())) cg.builder.CreateCall(drop, { previous });
+            return rightValue;
+        }
+        if (fieldType && cg.isRefcountedType(fieldType.get())) {
             rightValue = cg.takeOwnedString(rightValue);
             if (fieldTarget || stringLocal) {
                 llvm::Value* previous = cg.builder.CreateLoad(targetType, targetPtr, "string.previous");

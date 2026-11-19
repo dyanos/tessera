@@ -196,6 +196,12 @@ std::unique_ptr<Type> IdentifierNode::getType() {
 
 	auto symbolOpt = CodeGenerator::getInstance().symbolTable.lookup(value);
 	if (symbolOpt && symbolOpt->type) {
+		if (auto* borrow = dynamic_cast<BorrowType*>(symbolOpt->type.get())) {
+			if (borrow->baseType && (borrow->baseType->getName() == "Tensor" ||
+			                         borrow->baseType->getName().rfind("Tensor$", 0) == 0)) {
+				return borrow->baseType->clone();
+			}
+		}
 		return symbolOpt->type->clone();
 	}
 

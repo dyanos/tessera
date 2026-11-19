@@ -1,7 +1,7 @@
 class Holder() {
     var kept: Tensor<Double, 1, 2> = new Tensor<Double, 1, 2>(0.0);
     def operator +(right: Tensor<Double, 1, 2>): Int {
-        kept = right;
+        kept = <- right;
         return 1;
     }
 }
@@ -13,7 +13,7 @@ def main(): Int {
     var i: Int = 0;
     while (i < 3) {
         val t: Tensor<Double, 1, 2> = new Tensor<Double, 1, 2>(2.0);
-        acc = t;
+        acc = <- t;
         i = i + 1;
     }
     val filler: Tensor<Double, 1, 2> = new Tensor<Double, 1, 2>(9.0);
@@ -26,7 +26,7 @@ def main(): Int {
         j = j + 1;
     }
     val other: Tensor<Double, 1, 2> = new Tensor<Double, 1, 2>(7.0);
-    val k = h.kept;
+    val k = &h.kept;
     if (k[0, 0] != 1.0) { return 2; }
     return 0;
 }

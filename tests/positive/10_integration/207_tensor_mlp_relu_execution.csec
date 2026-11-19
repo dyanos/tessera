@@ -1,6 +1,6 @@
 // A two-layer tensor MLP: matmul (@), bias add, and an element-wise ReLU loop, checked numerically.
 // Self-checking: returns 0 on success.
-def relu4(z: Tensor<Double, 1, 4>): Tensor<Double, 1, 4> {
+def relu4(z: &Tensor<Double, 1, 4>): Tensor<Double, 1, 4> {
     val out: Tensor<Double, 1, 4> = new Tensor<Double, 1, 4>(0.0);
     var j: Int = 0;
     while (j < 4) {
@@ -19,7 +19,7 @@ def main(): Int {
     val w2: Tensor<Double, 4, 2> = new Tensor<Double, 4, 2>(0.5);
     val b2: Tensor<Double, 1, 2> = new Tensor<Double, 1, 2>(0.5);   // exact
     val z1: Tensor<Double, 1, 4> = (x @ w1) + b1;
-    val h:  Tensor<Double, 1, 4> = relu4(z1);   // [0, 0.25, 0.25, 0.25]
+    val h:  Tensor<Double, 1, 4> = relu4(&z1);   // [0, 0.25, 0.25, 0.25]
     val y:  Tensor<Double, 1, 2> = (h @ w2) + b2;   // 0.375 + 0.5 = 0.875 (exact)
     if (h[0, 0] == 0.0 and h[0, 1] == 0.25 and y[0, 0] == 0.875 and y[0, 1] == 0.875) {
         return 0;

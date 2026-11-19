@@ -1,10 +1,10 @@
-def aliasThroughVar(x: Tensor<Double, 1, 2>, w: Tensor<Double, 2, 2>): Tensor<Double, 1, 2> {
+def aliasThroughVar(x: &Tensor<Double, 1, 2>, w: &Tensor<Double, 2, 2>): Tensor<Double, 1, 2> {
     val y = x @ w;
-    var q = y;
+    var q = <- y;
     return q;
 }
 
-def borrowedOnly(x: Tensor<Double, 1, 2>, w: Tensor<Double, 2, 2>): Double {
+def borrowedOnly(x: &Tensor<Double, 1, 2>, w: &Tensor<Double, 2, 2>): Double {
     val y = x @ w;
     val z = y + y;
     return sum(z) + y[0, 1];
@@ -17,7 +17,7 @@ def main(): Int {
     var i: Int = 0;
     while (i < 3) {
         val step = acc @ w;
-        acc = step;
+        acc = <- step;
         i = i + 1;
     }
     if (acc[0, 0] != 1.0) { return 1; }
@@ -25,13 +25,13 @@ def main(): Int {
         val y = x @ w;
         y
     } else {
-        x
+        clone(x)
     };
     val filler: Tensor<Double, 1, 2> = new Tensor<Double, 1, 2>(9.0);
     if (r[0, 0] != 1.0) { return 2; }
-    val a = aliasThroughVar(x, w);
+    val a = aliasThroughVar(&x, &w);
     val other: Tensor<Double, 1, 2> = new Tensor<Double, 1, 2>(7.0);
     if (a[0, 1] != 1.0) { return 3; }
-    if (borrowedOnly(x, w) != 5.0) { return 4; }
+    if (borrowedOnly(&x, &w) != 5.0) { return 4; }
     return 0;
 }

@@ -42,6 +42,7 @@ bool onlyOwningUses(const std::string& name, const std::string& className,
             if (dynamic_cast<ReturnStatementNode*>(parent)) return;
             if (auto* binary = dynamic_cast<BinaryExpressionNode*>(parent)) {
                 if (binary->op == "==" || binary->op == "!=") return;
+                if (binary->left.get() == node && !methodMayKeepThis(className, "operator" + binary->op)) return;
             }
             safe = false;
             return;
@@ -229,7 +230,8 @@ llvm::Value* BlockNode::codegen() {
         if (auto* decl = dynamic_cast<VariableDeclarationNode*>(stmt.get())) {
             auto declType = decl->initializer ? decl->getType() : nullptr;
             if (declType && declType->getName() == "Tensor") {
-                decl->autoDrop = !decl->isMutable && onlyBorrowingTensorUses(decl->name, statements, i + 1);
+                decl->autoDrop = !decl->isMutable &&
+                    (isStrictOwnership() || onlyBorrowingTensorUses(decl->name, statements, i + 1));
             }
             else if (isStrictOwnership() && initializerOwnsResult(decl->initializer.get())) {
                 if (declType && declType->getKind() == Type::Kind::CLASS && !isStructClassType(declType.get()) &&
