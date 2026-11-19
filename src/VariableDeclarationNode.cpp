@@ -133,6 +133,20 @@ llvm::Value* VariableDeclarationNode::codegen() {
 
     // Where a Nat is declared but an integer initializes it (`val n: Nat = 5`, or a literal larger than
     // 64 bits), promote the value to an arbitrary-precision handle before it is stored/bound.
+    struct BorrowRestore {
+        bool& flag;
+        bool saved;
+        ~BorrowRestore() { flag = saved; }
+    } borrowRestore{ borrowsValue, borrowsValue };
+    if (!isMutable && !borrowsValue && type && cg.isRefcountedType(type.get()) && initValue->getType()->isPointerTy()) {
+        auto* source = dynamic_cast<IdentifierNode*>(initializer.get());
+        Symbol* symbol = source ? cg.symbolTable.lookup(source->value) : nullptr;
+        if (symbol && symbol->symbolType == SymbolType::VARIABLE && !symbol->isMutable && !cg.movedNames.count(source->value) &&
+            symbol->type && symbol->type->getName() == type->getName() && llvm::isa_and_nonnull<llvm::AllocaInst>(symbol->value) &&
+            llvm::cast<llvm::AllocaInst>(symbol->value)->getFunction() == cg.builder.GetInsertBlock()->getParent()) {
+            borrowsValue = true;
+        }
+    }
     initValue = coerceToNat(initValue, type.get(), this->initializer.get());
     if (initValue && (initValue->getType()->isPointerTy() || cg.structHoldsCounted(type.get())) &&
         (!type || type->getName() != "String") && !borrowsValue) {

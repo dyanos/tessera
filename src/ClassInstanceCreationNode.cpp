@@ -241,6 +241,12 @@ void substituteTemplateBinding(ASTNode* node, const TemplateBinding& binding) {
         return;
     }
     if (auto* creation = dynamic_cast<ClassInstanceCreationNode*>(node)) {
+        for (size_t i = 0; i < binding.names.size() && i < binding.arguments.size(); ++i) {
+            if (creation->className != binding.names[i] || !creation->templateArgs.empty() || !binding.arguments[i]) continue;
+            creation->className = binding.arguments[i]->getName();
+            creation->defaultValue = creation->arguments.empty() && isPrimitiveType(creation->className);
+            break;
+        }
         for (auto& t : creation->templateArgs) resolveTemplateType(t, binding);
         for (auto& argument : creation->arguments) visit(argument);
         return;
@@ -465,6 +471,11 @@ void ClassInstanceCreationNode::accept(ASTVisitor& visitor) {
 llvm::Value* ClassInstanceCreationNode::codegen() {
     auto& cg = CodeGenerator::getInstance();
 
+    if (defaultValue) {
+        BasicType basicType(className);
+        if (basicType.isStringTy()) return cg.builder.CreateGlobalString("", "default.string");
+        if (llvm::Type* type = cg.getLLVMType(&basicType)) return llvm::Constant::getNullValue(type);
+    }
     // Primitive allocation: return typed pointer from malloc. A class the program declares under a
     // primitive's name (`class Word`) is a class.
     if (isPrimitiveType(className) && !cg.symbolTable.lookupClass(className)) {
@@ -484,7 +495,8 @@ llvm::Value* ClassInstanceCreationNode::codegen() {
 
     if (className == "Tensor") {
         std::vector<int64_t> dims = TensorRuntime::dimensionsFromTemplateArgs(templateArgs);
-        if (dims.empty()) {
+        const bool scalar = templateArgs.size() == 2 && templateArgs[1] && templateArgs[1]->getName() == "0";
+        if (dims.empty() && !scalar) {
             std::cerr << "Error: Tensor requires at least one positive dimension" << std::endl;
             return nullptr;
         }
@@ -550,7 +562,7 @@ llvm::Value* ClassInstanceCreationNode::codegen() {
 
     llvm::Value* instance = nullptr;
     if (classSymbol->isStruct) {
-        instance = cg.builder.CreateAlloca(classType, nullptr, "newstruct");
+        instance = cg.createEntryAlloca(classType, "newstruct");
     }
     else {
         const llvm::DataLayout& dl = cg.module->getDataLayout();
@@ -873,5 +885,6 @@ std::unique_ptr<Type> ClassInstanceCreationNode::getType() {
         return std::make_unique<ClassType>(mangledName);
     }
 
+    if (defaultValue) return std::make_unique<BasicType>(className);
     return std::make_unique<ClassType>(className);
 }

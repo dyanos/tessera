@@ -82,9 +82,9 @@ llvm::Value* MapStatementNode::codegen() {
     }
 
     // Allocate loop counter and element variable before the loop
-    llvm::Value* counterPtr = cg.builder.CreateAlloca(cg.builder.getInt32Ty(), nullptr, "map_i");
+    llvm::Value* counterPtr = cg.createEntryAlloca(cg.builder.getInt32Ty(), "map_i");
     cg.builder.CreateStore(cg.builder.getInt32(0), counterPtr);
-    llvm::Value* varPtr = cg.builder.CreateAlloca(elementType, nullptr, variable + "_ptr");
+    llvm::Value* varPtr = cg.createEntryAlloca(elementType, variable + "_ptr");
 
     // Bind loop variable in scope (once, outside loop)
     cg.symbolTable.enterScope();

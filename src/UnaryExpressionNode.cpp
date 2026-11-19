@@ -65,7 +65,7 @@ llvm::Value* UnaryExpressionNode::codegen()
 			// `this` is passed by address; a struct operand may arrive as a value (a call result).
 			llvm::Type* selfType = function->getFunctionType()->getParamType(0);
 			if (selfType->isPointerTy() && value->getType()->isStructTy()) {
-				llvm::Value* slot = cg.builder.CreateAlloca(value->getType(), nullptr, "unary.self");
+				llvm::Value* slot = cg.createEntryAlloca(value->getType(), "unary.self");
 				cg.builder.CreateStore(value, slot);
 				value = slot;
 			}

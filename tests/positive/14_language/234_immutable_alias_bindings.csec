@@ -1,0 +1,48 @@
+// A `val` that copies another immutable local shares its string without a reference count of its own;
+// returning it, capturing it, storing it and outliving the source's reassignment all stay valid
+// (checked with --leak-check).
+class Box(label: String) {
+    var held: String = "";
+}
+
+enum Shape { Dot, Named(name: String) }
+
+def relabel(i: Int): String {
+    val made = "made" + i;
+    val alias = made;
+    val again = alias;
+    return again;
+}
+
+def keep(i: Int): () => String {
+    val text = "kept" + i;
+    val alias = text;
+    return [=]() -> { return alias; };
+}
+
+def describe(s: Shape): String = s match {
+    case Dot => "dot";
+    case Named(n) => n;
+}
+
+def round(i: Int): Int {
+    val first = relabel(i);
+    val reader = keep(i);
+    var source = "src" + i;
+    val snapshot = source;
+    source = "next" + i;
+    val box = new Box("b");
+    val label = first;
+    box.held = label;
+    val shape = Named("shape" + i);
+    val sameShape = shape;
+    val total = first.length() + reader().length() + snapshot.length() + box.held.length() + describe(sameShape).length();
+    return total;
+}
+
+def main(): Int {
+    var total = 0;
+    for (i <- 0 until 10) { total = total + round(i); }
+    if (total != 250) { return 1; }
+    return 0;
+}

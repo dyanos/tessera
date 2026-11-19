@@ -227,7 +227,7 @@ llvm::Value* codegenStringConcatChain(CodeGenerator& cg, ASTNode* root) {
         strings.push_back(coerceValueForString(cg, value, type.get()));
     }
     auto* arrayTy = llvm::ArrayType::get(i8PtrTy, strings.size());
-    auto* storage = cg.builder.CreateAlloca(arrayTy, nullptr, "str.parts");
+    auto* storage = cg.createEntryAlloca(arrayTy, "str.parts");
     for (size_t i = 0; i < strings.size(); ++i) {
         auto* slot = cg.builder.CreateInBoundsGEP(arrayTy, storage,
             {llvm::ConstantInt::get(i64Ty, 0), llvm::ConstantInt::get(i64Ty, i)}, "str.part");
@@ -296,7 +296,7 @@ llvm::Value* codegenClassOperator(const std::string& op, llvm::Value* leftValue,
     auto adapt = [&](llvm::Value* value, llvm::Type* wanted, const char* name) -> llvm::Value* {
         if (!value || value->getType() == wanted) return value;
         if (wanted->isPointerTy() && value->getType()->isStructTy()) {
-            llvm::Value* slot = cg.builder.CreateAlloca(value->getType(), nullptr, name);
+            llvm::Value* slot = cg.createEntryAlloca(value->getType(), name);
             cg.builder.CreateStore(value, slot);
             return slot;
         }

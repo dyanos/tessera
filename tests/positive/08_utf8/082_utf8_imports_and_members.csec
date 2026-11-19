@@ -1,4 +1,4 @@
-import 수학.대수.행렬
+import std.math.real = 실수;
 
 object 계산기 {
     def 두배(x: Int): Int = x + x

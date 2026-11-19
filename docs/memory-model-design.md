@@ -62,6 +62,11 @@ the old value, and dropping an array releases its elements. `new T[n]` zero-fill
 records `n` with the runtime (`csec_array_track`), since an array value carries no length; array
 literals release their fixed number of elements.
 
+Reference counting is skipped where it cannot matter: a literal or other constant is never counted,
+and a `val` that copies another immutable local of the same function (`val t = s`) shares its value
+without a count of its own, since `s` outlives it. A name that is ever moved with `<-` does not get
+this treatment.
+
 A `struct` may hold numbers, other structs and shared immutable values (`String`, enums, closures,
 interface values); every copy of the struct retains them and every struct storage that goes away
 (local, field, temporary, boxed interface value) releases them. A struct cannot hold an owned

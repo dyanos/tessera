@@ -609,7 +609,7 @@ llvm::Value* codegenNativeNetworkCall(
         }
 
         auto* wsadataTy = llvm::ArrayType::get(i8Ty, 512);
-        llvm::Value* wsadata = cg.builder.CreateAlloca(wsadataTy, nullptr, "net.wsadata");
+        llvm::Value* wsadata = cg.createEntryAlloca(wsadataTy, "net.wsadata");
         llvm::Value* wsadataPtr = cg.builder.CreateBitCast(wsadata, i8PtrTy, "net.wsadata.ptr");
         cg.builder.CreateCall(getOrCreateWSAStartup(cg), {llvm::ConstantInt::get(i16Ty, 0x0202), wsadataPtr});
 
@@ -620,7 +620,7 @@ llvm::Value* codegenNativeNetworkCall(
 
         auto* zero8Ty = llvm::ArrayType::get(i8Ty, 8);
         auto* sockaddrTy = llvm::StructType::get(cg.context, {i16Ty, i16Ty, i32Ty, zero8Ty});
-        llvm::Value* addr = cg.builder.CreateAlloca(sockaddrTy, nullptr, "net.sockaddr");
+        llvm::Value* addr = cg.createEntryAlloca(sockaddrTy, "net.sockaddr");
         cg.builder.CreateStore(
             llvm::ConstantInt::get(i16Ty, 2),
             cg.builder.CreateStructGEP(sockaddrTy, addr, 0, "net.family"));
@@ -1633,8 +1633,8 @@ llvm::Value* codegenBuiltinOdeCall(const std::string& functionName, const std::v
         llvm::Value* width = cg.builder.CreateFDiv(cg.builder.CreateFSub(b, a, "integral.range"), stepsAsDouble, "integral.width");
         llvm::Value* half = llvm::ConstantFP::get(f64Ty, 0.5);
 
-        llvm::Value* iPtr = cg.builder.CreateAlloca(i32Ty, nullptr, "integral.i");
-        llvm::Value* sumPtr = cg.builder.CreateAlloca(f64Ty, nullptr, "integral.sum");
+        llvm::Value* iPtr = cg.createEntryAlloca(i32Ty, "integral.i");
+        llvm::Value* sumPtr = cg.createEntryAlloca(f64Ty, "integral.sum");
         cg.builder.CreateStore(zero, iPtr);
         cg.builder.CreateStore(llvm::ConstantFP::get(f64Ty, 0.0), sumPtr);
 
@@ -1686,9 +1686,9 @@ llvm::Value* codegenBuiltinOdeCall(const std::string& functionName, const std::v
     llvm::Value* steps64 = coerceMathValueToI64(cg, argValues[4]);
     llvm::Value* steps = cg.builder.CreateTrunc(steps64, i32Ty, "ode.steps");
 
-    llvm::Value* tPtr = cg.builder.CreateAlloca(f64Ty, nullptr, "ode.t");
-    llvm::Value* yPtr = cg.builder.CreateAlloca(f64Ty, nullptr, "ode.y");
-    llvm::Value* iPtr = cg.builder.CreateAlloca(i32Ty, nullptr, "ode.i");
+    llvm::Value* tPtr = cg.createEntryAlloca(f64Ty, "ode.t");
+    llvm::Value* yPtr = cg.createEntryAlloca(f64Ty, "ode.y");
+    llvm::Value* iPtr = cg.createEntryAlloca(i32Ty, "ode.i");
     cg.builder.CreateStore(t0, tPtr);
     cg.builder.CreateStore(y0, yPtr);
     cg.builder.CreateStore(llvm::ConstantInt::get(i32Ty, 0), iPtr);
@@ -2488,8 +2488,9 @@ llvm::Value* FunctionCallNode::codegen() {
                     }
                     closureArgs.push_back(argValue);
                 }
-                llvm::Value* result = cg.builder.CreateCall(closureFuncType, code, closureArgs,
+                llvm::CallInst* result = cg.builder.CreateCall(closureFuncType, code, closureArgs,
                     llvmReturnType->isVoidTy() ? "" : "closure.call");
+                if (funcType->returnType && cg.isRefcountedType(funcType->returnType.get())) cg.registerStringTemporary(result);
                 type = funcType->returnType ? funcType->returnType->clone() : std::make_unique<UnknownType>();
                 return result;
             }

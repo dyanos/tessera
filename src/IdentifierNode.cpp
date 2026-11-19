@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "AccessFieldNode.h"
 
 #include "IdentifierNode.h"
 #include "ASTVisitor.h"
@@ -53,7 +54,7 @@ llvm::Value* wrapFunctionAsClosure(llvm::Function* fn) {
     }
 
     auto* closureType = llvm::StructType::get(cg.context, { opaquePtr, opaquePtr });
-    llvm::Value* closure = cg.builder.CreateAlloca(closureType, nullptr, "fn.closure");
+    llvm::Value* closure = cg.createEntryAlloca(closureType, "fn.closure");
     cg.builder.CreateStore(thunk, cg.builder.CreateStructGEP(closureType, closure, 0, "closure.code"));
     cg.builder.CreateStore(llvm::ConstantPointerNull::get(opaquePtr),
         cg.builder.CreateStructGEP(closureType, closure, 1, "closure.env"));
@@ -88,6 +89,21 @@ void IdentifierNode::accept(ASTVisitor& visitor) {
 
 llvm::Value* IdentifierNode::codegen() {
 	auto symbolOpt = CodeGenerator::getInstance().symbolTable.lookup(value);
+	if (const size_t dot = value.find('.'); dot != std::string::npos && dot > 0) {
+		Symbol* root = CodeGenerator::getInstance().symbolTable.lookup(value.substr(0, dot));
+		if (root && (root->symbolType == SymbolType::VARIABLE || root->symbolType == SymbolType::FIELD)) {
+			std::unique_ptr<ASTNode> chain = std::make_unique<IdentifierNode>(value.substr(0, dot));
+			size_t start = dot + 1;
+			while (start <= value.size()) {
+				const size_t next = value.find('.', start);
+				const std::string part = value.substr(start, next == std::string::npos ? std::string::npos : next - start);
+				chain = std::make_unique<AccessFieldNode>(std::move(chain), std::make_unique<IdentifierNode>(part));
+				if (next == std::string::npos) break;
+				start = next + 1;
+			}
+			return chain->codegen();
+		}
+	}
 	if (!symbolOpt) {
         auto& cg = CodeGenerator::getInstance();
         if (value == "true" || value == "false") {

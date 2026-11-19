@@ -2,6 +2,10 @@
 #include "ArrayLiteralNode.h"
 #include "ASTVisitor.h"
 #include "type_utils.h"
+#include "ast_walk.h"
+
+#include <map>
+#include <set>
 
 #include <iostream>
 #include <llvm/IR/Constants.h>
@@ -33,7 +37,8 @@ llvm::Value* ArrayLiteralNode::codegen() {
 
 	// Allocate array on stack
 	llvm::Value* arraySize = cg.builder.getInt32(elements.size());
-	llvm::Value* arrayPtr = cg.builder.CreateAlloca(elementType, arraySize, "arrlit");
+	llvm::Value* arrayPtr = hoistable ? cg.createEntryAlloca(elementType, "arrlit", arraySize)
+	                                  : cg.builder.CreateAlloca(elementType, arraySize, "arrlit");
 
 	// Store first element
 	llvm::Value* idx0 = llvm::ConstantInt::get(cg.builder.getInt32Ty(), 0);
@@ -74,4 +79,55 @@ std::unique_ptr<Type> ArrayLiteralNode::getType() {
 		}
 	}
 	return std::make_unique<ArrayType>(firstType, static_cast<int>(elements.size()));
+}
+
+namespace {
+
+bool borrowsOrReads(ASTNode* parent, ASTNode* child) {
+    if (auto* access = dynamic_cast<ArrayAccessNode*>(parent)) return access->array.get() == child;
+    if (auto* call = dynamic_cast<MethodCallNode*>(parent)) return call->object.get() == child;
+    if (auto* field = dynamic_cast<AccessFieldNode*>(parent)) return field->base.get() == child;
+    if (auto* prefix = dynamic_cast<PrefixExpressionNode*>(parent)) return prefix->op == "&" || prefix->op == "&mut";
+    if (auto* loop = dynamic_cast<ForStatementNode*>(parent)) return loop->iterableExpr.get() == child;
+    return false;
+}
+
+}
+
+std::set<std::string> ArrayLiteralNode::movedNames(ASTNode* functionBody) {
+    std::set<std::string> names;
+    auto visit = [&](auto& self, ASTNode* node) -> void {
+        ASTNode* moved = nullptr;
+        if (auto* prefix = dynamic_cast<PrefixExpressionNode*>(node); prefix && prefix->op == "<-") moved = prefix->expression.get();
+        if (auto* assignment = dynamic_cast<AssignmentExpressionNode*>(node); assignment && assignment->op == "<-") moved = assignment->right.get();
+        if (auto* identifier = dynamic_cast<IdentifierNode*>(moved)) names.insert(identifier->value);
+        ast_walk::forEachChild(node, [&](ASTNode* child, std::unique_ptr<ASTNode>*) { self(self, child); });
+    };
+    if (functionBody) visit(visit, functionBody);
+    return names;
+}
+
+void ArrayLiteralNode::markHoistable(ASTNode* functionBody) {
+    if (!functionBody) return;
+    std::map<std::string, std::vector<ArrayLiteralNode*>> bound;
+    std::set<std::string> escaping;
+    auto visit = [&](auto& self, ASTNode* node, ASTNode* parent, int lambdaDepth) -> void {
+        if (auto* literal = dynamic_cast<ArrayLiteralNode*>(node)) {
+            auto* declaration = dynamic_cast<VariableDeclarationNode*>(parent);
+            if (declaration && declaration->initializer.get() == node) bound[declaration->name].push_back(literal);
+            else if (parent && lambdaDepth == 0 && borrowsOrReads(parent, node)) literal->hoistable = true;
+        }
+        if (auto* identifier = dynamic_cast<IdentifierNode*>(node)) {
+            if (lambdaDepth > 0 || !parent || !borrowsOrReads(parent, node)) {
+                escaping.insert(identifier->value);
+            }
+        }
+        const int depth = lambdaDepth + (dynamic_cast<LambdaExpressionNode*>(node) ? 1 : 0);
+        ast_walk::forEachChild(node, [&](ASTNode* child, std::unique_ptr<ASTNode>*) { self(self, child, node, depth); });
+    };
+    visit(visit, functionBody, nullptr, 0);
+    for (auto& [name, literals] : bound) {
+        if (escaping.count(name)) continue;
+        for (ArrayLiteralNode* literal : literals) literal->hoistable = true;
+    }
 }

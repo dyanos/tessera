@@ -26,6 +26,7 @@
 #include "import_alias.h"
 
 #include <iostream>
+#include <streambuf>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
 #include <llvm/ExecutionEngine/GenericValue.h>
@@ -79,6 +80,47 @@ SourceLocation sourceLocationOf(int expandedLine) {
 }
 
 namespace {
+
+class ErrorLineCounter : public std::streambuf {
+public:
+    explicit ErrorLineCounter(std::ostream& stream) : stream(stream), target(stream.rdbuf()) { stream.rdbuf(this); }
+    ~ErrorLineCounter() override { stream.rdbuf(target); }
+    int count() const { return errors; }
+
+protected:
+    int overflow(int c) override {
+        if (c == traits_type::eof()) return traits_type::not_eof(c);
+        track(static_cast<char>(c));
+        return target->sputc(static_cast<char>(c));
+    }
+    std::streamsize xsputn(const char* text, std::streamsize size) override {
+        for (std::streamsize i = 0; i < size; ++i) track(text[i]);
+        return target->sputn(text, size);
+    }
+    int sync() override { return target->pubsync(); }
+
+private:
+    void track(char c) {
+        if (c == '\n') {
+            line.clear();
+            counted = false;
+            return;
+        }
+        if (counted || line.size() >= 16) return;
+        line.push_back(c);
+        if (line == "Error" || line == "Type error") {
+            ++errors;
+            counted = true;
+        }
+    }
+
+    std::ostream& stream;
+    std::streambuf* target;
+    std::string line;
+    bool counted = false;
+    int errors = 0;
+};
+
 enum class OutputMode {
     Run,
     RunIR,
@@ -1676,7 +1718,11 @@ int main(int argc, char** argv) {
 #endif
     }
     CodeGenerator::getInstance().generatingCode = true;
-    ast->codegen();
+    {
+        ErrorLineCounter codegenErrors(std::cerr);
+        ast->codegen();
+        CodeGenerator::getInstance().errorCount = std::max(CodeGenerator::getInstance().errorCount, codegenErrors.count());
+    }
     if (CodeGenerator::getInstance().errorCount > 0) {
         std::cerr << "Code generation found " << CodeGenerator::getInstance().errorCount
                   << " error(s)." << std::endl;
@@ -1723,6 +1769,7 @@ int main(int argc, char** argv) {
         codeGen.requireSystemNative();
     }
     codeGen.stripFreshTensorMarks();
+    codeGen.elideConstantRefcounts();
     debuginfo::finalize();
     if (llvm::verifyModule(*codeGen.module, &llvm::errs())) {
         std::cerr << "Generated LLVM IR is invalid. Aborting execution." << std::endl;
@@ -1785,6 +1832,7 @@ int main(int argc, char** argv) {
     }
     // optLevel == 0 with an emit mode: leave the module unoptimized.
     MPM.run(*codeGen.module, MAM);
+    codeGen.elideConstantRefcounts();
 
     if (outputMode == OutputMode::EmitIR || outputMode == OutputMode::EmitObject ||
         outputMode == OutputMode::EmitExecutable) {
