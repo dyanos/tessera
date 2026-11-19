@@ -121,9 +121,17 @@ public:
     void markOwnedParameters(const std::string& name, std::vector<bool> mask);
     llvm::Function* ownedValueDropFunction(const Type* type);
     bool isRefcountedType(const Type* type);
+    bool ownsParameter(const std::string& function, unsigned index) const;
     llvm::Function* rcReleaseFunction();
     llvm::Function* enumFieldReleaseFunction(const Type* type);
+    void finalizeOwnershipFunctions();
+    struct PendingBody { llvm::Function* function; std::unique_ptr<Type> type; bool enumRelease; };
+    std::vector<PendingBody> pendingBodies;
+    void emitClassDropBody(llvm::Function* fn, const Type* type);
+    void emitEnumReleaseBody(llvm::Function* fn, const Type* type);
     void registerOwnedSlotCleanup(llvm::Value* slot, llvm::Function* drop);
+    void registerHandleSlotCleanup(llvm::Value* slot, bool weak);
+    void registerArrayElementsCleanup(llvm::Value* array, const Type* elementType, unsigned count);
     void registerStringSlotCleanup(llvm::Value* slot);
     void registerTensorSlotCleanup(llvm::Value* slot);
     void registerDictSlotCleanup(llvm::Value* slot);
@@ -164,7 +172,7 @@ private:
     // Each cleanup is a (pointer, kind) pair: Free drops a single heap allocation, TensorFree also
     // frees the tensor's separate dims/data buffers, and SharedRelease/WeakRelease decrement a
     // Shared/Weak control block (freeing it only when both counts reach zero).
-    enum class CleanupKind { Free = 0, TensorFree = 1, SharedRelease = 2, WeakRelease = 3, StringSlotRelease = 4, TensorSlotDrop = 5, DictSlotFree = 6, OwnedSlotDrop = 7 };
+    enum class CleanupKind { Free = 0, TensorFree = 1, SharedRelease = 2, WeakRelease = 3, StringSlotRelease = 4, TensorSlotDrop = 5, DictSlotFree = 6, OwnedSlotDrop = 7, SharedSlotRelease = 8, WeakSlotRelease = 9 };
     std::unordered_map<llvm::Value*, llvm::Value*> dropFlags;  // owned pointer -> its i1 drop flag
     std::unordered_map<llvm::Value*, llvm::Function*> dropFunctions;
     std::vector<std::vector<std::pair<llvm::Value*, CleanupKind>>> cleanupScopes;

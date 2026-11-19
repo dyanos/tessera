@@ -115,7 +115,8 @@ void markOwnership(CodeGenerator& cg, const std::string& functionName, const Typ
         std::string declared = className;
         std::string templateName;
         if (templateInstanceArguments(className, &templateName, nullptr)) declared = templateName;
-        mask.push_back(!cg.isRefcountedType(&receiverType) && methodMayKeepThis(declared, methodName));
+        mask.push_back(!cg.isRefcountedType(&receiverType) && !typeIsCopy(&receiverType) &&
+                       methodMayKeepThis(declared, methodName));
     }
     for (const auto& parameter : parameters) {
         auto type = parameter ? parameter->getType() : nullptr;

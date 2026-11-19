@@ -44,13 +44,22 @@ lower learning cost, which is the stated goal.
 
 | Category | Examples | Assignment | Passed to fn | Destroyed |
 |---|---|---|---|---|
-| **Copy** | `Int Long Float Double Bool Char Byte Short`, small `@copy` structs | implicit copy | by value (copy) | trivially (no dtor) |
-| **Owned (non-copy)** | `box T`, heap classes, arrays/vectors, `String`, `Shared<T>` | **move** | move (consume) or `&`/`&mut` (borrow) | `box`/Tensor/Shared/Weak: scope-exit drop; classes/arrays: explicit `free` today |
+| **Copy** | `Int Long Float Double Bool Char Byte Short`, structs of Copy fields | implicit copy | by value (copy) | trivially (no dtor) |
+| **Owned (move)** | `box T`, reference classes, arrays/vectors, `Tensor`, `Dict`, `Set`, `Map`, `List`, `Shared<T>`, `Weak<T>` | **move** (`<-`) | move (`<-`, callee drops it) or `&`/`&mut` (borrow) | scope exit, reassignment, or the owner's drop |
+| **Shared immutable** | `String`, heap enums (recursive or with non-scalar payloads, e.g. `Option<String>`), escaping closures, interface values | implicit copy (reference count +1) | borrowed (+0) | when the last reference goes |
 | **Borrow** | `&T`, `&mut T` | copy of the reference (still lexically bound) | by value | nothing (non-owning) |
 
-The compiler classifies a type as Copy iff it is a primitive scalar or a struct explicitly marked
-`@copy` all of whose fields are Copy. Everything else is Owned. **[partial: today only `box T` is
-move-checked; §12 "Future" extends this to all Owned types.]**
+One rule covers the two owned categories: a value that can change has exactly one owner and moves;
+a value that cannot change is copied freely. Shared immutable values are reference counted by the
+runtime (`csec_rc_*`, keyed by address); values the runtime does not track (literals, borrowed
+runtime pointers, foreign externals) are never freed. Cycles can only be formed through
+`Shared<T>`; use `Weak<T>` for back references.
+
+Rules the type checker enforces for owned values: binding or passing a named owned value needs `<-`
+(or `&`, or `clone(...)`); an owned field cannot be taken by value or moved out (borrow it with
+`&obj.field`); a borrow cannot be moved or returned as an owned value; an `if`/`match` that yields an
+outer owned value needs `<-`; moving an outer value inside a loop body is rejected; a `[=]` lambda
+borrows the owned values it captures, or takes them when it escapes.
 
 ### 2.2 Creation
 
@@ -113,18 +122,24 @@ destructures with `x, y, z = f()`. Full semantics in §4. **[plan]**
 
 ### 2.9 Destruction
 
-At scope exit — on **every** path (normal, `return`, early return, `break`, `continue`, unwind,
-panic, match-arm exit) — still-owned `box`, Tensor, Shared, and Weak bindings are destroyed in
-reverse declaration order. Heap classes and arrays/vectors currently require explicit `free` while
-their ownership-aware drop glue is under construction. `Moved`, `Copy`, and `Destroyed` bindings
-are skipped.
+Every owned value is dropped exactly once on every path (normal exit, `return`, `break`,
+`continue`): each owner carries an `i1` drop flag that a move clears, so a value moved on some
+paths only is still dropped on the others. Drops run in reverse declaration order.
 
-Tensor temporaries are owned too. A fresh tensor result (`x @ w`, element-wise ops, `transpose`,
-`relu`, `softmax`, slices, `new Tensor`) that is only borrowed by another tensor operation lives in a
-compiler-owned slot and is dropped at the end of its full expression (statement or loop condition),
-or earlier on `return`/`break`/`continue`. A fresh result bound with `val` is owned by that binding
-when every later use only borrows it.
-**[impl, direct compiler]**
+- **Drop glue.** Each reference class gets `__csec_drop.<Class>`: it calls the class's `drop()`
+  method if it declares one, then drops the fields it owns (objects, boxes, tensors, arrays,
+  dictionaries, `Shared`/`Weak` handles, shared immutable values) and frees the object. Dictionaries
+  release the values they own; enums and closures release their payloads and captures through a
+  destructor registered with the reference count.
+- **Temporaries.** An owned or shared result that is not bound (a call result, `new T()`, a string
+  concatenation, a tensor operation) lives in a statement temporary and is dropped at the end of the
+  statement unless a binding, a store, a return, an owning parameter or a capture takes it.
+- **Reassignment** of a variable or field drops (or releases) the previous value.
+- **Threads.** `spawn`/`threadStart` keep their closure alive until the task finishes.
+
+`csec++ --leak-check` routes every program allocation through the runtime tracker; running the
+program with `CSEC_LEAK_CHECK=1` prints the blocks still allocated at exit (`=2` also prints their
+sizes and first bytes). `tests/run_leak_check.sh` requires 0 for every fixture that exits normally.
 
 ---
 

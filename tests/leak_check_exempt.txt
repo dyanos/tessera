@@ -1,0 +1,4 @@
+tests/positive/11_tensor/126_tensor_index_out_of_bounds.csec
+tests/positive/11_tensor/127_tensor_shape_mismatch.csec
+tests/positive/11_tensor/128_tensor_slice_out_of_range.csec
+tests/stdlib/positive/13_thread_unjoined_exit.csec

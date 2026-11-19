@@ -1,0 +1,51 @@
+// Strings, recursive enums, closures, interface values, dictionaries of objects and a class with a
+// drop method are all released when their last owner goes away (checked with --leak-check).
+interface Named { def name(): String; }
+
+class Tag(text: String) implements Named {
+    def name(): String = "tag:" + text
+}
+
+class Counter(start: Int) {
+    var count: Int = 0;
+    def bump(): Int { count = count + 1; return count; }
+    def drop(): Int { return count; }
+}
+
+enum List {
+    Nil,
+    Cons(head: String, tail: List)
+}
+
+def listLength(l: List): Int = l match {
+    case Nil => 0;
+    case Cons(_, rest) => 1 + listLength(rest);
+}
+
+def makeList(n: Int): List {
+    var l: List = Nil;
+    for (i <- 0 until n) { l = Cons("item" + i, l); }
+    return l;
+}
+
+def adder(k: Int): (Int) => Int {
+    val label: String = "k=" + k;
+    return [=](x: Int) -> { if (label == "") { return 0; } return x + k; };
+}
+
+def main(): Int {
+    var total = 0;
+    for (round <- 0 until 20) {
+        total = total + listLength(makeList(10));
+        val add = adder(round);
+        total = total + add(1) - round - 1;
+        val named: Named = new Tag("t" + round);
+        if (named.name() != "tag:t" + round) { return 2; }
+        val tags = {"a": new Tag("x"), "b": new Tag("y")};
+        total = total + tags.size() - 2;
+        val c = new Counter(round);
+        c.bump();
+    }
+    if (total != 200) { return 1; }
+    return 0;
+}

@@ -273,6 +273,10 @@ long long csec_rng_new(long long seed) {
     return reinterpret_cast<long long>(r);
 }
 
+void csec_rng_free(long long handle) {
+    if (handle) csecFree(reinterpret_cast<void*>(handle));
+}
+
 void csec_rng_seed(long long handle, long long seed) {
     csecRngSeed(csecRng(handle), static_cast<unsigned long long>(seed));
 }

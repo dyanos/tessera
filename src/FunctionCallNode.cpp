@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "type_checker.h"
 #include "source_map.h"
 #include "verifier.h"
 #include "dict_support.h"
@@ -903,6 +904,31 @@ llvm::Value* codegenNativeMicrothreadCall(
                 envSizeValue = llvm::ConstantExpr::getPtrToInt(llvm::ConstantExpr::getGetElementPtr(lambda->environmentType,
                     llvm::ConstantPointerNull::get(opaquePtr), llvm::ArrayRef<llvm::Constant*>{ llvm::ConstantInt::get(i32Ty, 1) }), i64Ty);
             }
+        }
+        auto* spawned = dynamic_cast<LambdaExpressionNode*>(arguments[0].get());
+        if (spawned && spawned->escapes && spawned->generatedFunction && isStrictOwnership()) {
+            llvm::Function* target = spawned->generatedFunction;
+            static int taskWrapperCount = 0;
+            llvm::Function* wrapper = llvm::Function::Create(
+                llvm::FunctionType::get(target->getReturnType(), { opaquePtr }, false), llvm::Function::InternalLinkage,
+                "__csec_closure_task." + std::to_string(taskWrapperCount++), cg.module.get());
+            {
+                llvm::IRBuilderBase::InsertPointGuard guard(cg.builder);
+                cg.builder.SetCurrentDebugLocation(llvm::DebugLoc());
+                cg.builder.SetInsertPoint(llvm::BasicBlock::Create(cg.context, "entry", wrapper));
+                llvm::Value* held = cg.builder.CreateLoad(opaquePtr, wrapper->getArg(0), "task.closure");
+                llvm::Value* heldEnv = cg.builder.CreateLoad(opaquePtr, cg.builder.CreateStructGEP(closureType, held, 1), "task.env");
+                llvm::Value* result = cg.builder.CreateCall(target, { heldEnv });
+                cg.releaseString(held);
+                if (target->getReturnType()->isVoidTy()) cg.builder.CreateRetVoid();
+                else cg.builder.CreateRet(result);
+            }
+            llvm::Value* box = cg.createEntryAlloca(opaquePtr, "task.closure.box");
+            cg.builder.CreateStore(closure, box);
+            cg.builder.CreateCall(getOrCreateRuntimeFunction(cg, "csec_rc_retain", llvm::Type::getVoidTy(cg.context), {opaquePtr}), {closure});
+            code = wrapper;
+            env = box;
+            envSizeValue = llvm::ConstantInt::get(i64Ty, 8);
         }
         if (functionName == "threadStart") {
             return cg.builder.CreateCall(
@@ -1951,7 +1977,11 @@ static llvm::Value* createCallWithAdjustedArgs(llvm::Function* function, const s
     adjustedArgs.reserve(argValues.size());
     for (size_t i = 0; i < argValues.size(); ++i) {
         llvm::Type* paramType = function->getFunctionType()->getParamType(static_cast<unsigned>(i));
-        llvm::Value* adjusted = coerceArgumentToParameterType(argValues[i], paramType);
+        llvm::Value* argument = argValues[i];
+        if (paramType->isPointerTy() && cg.ownsParameter(function->getName().str(), static_cast<unsigned>(i))) {
+            argument = cg.copyStackBufferToHeap(argument);
+        }
+        llvm::Value* adjusted = coerceArgumentToParameterType(argument, paramType);
         if (!adjusted || adjusted->getType() != paramType) {
             return defaultValueForReturnType(function->getReturnType());
         }

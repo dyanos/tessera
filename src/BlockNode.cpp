@@ -252,7 +252,10 @@ llvm::Value* BlockNode::codegen() {
 
     auto* currentBlock = cg.builder.GetInsertBlock();
     if (currentBlock && !csec_llvm::terminatorOrNull(currentBlock)) {
-        if (last && yieldsValue(statements.back().get())) cg.releaseFromCurrentScope(last);
+        if (last && yieldsValue(statements.back().get())) {
+            cg.releaseFromCurrentScope(last);
+            if (dynamic_cast<IdentifierNode*>(statements.back().get()) && cg.hasDropFlag(last)) cg.noteMoved(last);
+        }
         cg.emitCurrentScopeCleanups();
     }
     cg.exitCleanupScope();

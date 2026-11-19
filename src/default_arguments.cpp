@@ -45,6 +45,7 @@ struct SignatureIndex {
     std::map<std::string, std::vector<Signature>> classMethods;  // `C#m` (also `Interface#m`)
     std::map<std::string, std::string> superClass;               // class -> parent
     std::map<std::string, std::set<std::string>> fields;         // class -> its constructor parameters and fields
+    std::map<std::string, std::set<std::string>> valueFields;
     std::map<std::string, bool> keepsThis;                       // methodMayKeepThis results, by `C#m`
     std::map<std::string, std::vector<std::string>> methodClasses;  // method name -> classes declaring it
 };
@@ -65,11 +66,17 @@ std::vector<ParameterNode*> parametersOf(std::vector<std::unique_ptr<ASTNode>>& 
 void indexClass(SignatureIndex& table, ClassDeclarationNode& cls) {
     table.constructors[cls.name].push_back({"new " + cls.name, parametersOf(cls.constructorParams)});
     if (!cls.superClassName.empty()) table.superClass[cls.name] = cls.superClassName;
-    for (auto* p : parametersOf(cls.constructorParams)) table.fields[cls.name].insert(p->name);
+    for (auto* p : parametersOf(cls.constructorParams)) {
+        table.fields[cls.name].insert(p->name);
+        if (p->type && p->type->getKind() == Type::Kind::BASIC) table.valueFields[cls.name].insert(p->name);
+    }
     auto* body = dynamic_cast<ClassBodyNode*>(cls.body.get());
     if (!body) return;
     for (auto& fieldNode : body->fields) {
-        if (auto* field = dynamic_cast<VariableDeclarationNode*>(fieldNode.get())) table.fields[cls.name].insert(field->name);
+        if (auto* field = dynamic_cast<VariableDeclarationNode*>(fieldNode.get())) {
+            table.fields[cls.name].insert(field->name);
+            if (field->type && field->type->getKind() == Type::Kind::BASIC) table.valueFields[cls.name].insert(field->name);
+        }
     }
     for (auto& m : body->methods) {
         auto* method = dynamic_cast<FunctionDeclarationNode*>(m.get());
@@ -288,6 +295,13 @@ bool isFieldOf(const std::string& className, const std::string& name) {
     });
 }
 
+bool isValueFieldOf(const std::string& className, const std::string& name) {
+    return forEachAncestor(className, [&](const std::string& cls) {
+        auto it = index().valueFields.find(cls);
+        return it != index().valueFields.end() && it->second.count(name) > 0;
+    });
+}
+
 // Whether `cls` is `ancestor` or derives from it.
 bool derivesFrom(const std::string& cls, const std::string& ancestor) {
     return forEachAncestor(cls, [&](const std::string& c) { return c == ancestor; });
@@ -360,12 +374,14 @@ bool mayKeepThis(const std::string& className, const std::string& method, std::s
                     return;
                 }
             }
-            if (dynamic_cast<LambdaExpressionNode*>(node)) {
+            if (auto* lambda = dynamic_cast<LambdaExpressionNode*>(node)) {
                 // A lambda that mentions `this` or a field (by its bare name too) could outlive the call.
                 ast_walk::walk(node, nullptr, [&](ASTNode* n, std::unique_ptr<ASTNode>*) {
                     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
                         const std::string base = id->value.substr(0, id->value.find('.'));
-                        if (base == "this" || base == "super" || isFieldOf(declaringClass, base)) keeps = true;
+                        const bool copiedValue = !lambda->capturesByReference && base == id->value &&
+                                                 isValueFieldOf(declaringClass, base);
+                        if (base == "this" || base == "super" || (isFieldOf(declaringClass, base) && !copiedValue)) keeps = true;
                     }
                     return !keeps;
                 });

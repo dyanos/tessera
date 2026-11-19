@@ -18,6 +18,7 @@
 #include "type_utils.h"
 #include "dict_support.h"
 #include "ArrayAccessNode.h"
+#include "ArrayCreationNode.h"
 #include "MethodCallNode.h"
 
 #include <iostream>
@@ -238,10 +239,26 @@ llvm::Value* VariableDeclarationNode::codegen() {
          dynamic_cast<FunctionType*>(type.get()) != nullptr ||
          (type->getKind() == Type::Kind::CLASS && !declaredStructClass) ||
          type->getKind() == Type::Kind::BOX ||
-         (type->getKind() == Type::Kind::GENERIC && (type->getName() == "Shared" || type->getName() == "Weak")) ||
+         (!isStrictOwnership() && type->getKind() == Type::Kind::GENERIC && (type->getName() == "Shared" || type->getName() == "Weak")) ||
          arrayVectorFromCall || tensorMoveInitializer || freshTensorInitializer);
 
     if (bindPointerBackedValueDirectly) {
+        if (auto* literal = dynamic_cast<ArrayLiteralNode*>(initializer.get());
+            literal && isStrictOwnership() && !borrowsValue && llvm::isa<llvm::AllocaInst>(initValue) && !literal->elements.empty() &&
+            declBlock && declBlock->getParent() != cg.mainFunction && initValue->getType()->isPointerTy()) {
+            auto elementType = literal->elements[0]->getType();
+            if (type) {
+                if (auto* arrayType = dynamic_cast<ArrayType*>(type.get())) {
+                    if (arrayType->elementType) elementType = arrayType->elementType->clone();
+                }
+                else if (auto* generic = dynamic_cast<GenericType*>(type.get())) {
+                    if (!generic->typeArguments.empty() && generic->typeArguments[0]) elementType = generic->typeArguments[0]->clone();
+                }
+            }
+            if (elementType && llvm::cast<llvm::AllocaInst>(initValue)->getAllocatedType()->isPointerTy()) {
+                cg.registerArrayElementsCleanup(initValue, elementType.get(), static_cast<unsigned>(literal->elements.size()));
+            }
+        }
         cg.symbolTable.addSymbol(
             name,
             std::make_unique<Symbol>(name, type->clone(), initValue, isMutable, SymbolType::VARIABLE));
@@ -258,6 +275,17 @@ llvm::Value* VariableDeclarationNode::codegen() {
         }
         else if (autoDrop && type->getKind() == Type::Kind::CLASS && !declaredStructClass) {
             if (!moveInitializer || cg.hasCleanup(initValue)) cg.registerOwnedValueCleanup(initValue, type.get());
+        }
+        else if (isStrictOwnership() && !borrowsValue && declBlock && declBlock->getParent() != cg.mainFunction &&
+                 (type->getKind() == Type::Kind::ARRAY ||
+                  (type->getKind() == Type::Kind::GENERIC && (type->getName() == "Array" || type->getName() == "Vector"))) &&
+                 !llvm::isa<llvm::AllocaInst>(initValue) && !readsFromDict() &&
+                 (dynamic_cast<ArrayCreationExpressionNode*>(initializer.get()) ||
+                  dynamic_cast<ArrayCreationNode*>(initializer.get()) ||
+                  dynamic_cast<FunctionCallNode*>(initializer.get()) ||
+                  dynamic_cast<CallExpressionNode*>(initializer.get()) ||
+                  (moveInitializer && cg.hasCleanup(initValue)))) {
+            cg.registerOwnedValueCleanup(initValue, type.get());
         }
         else if (type->getName() == "Tensor") {
             bool sourceOwned = true;
@@ -360,6 +388,11 @@ llvm::Value* VariableDeclarationNode::codegen() {
     if (stringLocal) initValue = cg.takeOwnedString(initValue);
     cg.builder.CreateStore(initValue, alloc);
     if (stringLocal) cg.registerStringSlotCleanup(alloc);
+    if (type && type->getKind() == Type::Kind::GENERIC && (type->getName() == "Shared" || type->getName() == "Weak") &&
+        varType->isPointerTy() && isStrictOwnership() && !borrowsValue &&
+        cg.builder.GetInsertBlock()->getParent() != cg.mainFunction) {
+        cg.registerHandleSlotCleanup(alloc, type->getName() == "Weak");
+    }
     const bool referenceLocal = !borrowsValue && type && type->getKind() == Type::Kind::CLASS && !declaredStructClass &&
         varType->isPointerTy() && cg.builder.GetInsertBlock()->getParent() != cg.mainFunction && isStrictOwnership();
     if (referenceLocal && cg.isRefcountedType(type.get())) {

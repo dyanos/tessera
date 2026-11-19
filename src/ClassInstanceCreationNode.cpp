@@ -721,6 +721,7 @@ llvm::Value* ClassInstanceCreationNode::codegen() {
         std::cerr << "Error: class '" << resolvedClassName
                   << "' eagerly constructs its own type in a field initializer (infinite "
                      "construction); reference or nullable fields are not yet supported" << std::endl;
+        if (instance && llvm::isa<llvm::CallInst>(instance)) cg.builder.CreateCall(cg.freeFunction, { instance });
         return failInitialization();
     }
     cg.classesUnderConstruction.insert(resolvedClassName);

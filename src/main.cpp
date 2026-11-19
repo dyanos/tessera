@@ -1693,6 +1693,7 @@ int main(int argc, char** argv) {
     llvm::InitializeNativeTargetAsmParser();
 
     auto& codeGen = CodeGenerator::getInstance();
+    codeGen.finalizeOwnershipFunctions();
     llvm::Function* runtimeEntry = rebuildRuntimeMain(codeGen);
     if (codeGen.errorCount > 0) {
         for (llvm::Function& function : *codeGen.module) {

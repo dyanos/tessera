@@ -271,23 +271,25 @@ void CodeGenerator::noteMoved(llvm::Value* pointer) {
 }
 
 namespace {
-void collectRetained(llvm::Value* value, std::unordered_set<llvm::Value*>& retained) {
+void collectRetained(llvm::Value* value, std::unordered_set<llvm::Value*>& retained, bool followLoads = true) {
     if (!value || !retained.insert(value).second) return;
     if (auto* insert = llvm::dyn_cast<llvm::InsertValueInst>(value)) {
-        collectRetained(insert->getAggregateOperand(), retained);
-        collectRetained(insert->getInsertedValueOperand(), retained);
+        collectRetained(insert->getAggregateOperand(), retained, followLoads);
+        collectRetained(insert->getInsertedValueOperand(), retained, followLoads);
     }
     else if (auto* phi = llvm::dyn_cast<llvm::PHINode>(value)) {
-        for (llvm::Value* incoming : phi->incoming_values()) collectRetained(incoming, retained);
+        for (llvm::Value* incoming : phi->incoming_values()) {
+            if (!CodeGenerator::getInstance().hasDropFlag(incoming)) collectRetained(incoming, retained, followLoads);
+        }
     }
     else if (auto* select = llvm::dyn_cast<llvm::SelectInst>(value)) {
-        collectRetained(select->getTrueValue(), retained);
-        collectRetained(select->getFalseValue(), retained);
+        collectRetained(select->getTrueValue(), retained, followLoads);
+        collectRetained(select->getFalseValue(), retained, followLoads);
     }
     else if (auto* cast = llvm::dyn_cast<llvm::CastInst>(value)) {
-        collectRetained(cast->getOperand(0), retained);
+        collectRetained(cast->getOperand(0), retained, followLoads);
     }
-    else if (auto* load = llvm::dyn_cast<llvm::LoadInst>(value)) {
+    else if (auto* load = llvm::dyn_cast<llvm::LoadInst>(value); load && followLoads) {
         retained.insert(load->getPointerOperand());
     }
 }
@@ -366,6 +368,17 @@ void CodeGenerator::emitCleanupBody(llvm::Value* pointer, CleanupKind kind) {
         builder.CreateBr(contBB);
         builder.SetInsertPoint(contBB);
     }
+    else if (kind == CleanupKind::SharedSlotRelease || kind == CleanupKind::WeakSlotRelease) {
+        llvm::Value* held = builder.CreateLoad(i8PtrTy, pointer, "handle.local");
+        llvm::Function* fn = builder.GetInsertBlock()->getParent();
+        auto* releaseBB = llvm::BasicBlock::Create(context, "handle.release", fn);
+        auto* doneBB = llvm::BasicBlock::Create(context, "handle.done", fn);
+        builder.CreateCondBr(builder.CreateIsNull(held, "handle.null"), doneBB, releaseBB);
+        builder.SetInsertPoint(releaseBB);
+        emitCleanupBody(held, kind == CleanupKind::SharedSlotRelease ? CleanupKind::SharedRelease : CleanupKind::WeakRelease);
+        builder.CreateBr(doneBB);
+        builder.SetInsertPoint(doneBB);
+    }
     else if (kind == CleanupKind::OwnedSlotDrop) {
         llvm::Value* held = builder.CreateLoad(i8PtrTy, pointer, "owned.local");
         auto found = dropFunctions.find(pointer);
@@ -440,6 +453,26 @@ llvm::Function* CodeGenerator::classDropFunction(const Type* type) {
     auto* ptrTy = llvm::PointerType::getUnqual(context);
     auto* fn = llvm::Function::Create(llvm::FunctionType::get(llvm::Type::getVoidTy(context), { ptrTy }, false),
                                       llvm::Function::InternalLinkage, name, module.get());
+    pendingBodies.push_back({ fn, const_cast<Type*>(type)->clone(), false });
+    return fn;
+}
+
+void CodeGenerator::emitClassDropBody(llvm::Function* fn, const Type* type) {
+    ClassSymbol* classSymbol = symbolTable.lookupClass(type->getName());
+    if (!classSymbol || !llvm::dyn_cast_or_null<llvm::StructType>(classSymbol->classType)) {
+        std::string templateName;
+        if (templateInstanceArguments(type->getName(), &templateName, nullptr)) {
+            if (auto* templateSymbol = dynamic_cast<TemplateSymbol*>(symbolTable.lookup(templateName))) {
+                auto found = templateSymbol->classInstantiations.find(type->getName());
+                if (found != templateSymbol->classInstantiations.end()) classSymbol = found->second;
+            }
+        }
+    }
+    auto* layout = classSymbol ? llvm::dyn_cast_or_null<llvm::StructType>(classSymbol->classType) : nullptr;
+    if (!layout || layout->isOpaque()) return;
+    auto* ptrTy = llvm::PointerType::getUnqual(context);
+    (void)ptrTy;
+
     std::vector<std::pair<unsigned, std::unique_ptr<Type>>> slots;
     unsigned index = 0;
     for (const auto& paramName : classSymbol->constructorParamOrder) {
@@ -456,6 +489,20 @@ llvm::Function* CodeGenerator::classDropFunction(const Type* type) {
         }
         ++index;
     }
+    std::string templateName;
+    std::vector<std::unique_ptr<Type>> templateArguments;
+    if (templateInstanceArguments(type->getName(), &templateName, &templateArguments)) {
+        auto* templateSymbol = dynamic_cast<TemplateSymbol*>(symbolTable.lookup(templateName));
+        if (templateSymbol) {
+            for (auto& slot : slots) {
+                for (size_t k = 0; k < templateSymbol->typeParameters.size() && k < templateArguments.size(); ++k) {
+                    if (slot.second && slot.second->getName() == templateSymbol->typeParameters[k] && templateArguments[k]) {
+                        slot.second = templateArguments[k]->clone();
+                    }
+                }
+            }
+        }
+    }
     llvm::IRBuilderBase::InsertPointGuard guard(builder);
     builder.SetCurrentDebugLocation(llvm::DebugLoc());
     auto* entryBB = llvm::BasicBlock::Create(context, "entry", fn);
@@ -465,6 +512,9 @@ llvm::Function* CodeGenerator::classDropFunction(const Type* type) {
     builder.SetInsertPoint(entryBB);
     builder.CreateCondBr(builder.CreateIsNull(object, "object.null"), doneBB, bodyBB);
     builder.SetInsertPoint(bodyBB);
+    if (llvm::Function* userDrop = module->getFunction(type->getName() + "_drop")) {
+        if (userDrop->arg_size() == 1) builder.CreateCall(userDrop, { object });
+    }
     for (auto& slot : slots) {
         if (slot.first >= layout->getNumElements()) continue;
         llvm::Type* storage = layout->getElementType(slot.first);
@@ -477,7 +527,6 @@ llvm::Function* CodeGenerator::classDropFunction(const Type* type) {
     builder.CreateBr(doneBB);
     builder.SetInsertPoint(doneBB);
     builder.CreateRetVoid();
-    return fn;
 }
 
 void CodeGenerator::emitOwnedValueDrop(llvm::Value* value, const Type* type) {
@@ -532,7 +581,7 @@ void CodeGenerator::registerOwnedValueCleanup(llvm::Value* value, const Type* ty
         return;
     }
     if (TensorRuntime::isTensorTypeName(type->getName())) registerOwned(value, CleanupKind::TensorFree);
-    else if (type->getKind() == Type::Kind::BOX) registerOwned(value, CleanupKind::Free);
+    else if (type->getKind() == Type::Kind::BOX || ownedArrayType(type)) registerOwned(value, CleanupKind::Free);
     else if (type->getKind() == Type::Kind::GENERIC && type->getName() == "Shared") registerOwned(value, CleanupKind::SharedRelease);
     else if (type->getKind() == Type::Kind::GENERIC && type->getName() == "Weak") registerOwned(value, CleanupKind::WeakRelease);
     else if (ownedReferenceClass(type)) registerOwned(value, CleanupKind::Free);
@@ -541,7 +590,7 @@ void CodeGenerator::registerOwnedValueCleanup(llvm::Value* value, const Type* ty
 void CodeGenerator::releaseFromCurrentScope(llvm::Value* value) {
     if (cleanupScopes.empty() || !value) return;
     std::unordered_set<llvm::Value*> retained;
-    collectRetained(value, retained);
+    collectRetained(value, retained, false);
     auto& scope = cleanupScopes.back();
     scope.erase(std::remove_if(scope.begin(), scope.end(), [&](const auto& entry) {
         if (!retained.count(entry.first)) return false;
@@ -798,15 +847,53 @@ void CodeGenerator::markOwnedParameters(const std::string& name, std::vector<boo
     if (!name.empty() && any) ownedParameterMasks[name] = std::move(mask);
 }
 
+bool CodeGenerator::ownsParameter(const std::string& function, unsigned index) const {
+    auto found = ownedParameterMasks.find(function);
+    return found != ownedParameterMasks.end() && index < found->second.size() && found->second[index];
+}
+
 bool CodeGenerator::isRefcountedType(const Type* type) {
     if (!type) return false;
     if (type->getName() == "String") return true;
+    if (type->getKind() == Type::Kind::FUNCTION) return isStrictOwnership();
+    if (isInterfaceType(type)) return isStrictOwnership();
     const EnumInfo* info = enumOfType(type);
     return info && info->isReference;
 }
 
 llvm::Function* CodeGenerator::rcReleaseFunction() {
     return llvm::cast<llvm::Function>(rcFunction("csec_rc_release").getCallee());
+}
+
+void CodeGenerator::registerArrayElementsCleanup(llvm::Value* array, const Type* elementType, unsigned count) {
+    if (!array || !elementType || count == 0) return;
+    const bool counted = isRefcountedType(elementType);
+    if (!counted && typeIsCopy(elementType)) return;
+    if (ownedArrayType(elementType)) return;
+    auto* ptrTy = llvm::PointerType::getUnqual(context);
+    static int arrayReleaseCount = 0;
+    llvm::Function* fn = llvm::Function::Create(llvm::FunctionType::get(llvm::Type::getVoidTy(context), { ptrTy }, false),
+                                                llvm::Function::InternalLinkage,
+                                                "__csec_array_release." + std::to_string(arrayReleaseCount++), module.get());
+    {
+        llvm::IRBuilderBase::InsertPointGuard guard(builder);
+        builder.SetCurrentDebugLocation(llvm::DebugLoc());
+        ++stringHookDepth;
+        builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", fn));
+        for (unsigned i = 0; i < count; ++i) {
+            llvm::Value* element = builder.CreateLoad(ptrTy, builder.CreateGEP(ptrTy, fn->getArg(0), builder.getInt64(i)), "element");
+            if (counted) releaseString(element);
+            else emitOwnedValueDrop(element, elementType);
+        }
+        builder.CreateRetVoid();
+        --stringHookDepth;
+    }
+    registerOwned(array, CleanupKind::Free);
+    dropFunctions[array] = fn;
+}
+
+void CodeGenerator::registerHandleSlotCleanup(llvm::Value* slot, bool weak) {
+    registerOwned(slot, weak ? CleanupKind::WeakSlotRelease : CleanupKind::SharedSlotRelease);
 }
 
 void CodeGenerator::registerOwnedSlotCleanup(llvm::Value* slot, llvm::Function* drop) {
@@ -825,6 +912,17 @@ llvm::Function* CodeGenerator::enumFieldReleaseFunction(const Type* type) {
     auto* ptrTy = llvm::PointerType::getUnqual(context);
     auto* fn = llvm::Function::Create(llvm::FunctionType::get(llvm::Type::getVoidTy(context), { ptrTy }, false),
                                       llvm::Function::InternalLinkage, name, module.get());
+    pendingBodies.push_back({ fn, const_cast<Type*>(type)->clone(), true });
+    return fn;
+}
+
+void CodeGenerator::emitEnumReleaseBody(llvm::Function* fn, const Type* type) {
+    ClassSymbol* classSymbol = symbolTable.lookupClass(type->getName());
+    auto* layout = classSymbol ? llvm::dyn_cast_or_null<llvm::StructType>(classSymbol->classType) : nullptr;
+    if (!layout || layout->isOpaque()) return;
+    auto* ptrTy = llvm::PointerType::getUnqual(context);
+    (void)ptrTy;
+
     std::vector<std::pair<unsigned, std::unique_ptr<Type>>> slots;
     unsigned index = 0;
     for (const auto& paramName : classSymbol->constructorParamOrder) {
@@ -849,7 +947,6 @@ llvm::Function* CodeGenerator::enumFieldReleaseFunction(const Type* type) {
     }
     builder.CreateRetVoid();
     --stringHookDepth;
-    return fn;
 }
 
 llvm::Function* CodeGenerator::ownedValueDropFunction(const Type* type) {
@@ -1225,4 +1322,20 @@ llvm::Type* CodeGenerator::getLLVMType(const Type* type) {
         return nullptr;
     }
     return nullptr;
+}
+
+void CodeGenerator::finalizeOwnershipFunctions() {
+    for (size_t i = 0; i < pendingBodies.size(); ++i) {
+        llvm::Function* fn = pendingBodies[i].function;
+        if (!fn->empty()) continue;
+        std::unique_ptr<Type> type = pendingBodies[i].type->clone();
+        if (pendingBodies[i].enumRelease) emitEnumReleaseBody(fn, type.get());
+        else emitClassDropBody(fn, type.get());
+        if (fn->empty()) {
+            llvm::IRBuilderBase::InsertPointGuard guard(builder);
+            builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", fn));
+            if (!pendingBodies[i].enumRelease) builder.CreateCall(freeFunction, { fn->getArg(0) });
+            builder.CreateRetVoid();
+        }
+    }
 }

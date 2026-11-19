@@ -629,6 +629,14 @@ void TypeChecker::checkFunctionArguments(const std::vector<std::unique_ptr<ASTNo
                 reportError("Type error: argument " + std::to_string(i + 1) + " to '" + callName +
                             "' takes ownership; pass it with '<-', or declare the parameter as a borrow (&T)");
             }
+            else if (!argIsMove && !argIsNamedValue && isStrictOwnership() &&
+                     (paramType->getKind() == Type::Kind::ARRAY ||
+                      (paramType->getKind() == Type::Kind::GENERIC &&
+                       (paramType->getName() == "Array" || paramType->getName() == "Vector"))) &&
+                     (dynamic_cast<ArrayAccessNode*>(arg) || dynamic_cast<AccessFieldNode*>(arg))) {
+                reportError("Type error: argument " + std::to_string(i + 1) + " to '" + callName +
+                            "' takes ownership of an array it does not own; pass a new array or move a local with '<-'");
+            }
             else if (!argIsMove && argIsNamedValue && isFieldPath(arg)) {
                 checkOwnedValueUse(arg, "the call to '" + callName + "'");
             }

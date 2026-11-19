@@ -42,7 +42,9 @@ llvm::Value* AssignmentExpressionNode::codegen() {
                 return nullptr;
             }
             auto rightType = right->getType();
-            return access->codegenSliceAssign(rightValue, rightType.get());
+            llvm::Value* assigned = access->codegenSliceAssign(rightValue, rightType.get());
+            CodeGenerator::getInstance().dropTemporary(rightValue);
+            return assigned;
         }
     }
     llvm::Value* leftValue = left->codegen();

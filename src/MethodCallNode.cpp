@@ -46,8 +46,12 @@ llvm::Value* createMethodCallOrDefault(llvm::Function* function, std::vector<llv
     std::vector<llvm::Value*> adjustedArgs;
     adjustedArgs.reserve(argValues.size());
     for (size_t i = 0; i < argValues.size(); ++i) {
+        llvm::Value* argument = argValues[i];
+        if (argument && argument->getType()->isPointerTy() && cg.ownsParameter(function->getName().str(), static_cast<unsigned>(i))) {
+            argument = cg.copyStackBufferToHeap(argument);
+        }
         adjustedArgs.push_back(coerceArgumentValue(
-            argValues[i],
+            argument,
             function->getFunctionType()->getParamType(static_cast<unsigned>(i))));
         if (adjustedArgs.back()->getType() != function->getFunctionType()->getParamType(static_cast<unsigned>(i))) {
             return defaultValueForType(function->getReturnType());
