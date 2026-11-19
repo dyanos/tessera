@@ -2095,6 +2095,7 @@ llvm::Value* FunctionCallNode::codegen() {
             return nullptr;
         }
         llvm::Value* payload = argValues[0];
+        if (!argTypes.empty() && argTypes[0] && argTypes[0]->getName() == "String") payload = cg.takeOwnedString(payload);
         auto* i64Ty = llvm::Type::getInt64Ty(cg.context);
         // Control block { strong, weak, payload }. strong keeps the payload alive; weak keeps only
         // the block alive (for Weak<T> handles), so a cycle with a Weak edge is still reclaimed.

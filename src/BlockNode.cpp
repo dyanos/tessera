@@ -244,6 +244,7 @@ llvm::Value* BlockNode::codegen() {
         if (stmt->line > 0) debuginfo::setLine(stmt->line);
         cg.enterTemporaryFrame();
         last = stmt->codegen();
+        if (i + 1 == statements.size() && last && yieldsValue(stmt.get())) cg.promoteTemporaryString(last);
         cg.exitTemporaryFrame();
     }
 

@@ -34,7 +34,7 @@ public:
     }
 
     llvm::LLVMContext context;
-    llvm::IRBuilder<> builder;
+    llvm::IRBuilder<llvm::ConstantFolder, llvm::IRBuilderCallbackInserter> builder;
     std::unique_ptr<llvm::Module> module;
     llvm::Function* mainFunction; // non-owning, owned by module
 
@@ -111,6 +111,11 @@ public:
     llvm::Function* classDropFunction(const Type* type);
     void emitOwnedValueDrop(llvm::Value* value, const Type* type);
     void registerOwnedValueCleanup(llvm::Value* value, const Type* type);
+    void markStringFunction(const std::string& name, bool runtimeAllocated);
+    llvm::Value* takeOwnedString(llvm::Value* value);
+    void promoteTemporaryString(llvm::Value* value);
+    void registerStringSlotCleanup(llvm::Value* slot);
+    void releaseString(llvm::Value* value);
     void emitAllCleanups();
     void emitAllCleanupsExcept(llvm::Value* retainedValue);
     // Number of open cleanup scopes, and the drops of every scope opened at or above `depth`
@@ -145,7 +150,7 @@ private:
     // Each cleanup is a (pointer, kind) pair: Free drops a single heap allocation, TensorFree also
     // frees the tensor's separate dims/data buffers, and SharedRelease/WeakRelease decrement a
     // Shared/Weak control block (freeing it only when both counts reach zero).
-    enum class CleanupKind { Free = 0, TensorFree = 1, SharedRelease = 2, WeakRelease = 3 };
+    enum class CleanupKind { Free = 0, TensorFree = 1, SharedRelease = 2, WeakRelease = 3, StringSlotRelease = 4 };
     std::unordered_map<llvm::Value*, llvm::Value*> dropFlags;  // owned pointer -> its i1 drop flag
     std::unordered_map<llvm::Value*, llvm::Function*> dropFunctions;
     std::vector<std::vector<std::pair<llvm::Value*, CleanupKind>>> cleanupScopes;
@@ -157,7 +162,15 @@ private:
         llvm::Function* function;
         size_t cleanupDepth;
         std::vector<llvm::AllocaInst*> slots;
+        std::vector<llvm::AllocaInst*> stringSlots;
+        std::unordered_map<llvm::Value*, llvm::AllocaInst*> strings;
     };
+    int stringHookDepth = 0;
+    std::unordered_set<std::string> userStringFunctions;
+    std::unordered_set<std::string> runtimeStringFunctions;
+    void onInstructionInserted(llvm::Instruction* inst);
+    llvm::FunctionCallee rcFunction(const char* name);
+    void emitStringSlotRelease(llvm::AllocaInst* slot);
     std::vector<TemporaryFrame> temporaryFrames;
     std::vector<llvm::WeakTrackingVH> freshTensorMarks;
     llvm::Function* getTensorDropFunction();

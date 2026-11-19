@@ -278,6 +278,7 @@ void ClassDeclarationNode::declareMethod(FunctionDeclarationNode* method, ClassS
     llvm::FunctionType* funcType = llvm::FunctionType::get(returnType, paramTypes, false);
     std::string methodName = name + "_" + method->name; // 클래스 이름을 접두사로 사용
     llvm::Function* function = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, methodName, cg.module.get());
+    if (method->returnType && method->returnType->getName() == "String") cg.markStringFunction(function->getName().str(), false);
 
     std::vector<std::unique_ptr<Type>> types;
     types.push_back(std::make_unique<ClassType>(name));

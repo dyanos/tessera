@@ -171,6 +171,7 @@ llvm::Value* heapArrayLiteral(ArrayLiteralNode* literal, const Type* elementType
         }
         llvm::Value* slot = cg.builder.CreateInBoundsGEP(
             elementLLVM, buffer, llvm::ConstantInt::get(i64Type(), i), "dict.list.slot");
+        if (auto elemType = element ? element->getType() : nullptr; elemType && elemType->getName() == "String") value = cg.takeOwnedString(value);
         cg.builder.CreateStore(value, slot);
     }
     return buffer;
@@ -326,6 +327,9 @@ llvm::Value* codegenDictPayload(ASTNode* expr, const Type* targetType, long long
     auto sourceType = expr->getType();
     value = loadHandleSlot(value, sourceType.get());
     if (!value) return nullptr;
+    if (targetType->getName() == "String" && value->getType()->isPointerTy()) {
+        value = CodeGenerator::getInstance().takeOwnedString(value);
+    }
     llvm::Type* target = slotType(targetType);
     if (target && (target->isIntegerTy() || target->isFloatingPointTy())) {
         value = convertScalar(value, target, sourceType.get());

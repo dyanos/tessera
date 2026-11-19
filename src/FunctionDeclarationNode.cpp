@@ -120,6 +120,7 @@ llvm::Function* FunctionDeclarationNode::declarePrototype() {
             function->addFnAttr(llvm::Attribute::AlwaysInline);
         }
     }
+    if (this->returnType && this->returnType->getName() == "String") cg.markStringFunction(funcName, false);
     updateOrRegisterFunctionSymbolNamed(this->name, this->getType(), function, false);
     return function;
 }
@@ -195,6 +196,7 @@ llvm::Value* FunctionDeclarationNode::codegen() {
     if (!function) {
         function = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, cg.module.get());
     }
+    if (this->returnType && this->returnType->getName() == "String") cg.markStringFunction(funcName, false);
 
     if (this->isConstexpr) {
         function->addFnAttr(llvm::Attribute::AlwaysInline);

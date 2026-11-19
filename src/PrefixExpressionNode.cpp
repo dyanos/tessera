@@ -76,6 +76,7 @@ llvm::Value* lowerConcurrentCall(FunctionCallNode* call, bool wantFuture) {
         }
         auto type = arg->getType();
         value = cg.copyStackBufferToHeap(value);
+        if (type && type->getName() == "String") value = cg.takeOwnedString(value);
         values.push_back(value);
         types.push_back(type ? type->clone() : std::make_unique<UnknownType>());
         fields.push_back(value->getType());

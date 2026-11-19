@@ -26,7 +26,8 @@ void addUnique(std::vector<std::string>& values, const std::string& value) {
 }
 }
 
-CodeGenerator::CodeGenerator() : builder(context) {
+CodeGenerator::CodeGenerator()
+    : builder(context, llvm::ConstantFolder(), llvm::IRBuilderCallbackInserter([this](llvm::Instruction* inst) { onInstructionInserted(inst); })) {
     this->module = std::make_unique<llvm::Module>("main", context);
 
     auto* i8PtrTy = llvm::PointerType::getUnqual(context);
@@ -38,6 +39,81 @@ CodeGenerator::CodeGenerator() : builder(context) {
     this->builder.SetInsertPoint(entry);
     this->builder.CreateRet(this->builder.getInt32(0));
 
+    runtimeStringFunctions.insert("csec_string_concat");
+    runtimeStringFunctions.insert("csec_string_concat_many");
+    runtimeStringFunctions.insert("csec_string_substring");
+    runtimeStringFunctions.insert("csec_string_to_upper");
+    runtimeStringFunctions.insert("csec_string_to_lower");
+    runtimeStringFunctions.insert("csec_string_trim");
+    runtimeStringFunctions.insert("csec_to_string_i64");
+    runtimeStringFunctions.insert("csec_to_string_double");
+    runtimeStringFunctions.insert("csec_to_string_bool");
+    runtimeStringFunctions.insert("csec_to_string_char");
+    runtimeStringFunctions.insert("csec_read_line");
+    runtimeStringFunctions.insert("csec_command_line_arg");
+    runtimeStringFunctions.insert("csec_file_read_all_text");
+    runtimeStringFunctions.insert("csec_tcp_recv");
+    runtimeStringFunctions.insert("csec_posix_read");
+    runtimeStringFunctions.insert("csec_posix_getcwd");
+    runtimeStringFunctions.insert("csec_posix_getenv");
+    runtimeStringFunctions.insert("csec_io_read");
+    runtimeStringFunctions.insert("csec_pipe_read");
+    runtimeStringFunctions.insert("csec_pipe_read_line");
+    runtimeStringFunctions.insert("csec_piped_process_read_line");
+    runtimeStringFunctions.insert("csec_piped_process_read_all");
+    runtimeStringFunctions.insert("csec_shm_read_string");
+    runtimeStringFunctions.insert("csec_mail_last_body");
+    runtimeStringFunctions.insert("csec_mail_last_sender");
+    runtimeStringFunctions.insert("csec_process_receive_text");
+    runtimeStringFunctions.insert("csec_process_receive_text_timeout");
+    runtimeStringFunctions.insert("csec_os_process_output");
+    runtimeStringFunctions.insert("csec_df_last_error");
+    runtimeStringFunctions.insert("csec_df_to_csv_text");
+    runtimeStringFunctions.insert("csec_df_column_name");
+    runtimeStringFunctions.insert("csec_df_column_type");
+    runtimeStringFunctions.insert("csec_df_get_string");
+    runtimeStringFunctions.insert("csec_df_to_string");
+    runtimeStringFunctions.insert("csec_expr_to_string");
+    runtimeStringFunctions.insert("csec_df_format");
+    runtimeStringFunctions.insert("csec_df_schema");
+    runtimeStringFunctions.insert("csec_df_dtype");
+    runtimeStringFunctions.insert("csec_df_last_scan_info");
+    runtimeStringFunctions.insert("csec_lazy_explain");
+    runtimeStringFunctions.insert("csec_lazy_schema");
+    runtimeStringFunctions.insert("csec_json_last_error");
+    runtimeStringFunctions.insert("csec_json_type");
+    runtimeStringFunctions.insert("csec_json_get_string");
+    runtimeStringFunctions.insert("csec_json_key");
+    runtimeStringFunctions.insert("csec_json_stringify");
+    runtimeStringFunctions.insert("csec_json_quote");
+    runtimeStringFunctions.insert("csec_http_last_error");
+    runtimeStringFunctions.insert("csec_http_error");
+    runtimeStringFunctions.insert("csec_http_headers");
+    runtimeStringFunctions.insert("csec_http_header");
+    runtimeStringFunctions.insert("csec_http_body");
+    runtimeStringFunctions.insert("csec_http_line");
+    runtimeStringFunctions.insert("csec_http_event_data");
+    runtimeStringFunctions.insert("csec_http_event_name");
+    runtimeStringFunctions.insert("csec_http_event_id");
+    runtimeStringFunctions.insert("csec_url_encode");
+    runtimeStringFunctions.insert("csec_url_decode");
+    runtimeStringFunctions.insert("csec_url_resolve");
+    runtimeStringFunctions.insert("csec_html_to_text");
+    runtimeStringFunctions.insert("csec_html_title");
+    runtimeStringFunctions.insert("csec_html_links");
+    runtimeStringFunctions.insert("csec_bigint_to_string");
+    runtimeStringFunctions.insert("csec_dict_to_string");
+    runtimeStringFunctions.insert("csec_dict_key_at");
+    runtimeStringFunctions.insert("csec_alg_residue_to_string");
+    runtimeStringFunctions.insert("csec_poly_to_string");
+    runtimeStringFunctions.insert("csec_gf_to_string");
+    runtimeStringFunctions.insert("csec_logic_to_string");
+    runtimeStringFunctions.insert("csec_logic_counterexample");
+    runtimeStringFunctions.insert("csec_logic_model");
+    runtimeStringFunctions.insert("csec_thm_to_string");
+    runtimeStringFunctions.insert("csec_sym_solve");
+    runtimeStringFunctions.insert("csec_sym_to_string");
+    runtimeStringFunctions.insert("csec_sym_to_latex");
     this->mallocFunction = module->getFunction("malloc");
     if (!mallocFunction) {
         mallocFunction = llvm::Function::Create(
@@ -284,6 +360,12 @@ void CodeGenerator::emitCleanupBody(llvm::Value* pointer, CleanupKind kind) {
         builder.CreateBr(contBB);
         builder.SetInsertPoint(contBB);
     }
+    else if (kind == CleanupKind::StringSlotRelease) {
+        ++stringHookDepth;
+        llvm::Value* held = builder.CreateLoad(i8PtrTy, pointer, "string.local");
+        builder.CreateCall(rcFunction("csec_rc_release"), { held });
+        --stringHookDepth;
+    }
     else if (auto found = dropFunctions.find(pointer); found != dropFunctions.end()) {
         builder.CreateCall(found->second, { raw });
     }
@@ -391,6 +473,10 @@ void CodeGenerator::emitOwnedValueDrop(llvm::Value* value, const Type* type) {
     }
     if (TensorRuntime::isTensorTypeName(type->getName())) {
         builder.CreateCall(getTensorDropFunction(), { value });
+        return;
+    }
+    if (type->getName() == "String") {
+        releaseString(value);
         return;
     }
     if (type->getKind() == Type::Kind::GENERIC && (type->getName() == "Shared" || type->getName() == "Weak")) {
@@ -546,6 +632,96 @@ llvm::Function* CodeGenerator::getTensorDropFunction() {
     return fn;
 }
 
+llvm::FunctionCallee CodeGenerator::rcFunction(const char* name) {
+    auto* ptrTy = llvm::PointerType::getUnqual(context);
+    requireSystemNative();
+    return module->getOrInsertFunction(name, llvm::FunctionType::get(llvm::Type::getVoidTy(context), { ptrTy }, false));
+}
+
+void CodeGenerator::markStringFunction(const std::string& name, bool runtimeAllocated) {
+    if (name.empty()) return;
+    if (runtimeAllocated) runtimeStringFunctions.insert(name);
+    else userStringFunctions.insert(name);
+}
+
+void CodeGenerator::onInstructionInserted(llvm::Instruction* inst) {
+    if (stringHookDepth > 0) return;
+    auto* call = llvm::dyn_cast<llvm::CallInst>(inst);
+    llvm::Function* callee = call ? call->getCalledFunction() : nullptr;
+    if (!callee || !call->getType()->isPointerTy()) return;
+    const std::string name = callee->getName().str();
+    const bool runtime = runtimeStringFunctions.count(name) != 0;
+    if (!runtime && !userStringFunctions.count(name)) return;
+    ++stringHookDepth;
+    if (runtime) builder.CreateCall(rcFunction("csec_rc_adopt"), { call });
+    llvm::Function* fn = call->getFunction();
+    if (!temporaryFrames.empty() && temporaryFrames.back().function == fn) {
+        TemporaryFrame& frame = temporaryFrames.back();
+        auto* ptrTy = llvm::PointerType::getUnqual(context);
+        llvm::AllocaInst* slot = createEntryAlloca(ptrTy, "tmp.string.slot");
+        llvm::IRBuilder<> init(slot->getParent(), std::next(slot->getIterator()));
+        init.CreateStore(llvm::ConstantPointerNull::get(ptrTy), slot);
+        builder.CreateStore(call, slot);
+        frame.stringSlots.push_back(slot);
+        frame.strings[call] = slot;
+    }
+    --stringHookDepth;
+}
+
+void CodeGenerator::emitStringSlotRelease(llvm::AllocaInst* slot) {
+    ++stringHookDepth;
+    auto* ptrTy = llvm::PointerType::getUnqual(context);
+    llvm::Value* held = builder.CreateLoad(ptrTy, slot, "tmp.string.held");
+    builder.CreateCall(rcFunction("csec_rc_release"), { held });
+    builder.CreateStore(llvm::ConstantPointerNull::get(ptrTy), slot);
+    --stringHookDepth;
+}
+
+llvm::Value* CodeGenerator::takeOwnedString(llvm::Value* value) {
+    llvm::BasicBlock* block = builder.GetInsertBlock();
+    if (!value || !block || !value->getType()->isPointerTy() || llvm::isa<llvm::ConstantPointerNull>(value)) return value;
+    llvm::Function* fn = block->getParent();
+    ++stringHookDepth;
+    for (auto frameIt = temporaryFrames.rbegin(); frameIt != temporaryFrames.rend(); ++frameIt) {
+        if (frameIt->function != fn) continue;
+        auto found = frameIt->strings.find(value);
+        if (found == frameIt->strings.end()) continue;
+        builder.CreateStore(llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(context)), found->second);
+        frameIt->strings.erase(found);
+        --stringHookDepth;
+        return value;
+    }
+    builder.CreateCall(rcFunction("csec_rc_retain"), { value });
+    --stringHookDepth;
+    return value;
+}
+
+void CodeGenerator::promoteTemporaryString(llvm::Value* value) {
+    if (!value || temporaryFrames.size() < 2) return;
+    TemporaryFrame& current = temporaryFrames.back();
+    TemporaryFrame& outer = temporaryFrames[temporaryFrames.size() - 2];
+    if (outer.function != current.function) return;
+    auto found = current.strings.find(value);
+    if (found == current.strings.end()) return;
+    llvm::AllocaInst* slot = found->second;
+    current.strings.erase(found);
+    current.stringSlots.erase(std::remove(current.stringSlots.begin(), current.stringSlots.end(), slot),
+                              current.stringSlots.end());
+    outer.stringSlots.push_back(slot);
+    outer.strings[value] = slot;
+}
+
+void CodeGenerator::releaseString(llvm::Value* value) {
+    if (!value || !builder.GetInsertBlock() || !value->getType()->isPointerTy()) return;
+    ++stringHookDepth;
+    builder.CreateCall(rcFunction("csec_rc_release"), { value });
+    --stringHookDepth;
+}
+
+void CodeGenerator::registerStringSlotCleanup(llvm::Value* slot) {
+    registerOwned(slot, CleanupKind::StringSlotRelease);
+}
+
 void CodeGenerator::emitTemporarySlotDrop(llvm::AllocaInst* slot) {
     auto* ptrTy = llvm::PointerType::getUnqual(context);
     llvm::Value* held = builder.CreateLoad(ptrTy, slot, "tmp.tensor.held");
@@ -584,6 +760,9 @@ void CodeGenerator::exitTemporaryFrame() {
     for (auto it = frame.slots.rbegin(); it != frame.slots.rend(); ++it) {
         emitTemporarySlotDrop(*it);
     }
+    for (auto it = frame.stringSlots.rbegin(); it != frame.stringSlots.rend(); ++it) {
+        emitStringSlotRelease(*it);
+    }
 }
 
 void CodeGenerator::emitTemporaryDropsAbove(size_t depth) {
@@ -594,6 +773,9 @@ void CodeGenerator::emitTemporaryDropsAbove(size_t depth) {
         if (frameIt->function != fn || frameIt->cleanupDepth < depth) continue;
         for (auto it = frameIt->slots.rbegin(); it != frameIt->slots.rend(); ++it) {
             emitTemporarySlotDrop(*it);
+        }
+        for (auto it = frameIt->stringSlots.rbegin(); it != frameIt->stringSlots.rend(); ++it) {
+            emitStringSlotRelease(*it);
         }
     }
 }

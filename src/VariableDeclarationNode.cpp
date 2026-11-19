@@ -336,7 +336,10 @@ llvm::Value* VariableDeclarationNode::codegen() {
 
     llvm::AllocaInst* alloc = cg.builder.CreateAlloca(varType, nullptr, name.c_str());
 
+    const bool stringLocal = type && type->getName() == "String" && !isField && varType->isPointerTy();
+    if (stringLocal) initValue = cg.takeOwnedString(initValue);
     cg.builder.CreateStore(initValue, alloc);
+    if (stringLocal) cg.registerStringSlotCleanup(alloc);
 
     cg.symbolTable.addSymbol(
         name,

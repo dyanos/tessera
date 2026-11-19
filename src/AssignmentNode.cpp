@@ -40,6 +40,15 @@ llvm::Value* AssignmentNode::codegen() {
         }
     }
 
+    auto& cg = CodeGenerator::getInstance();
+    if (symbol->type && symbol->type->getName() == "String" && llvm::isa<llvm::AllocaInst>(symbol->value) &&
+        exprValue->getType()->isPointerTy()) {
+        exprValue = cg.takeOwnedString(exprValue);
+        llvm::Value* previous = cg.builder.CreateLoad(exprValue->getType(), symbol->value, name + ".previous");
+        cg.builder.CreateStore(exprValue, symbol->value);
+        cg.releaseString(previous);
+        return exprValue;
+    }
     CodeGenerator::getInstance().builder.CreateStore(exprValue, symbol->value);
     CodeGenerator::clearFreshTensor(exprValue);
 

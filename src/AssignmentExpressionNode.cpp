@@ -169,11 +169,24 @@ llvm::Value* AssignmentExpressionNode::codegen() {
     if ((op == "=" || op == "<-") && targetType->isPointerTy()) {
         auto& cg = CodeGenerator::getInstance();
         bool fieldTarget = dynamic_cast<AccessFieldNode*>(left.get()) != nullptr;
+        bool stringLocal = false;
         if (auto* id = dynamic_cast<IdentifierNode*>(left.get())) {
             Symbol* symbol = cg.symbolTable.lookup(id->value);
             fieldTarget = symbol && symbol->symbolType == SymbolType::FIELD;
+            stringLocal = symbol && !fieldTarget && symbol->value && llvm::isa<llvm::AllocaInst>(symbol->value);
         }
         auto fieldType = left->getType();
+        if (fieldType && fieldType->getName() == "String") {
+            rightValue = cg.takeOwnedString(rightValue);
+            if (fieldTarget || stringLocal) {
+                llvm::Value* previous = cg.builder.CreateLoad(targetType, targetPtr, "string.previous");
+                cg.builder.CreateStore(rightValue, targetPtr);
+                cg.releaseString(previous);
+                return rightValue;
+            }
+            cg.builder.CreateStore(rightValue, targetPtr);
+            return rightValue;
+        }
         if (fieldTarget && fieldType && !typeIsCopy(fieldType.get())) {
             rightValue = cg.copyStackBufferToHeap(rightValue);
             llvm::Value* previous = cg.builder.CreateLoad(targetType, targetPtr, "field.previous");

@@ -210,6 +210,7 @@ void csec_io_map_close(long long handle) {
 
 // Free a string the runtime allocated (e.g. a chunk from csec_io_read). Never pass a string literal.
 void csec_string_release(char* text) {
+    if (csecRcTracked(text)) return;
     csecFree(text);
 }
 

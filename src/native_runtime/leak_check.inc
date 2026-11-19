@@ -58,3 +58,54 @@ extern "C" CSEC_NATIVE_API void* csec_alloc(long long size) {
 extern "C" CSEC_NATIVE_API void csec_free(void* block) {
     csecFree(block);
 }
+
+namespace csec_rc {
+
+struct Shard {
+    std::mutex mutex;
+    std::unordered_map<const void*, long long> counts;
+};
+
+Shard& shardFor(const void* block) {
+    static Shard* shards = new Shard[64];
+    const auto key = reinterpret_cast<uintptr_t>(block);
+    return shards[(key >> 4) & 63];
+}
+
+}
+
+static bool csecRcTracked(const void* block) {
+    if (!block) return false;
+    csec_rc::Shard& shard = csec_rc::shardFor(block);
+    std::lock_guard<std::mutex> lock(shard.mutex);
+    return shard.counts.count(block) != 0;
+}
+
+extern "C" CSEC_NATIVE_API void csec_rc_adopt(const void* block) {
+    if (!block) return;
+    csec_rc::Shard& shard = csec_rc::shardFor(block);
+    std::lock_guard<std::mutex> lock(shard.mutex);
+    shard.counts[block] = 1;
+}
+
+extern "C" CSEC_NATIVE_API void csec_rc_retain(const void* block) {
+    if (!block) return;
+    csec_rc::Shard& shard = csec_rc::shardFor(block);
+    std::lock_guard<std::mutex> lock(shard.mutex);
+    auto found = shard.counts.find(block);
+    if (found != shard.counts.end()) ++found->second;
+}
+
+extern "C" CSEC_NATIVE_API void csec_rc_release(const void* block) {
+    if (!block) return;
+    csec_rc::Shard& shard = csec_rc::shardFor(block);
+    bool last = false;
+    {
+        std::lock_guard<std::mutex> lock(shard.mutex);
+        auto found = shard.counts.find(block);
+        if (found == shard.counts.end()) return;
+        last = --found->second <= 0;
+        if (last) shard.counts.erase(found);
+    }
+    if (last) csecFree(const_cast<void*>(block));
+}

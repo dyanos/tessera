@@ -146,6 +146,7 @@ llvm::Value* EnumConstructNode::codegen() {
             CodeGenerator::getInstance().error("value for ", enumName, ".", variantName, " field '", variant->fieldNames[k], "' has an incompatible type");
             return nullptr;
         }
+        if (param->second->type && param->second->type->getName() == "String") v = cg.takeOwnedString(v);
         cg.builder.CreateStore(v, cg.builder.CreateStructGEP(structType, instance, static_cast<unsigned>(index), field + ".ptr"));
     }
     return instance;
