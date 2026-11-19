@@ -17,6 +17,7 @@
 // type (classes, arrays, String, owned container/smart-pointer generics). See docs/memory-model-design.md.
 void setStrictOwnership(bool enabled);
 bool isStrictOwnership();
+bool typeIsCopy(const Type* type);
 
 // TypeChecker 클래스는 AST를 방문하여 타입 검사를 수행합니다.
 class TypeChecker : public ASTVisitor {
@@ -182,6 +183,8 @@ private:
     OwnershipState* findOwnership(const std::string& name);
     void checkIdentifierUse(const std::string& name);
     void markMoved(const std::string& name);
+    bool isFieldPath(ASTNode* node);
+    void checkOwnedValueUse(ASTNode* node, const std::string& context);
     void markBorrowed(const std::string& name, bool isMutableBorrow);
     void releaseBorrow(const std::string& name, bool isMutableBorrow);
     // Path-sensitive join (M3/M4): OR the `moved` flags from `source` into the current ownership

@@ -3,6 +3,8 @@
 #include "TensorRuntime.h"
 #include "type_utils.h"
 #include "interfaces.h"
+#include "type_checker.h"
+#include "enums.h"
 #include <llvm/IR/Verifier.h>
 #include <llvm/IR/Type.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -108,6 +110,7 @@ void CodeGenerator::exitCleanupScope() {
     if (!cleanupScopes.empty()) {
         for (const auto& entry : cleanupScopes.back()) {
             dropFlags.erase(entry.first);
+            dropFunctions.erase(entry.first);
         }
         cleanupScopes.pop_back();
     }
@@ -178,6 +181,7 @@ bool CodeGenerator::forgetCleanup(llvm::Value* pointer) {
         found = found || scope.size() != before;
     }
     dropFlags.erase(pointer);
+    dropFunctions.erase(pointer);
     return found;
 }
 
@@ -280,6 +284,9 @@ void CodeGenerator::emitCleanupBody(llvm::Value* pointer, CleanupKind kind) {
         builder.CreateBr(contBB);
         builder.SetInsertPoint(contBB);
     }
+    else if (auto found = dropFunctions.find(pointer); found != dropFunctions.end()) {
+        builder.CreateCall(found->second, { raw });
+    }
     else {
         builder.CreateCall(freeFunction, { raw });
     }
@@ -308,6 +315,107 @@ llvm::Value* CodeGenerator::copyStackBufferToHeap(llvm::Value* value) {
     llvm::Value* heap = builder.CreateCall(mallocFunction, { bytes }, "stack.copy.heap");
     builder.CreateMemCpy(heap, llvm::MaybeAlign(1), stack, llvm::MaybeAlign(1), bytes);
     return heap;
+}
+
+namespace {
+bool ownedReferenceClass(const Type* type) {
+    return type && type->getKind() == Type::Kind::CLASS && !typeIsCopy(type);
+}
+
+bool ownedArrayType(const Type* type) {
+    if (!type) return false;
+    if (type->getKind() == Type::Kind::ARRAY) return true;
+    return type->getKind() == Type::Kind::GENERIC && (type->getName() == "Array" || type->getName() == "Vector");
+}
+}
+
+llvm::Function* CodeGenerator::classDropFunction(const Type* type) {
+    if (!ownedReferenceClass(type)) return nullptr;
+    ClassSymbol* classSymbol = symbolTable.lookupClass(type->getName());
+    auto* layout = classSymbol ? llvm::dyn_cast_or_null<llvm::StructType>(classSymbol->classType) : nullptr;
+    if (!layout || layout->isOpaque()) return nullptr;
+    const std::string name = "__csec_drop." + type->getName();
+    if (llvm::Function* existing = module->getFunction(name)) return existing;
+    auto* ptrTy = llvm::PointerType::getUnqual(context);
+    auto* fn = llvm::Function::Create(llvm::FunctionType::get(llvm::Type::getVoidTy(context), { ptrTy }, false),
+                                      llvm::Function::InternalLinkage, name, module.get());
+    std::vector<std::pair<unsigned, std::unique_ptr<Type>>> slots;
+    unsigned index = 0;
+    for (const auto& paramName : classSymbol->constructorParamOrder) {
+        auto found = classSymbol->constructorParams.find(paramName);
+        if (found != classSymbol->constructorParams.end() && found->second && found->second->type) {
+            slots.emplace_back(index, found->second->type->clone());
+        }
+        ++index;
+    }
+    for (const auto& fieldName : classSymbol->fieldOrder) {
+        auto found = classSymbol->fields.find(fieldName);
+        if (found != classSymbol->fields.end() && found->second && found->second->type) {
+            slots.emplace_back(index, found->second->type->clone());
+        }
+        ++index;
+    }
+    llvm::IRBuilderBase::InsertPointGuard guard(builder);
+    builder.SetCurrentDebugLocation(llvm::DebugLoc());
+    auto* entryBB = llvm::BasicBlock::Create(context, "entry", fn);
+    auto* bodyBB = llvm::BasicBlock::Create(context, "drop", fn);
+    auto* doneBB = llvm::BasicBlock::Create(context, "done", fn);
+    llvm::Value* object = fn->getArg(0);
+    builder.SetInsertPoint(entryBB);
+    builder.CreateCondBr(builder.CreateIsNull(object, "object.null"), doneBB, bodyBB);
+    builder.SetInsertPoint(bodyBB);
+    for (auto& slot : slots) {
+        if (slot.first >= layout->getNumElements()) continue;
+        llvm::Type* storage = layout->getElementType(slot.first);
+        if (!storage->isPointerTy()) continue;
+        llvm::Value* fieldPtr = builder.CreateStructGEP(layout, object, slot.first, "drop.field");
+        llvm::Value* fieldValue = builder.CreateLoad(storage, fieldPtr, "drop.value");
+        emitOwnedValueDrop(fieldValue, slot.second.get());
+    }
+    builder.CreateCall(freeFunction, { object });
+    builder.CreateBr(doneBB);
+    builder.SetInsertPoint(doneBB);
+    builder.CreateRetVoid();
+    return fn;
+}
+
+void CodeGenerator::emitOwnedValueDrop(llvm::Value* value, const Type* type) {
+    if (!value || !type || !value->getType()->isPointerTy() || !builder.GetInsertBlock()) return;
+    if (llvm::Function* drop = classDropFunction(type)) {
+        builder.CreateCall(drop, { value });
+        return;
+    }
+    if (type->getKind() == Type::Kind::BOX || ownedArrayType(type)) {
+        builder.CreateCall(freeFunction, { value });
+        return;
+    }
+    if (TensorRuntime::isTensorTypeName(type->getName())) {
+        builder.CreateCall(getTensorDropFunction(), { value });
+        return;
+    }
+    if (type->getKind() == Type::Kind::GENERIC && (type->getName() == "Shared" || type->getName() == "Weak")) {
+        llvm::Function* fn = builder.GetInsertBlock()->getParent();
+        auto* releaseBB = llvm::BasicBlock::Create(context, "handle.release", fn);
+        auto* doneBB = llvm::BasicBlock::Create(context, "handle.done", fn);
+        builder.CreateCondBr(builder.CreateIsNull(value, "handle.null"), doneBB, releaseBB);
+        builder.SetInsertPoint(releaseBB);
+        emitCleanupBody(value, type->getName() == "Shared" ? CleanupKind::SharedRelease : CleanupKind::WeakRelease);
+        builder.CreateBr(doneBB);
+        builder.SetInsertPoint(doneBB);
+    }
+}
+
+void CodeGenerator::registerOwnedValueCleanup(llvm::Value* value, const Type* type) {
+    if (!value || !type) return;
+    if (llvm::Function* drop = classDropFunction(type)) {
+        registerOwned(value, CleanupKind::Free);
+        dropFunctions[value] = drop;
+        return;
+    }
+    if (type->getKind() == Type::Kind::BOX) registerOwned(value, CleanupKind::Free);
+    else if (type->getKind() == Type::Kind::GENERIC && type->getName() == "Shared") registerOwned(value, CleanupKind::SharedRelease);
+    else if (type->getKind() == Type::Kind::GENERIC && type->getName() == "Weak") registerOwned(value, CleanupKind::WeakRelease);
+    else if (ownedReferenceClass(type)) registerOwned(value, CleanupKind::Free);
 }
 
 void CodeGenerator::releaseFromCurrentScope(llvm::Value* value) {

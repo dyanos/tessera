@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "type_checker.h"
 #include "debug_info.h"
 #include "ClassDeclarationNode.h"
 #include "ASTVisitor.h"
@@ -404,6 +405,7 @@ llvm::Function* ClassDeclarationNode::defineMethod(FunctionDeclarationNode* meth
         bindField(fieldName, found->second->type, found->second->isMutable);
     }
 
+    std::vector<std::pair<llvm::Value*, std::unique_ptr<Type>>> ownedParameters;
     for (auto& param : method->parameters) {
         auto* paramNode = dynamic_cast<ParameterNode*>(param.get());
         if (!paramNode || !paramNode->type || argIt == function->arg_end()) {
@@ -418,12 +420,21 @@ llvm::Function* ClassDeclarationNode::defineMethod(FunctionDeclarationNode* meth
             cg.builder.CreateStore(argValue, paramSlot);
             argValue = paramSlot;
         }
+        if (isStrictOwnership() && !isStructClassType(paramNode->type.get()) && !typeIsCopy(paramNode->type.get())) {
+            ownedParameters.emplace_back(argValue, paramNode->type->clone());
+        }
         cg.symbolTable.addSymbol(
             paramNode->name,
             std::make_unique<Symbol>(paramNode->name, paramNode->type->clone(), argValue, false, SymbolType::VARIABLE));
     }
 
+    cg.enterCleanupScope();
+    for (auto& owned : ownedParameters) cg.registerOwnedValueCleanup(owned.first, owned.second.get());
     method->body->codegen();
+    if (cg.builder.GetInsertBlock() && !csec_llvm::terminatorOrNull(cg.builder.GetInsertBlock())) {
+        cg.emitCurrentScopeCleanups();
+    }
+    cg.exitCleanupScope();
 
     llvm::BasicBlock* currentBlock = cg.builder.GetInsertBlock();
     if (currentBlock && !csec_llvm::terminatorOrNull(currentBlock)) {

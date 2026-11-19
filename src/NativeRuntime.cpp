@@ -9,6 +9,7 @@
 #include <ctime>
 #include <filesystem>
 #include <regex>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -39,6 +40,7 @@
 #include "import_alias.h"
 
 // Implementation remains one translation unit so internal helpers retain private linkage.
+#include "native_runtime/leak_check.inc"
 #include "native_runtime/runtime_support.inc"
 #include "native_runtime/llvm_helper_calls.inc"
 #include "native_runtime/llvm_helper_control.inc"

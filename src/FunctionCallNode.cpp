@@ -2053,7 +2053,8 @@ llvm::Value* FunctionCallNode::codegen() {
             }
             llvm::Value* raw = cg.builder.CreateBitCast(
                 argValues[0], llvm::PointerType::getUnqual(cg.context), "free.ptr");
-            cg.builder.CreateCall(cg.freeFunction, { raw });
+            llvm::Function* drop = !argTypes.empty() && argTypes[0] ? cg.classDropFunction(argTypes[0].get()) : nullptr;
+            cg.builder.CreateCall(drop ? drop : cg.freeFunction, { raw });
         }
         else {
             std::cerr << "Error: free() expects a heap pointer argument" << std::endl;

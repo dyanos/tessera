@@ -239,7 +239,7 @@ llvm::Value* VariableDeclarationNode::codegen() {
             cg.registerCleanup(initValue);
         }
         else if (autoDrop && type->getKind() == Type::Kind::CLASS && !declaredStructClass) {
-            cg.registerFlaggedCleanup(initValue);
+            if (!moveInitializer || cg.hasCleanup(initValue)) cg.registerOwnedValueCleanup(initValue, type.get());
         }
         else if (type->getName() == "Tensor") {
             if (tensorMoveInitializer) {

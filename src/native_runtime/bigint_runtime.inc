@@ -208,7 +208,7 @@ int csec_bigint_cmp(void* a, void* b) {
 char* csec_bigint_to_string(void* a) {
     auto* v = static_cast<CsecBigInt*>(a);
     if (!v || v->sign == 0) {
-        char* z = static_cast<char*>(std::malloc(2));
+        char* z = static_cast<char*>(csecAlloc(2));
         if (!z) return nullptr;
         z[0] = '0'; z[1] = '\0';
         return z;
@@ -222,7 +222,7 @@ char* csec_bigint_to_string(void* a) {
         std::snprintf(buf, sizeof(buf), "%09u", v->mag[i]); // lower limbs: 9-digit padded
         s += buf;
     }
-    char* result = static_cast<char*>(std::malloc(s.size() + 1));
+    char* result = static_cast<char*>(csecAlloc(s.size() + 1));
     if (!result) return nullptr;
     std::memcpy(result, s.c_str(), s.size() + 1);
     return result;
@@ -321,7 +321,7 @@ int csec_bigint_digit_count(void* a) {
     if (!text) return 0;
     int digits = 0;
     for (const char* p = text; *p; ++p) if (*p >= '0' && *p <= '9') ++digits;
-    std::free(text);
+    csecFree(text);
     return digits;
 }
 

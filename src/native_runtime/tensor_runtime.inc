@@ -30,12 +30,12 @@ CsecTensor* csecTensorAlloc(long long rank, long long count) {
         rank < 0 || static_cast<unsigned long long>(rank) > maxElements) {
         csecTensorOutOfMemory(count);
     }
-    auto* t = static_cast<CsecTensor*>(std::malloc(sizeof(CsecTensor)));
+    auto* t = static_cast<CsecTensor*>(csecAlloc(sizeof(CsecTensor)));
     if (!t) csecTensorOutOfMemory(count);
     t->rank = rank;
     t->count = count;
-    t->dims = static_cast<long long*>(std::malloc(sizeof(long long) * static_cast<size_t>(rank > 0 ? rank : 1)));
-    t->data = static_cast<double*>(std::malloc(sizeof(double) * static_cast<size_t>(count > 0 ? count : 1)));
+    t->dims = static_cast<long long*>(csecAlloc(sizeof(long long) * static_cast<size_t>(rank > 0 ? rank : 1)));
+    t->data = static_cast<double*>(csecAlloc(sizeof(double) * static_cast<size_t>(count > 0 ? count : 1)));
     if (!t->dims || !t->data) csecTensorOutOfMemory(count);
     return t;
 }
@@ -268,7 +268,7 @@ static unsigned long long csecRngNext(CsecRng* r) {
 
 // A generator with its own state (0 is the shared global generator).
 long long csec_rng_new(long long seed) {
-    auto* r = static_cast<CsecRng*>(std::malloc(sizeof(CsecRng)));
+    auto* r = static_cast<CsecRng*>(csecAlloc(sizeof(CsecRng)));
     csecRngSeed(r, static_cast<unsigned long long>(seed));
     return reinterpret_cast<long long>(r);
 }

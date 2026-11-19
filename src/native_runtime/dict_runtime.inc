@@ -98,7 +98,7 @@ struct Dict {
         if (textKeys()) {
             // Keep a private copy of the key text so a key built at runtime stays valid.
             const std::string copy = text(key);
-            char* owned = static_cast<char*>(std::malloc(copy.size() + 1));
+            char* owned = static_cast<char*>(csecAlloc(copy.size() + 1));
             if (owned) {
                 std::memcpy(owned, copy.c_str(), copy.size() + 1);
                 entry.key = static_cast<long long>(reinterpret_cast<intptr_t>(owned));
@@ -117,7 +117,7 @@ struct Dict {
         Entry& entry = entries[static_cast<size_t>(at)];
         if (textKeys()) {
             textIndex.erase(text(entry.key));
-            std::free(reinterpret_cast<void*>(static_cast<intptr_t>(entry.key)));
+            csecFree(reinterpret_cast<void*>(static_cast<intptr_t>(entry.key)));
             entry.key = 0;
         }
         else {
@@ -302,7 +302,7 @@ void csec_dict_free(void* handle) {
     if (!dict) return;
     if (dict->textKeys()) {
         for (const auto& entry : dict->entries) {
-            std::free(reinterpret_cast<void*>(static_cast<intptr_t>(entry.key)));
+            csecFree(reinterpret_cast<void*>(static_cast<intptr_t>(entry.key)));
         }
     }
     delete dict;
@@ -354,7 +354,7 @@ long long csec_dict_key_at(void* handle, long long index) {
     }
     if (!dict->textKeys()) return entry->key;
     const std::string copy = csec_dict::Dict::text(entry->key);
-    char* owned = static_cast<char*>(std::malloc(copy.size() + 1));
+    char* owned = static_cast<char*>(csecAlloc(copy.size() + 1));
     if (!owned) {
         std::fflush(stdout);
         std::fprintf(stderr, "MemoryError: out of memory\n");
@@ -380,7 +380,7 @@ void csec_dict_clear(void* handle) {
     if (!dict) return;
     if (dict->textKeys()) {
         for (const auto& entry : dict->entries) {
-            std::free(reinterpret_cast<void*>(static_cast<intptr_t>(entry.key)));
+            csecFree(reinterpret_cast<void*>(static_cast<intptr_t>(entry.key)));
         }
     }
     dict->entries.clear();
@@ -486,7 +486,7 @@ int csec_set_is_disjoint(void* left, void* right) {
 char* csec_dict_to_string(void* handle) {
     std::string out;
     csec_dict::appendDict(out, csec_dict::asDict(handle), 0);
-    char* result = static_cast<char*>(std::malloc(out.size() + 1));
+    char* result = static_cast<char*>(csecAlloc(out.size() + 1));
     if (!result) return nullptr;
     std::memcpy(result, out.c_str(), out.size() + 1);
     return result;

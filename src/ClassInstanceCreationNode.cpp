@@ -570,6 +570,7 @@ llvm::Value* ClassInstanceCreationNode::codegen() {
         if (!value) {
             value = llvm::Constant::getNullValue(targetType);
         }
+        if (targetType->isPointerTy()) value = cg.copyStackBufferToHeap(value);
         value = coerceForStore(value, targetType);
         if (!value || value->getType() != targetType) {
             std::cerr << "Error: Constructor value for field '" << fieldName << "' has incompatible type" << std::endl;

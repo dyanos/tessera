@@ -354,7 +354,7 @@ char* csec_top_level_decl_name(const char* tokens, int ordinal) {
         }
         const char* suffix = csec_token_text_at(tokens, ordinal + 2);
         const size_t length = std::strlen(suffix) + 9;
-        char* result = static_cast<char*>(std::malloc(length));
+        char* result = static_cast<char*>(csecAlloc(length));
         if (!result) return const_cast<char*>("operator");
         std::snprintf(result, length, "operator%s", suffix);
         return result;
@@ -513,7 +513,7 @@ char* csec_generate_symbol_table(const char* tokens) {
             while (csec_token_kind_at(tokens, cursor) == 'M') ++cursor;
         }
     }
-    char* result = static_cast<char*>(std::malloc(output.size() + 1));
+    char* result = static_cast<char*>(csecAlloc(output.size() + 1));
     if (!result) return nullptr;
     std::memcpy(result, output.c_str(), output.size() + 1);
     return result;
@@ -525,7 +525,7 @@ char* csec_append_expression_until(const char* tokens, int start, int end) {
         output += csec_token_text_at(tokens, cursor);
         if (cursor + 1 < end) output += " ";
     }
-    char* result = static_cast<char*>(std::malloc(output.size() + 1));
+    char* result = static_cast<char*>(csecAlloc(output.size() + 1));
     if (!result) return nullptr;
     std::memcpy(result, output.c_str(), output.size() + 1);
     return result;
@@ -806,7 +806,7 @@ static const char* csec_llvm_type_for_name(const std::string& typeName) {
 }
 
 static char* csec_owned_string(const std::string& text) {
-    char* result = static_cast<char*>(std::malloc(text.size() + 1));
+    char* result = static_cast<char*>(csecAlloc(text.size() + 1));
     if (!result) return const_cast<char*>("");
     std::memcpy(result, text.c_str(), text.size() + 1);
     return result;

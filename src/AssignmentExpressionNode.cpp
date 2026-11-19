@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "type_checker.h"
 #include "AssignmentExpressionNode.h"
 #include "ASTVisitor.h"
 #include "IdentifierNode.h"
@@ -164,6 +165,23 @@ llvm::Value* AssignmentExpressionNode::codegen() {
         else if (op == "*=") rightValue = CodeGenerator::getInstance().builder.CreateMul(oldValue, rightValue, "assign.next");
         else if (op == "/=") rightValue = CodeGenerator::getInstance().builder.CreateSDiv(oldValue, rightValue, "assign.next");
         else rightValue = CodeGenerator::getInstance().builder.CreateSRem(oldValue, rightValue, "assign.next");
+    }
+    if ((op == "=" || op == "<-") && targetType->isPointerTy()) {
+        auto& cg = CodeGenerator::getInstance();
+        bool fieldTarget = dynamic_cast<AccessFieldNode*>(left.get()) != nullptr;
+        if (auto* id = dynamic_cast<IdentifierNode*>(left.get())) {
+            Symbol* symbol = cg.symbolTable.lookup(id->value);
+            fieldTarget = symbol && symbol->symbolType == SymbolType::FIELD;
+        }
+        auto fieldType = left->getType();
+        if (fieldTarget && fieldType && !typeIsCopy(fieldType.get())) {
+            rightValue = cg.copyStackBufferToHeap(rightValue);
+            llvm::Value* previous = cg.builder.CreateLoad(targetType, targetPtr, "field.previous");
+            cg.builder.CreateStore(rightValue, targetPtr);
+            cg.emitOwnedValueDrop(previous, fieldType.get());
+            CodeGenerator::clearFreshTensor(rightValue);
+            return rightValue;
+        }
     }
     CodeGenerator::getInstance().builder.CreateStore(rightValue, targetPtr);
     CodeGenerator::clearFreshTensor(rightValue);

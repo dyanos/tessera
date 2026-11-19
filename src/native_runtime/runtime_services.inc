@@ -181,7 +181,7 @@ char* csec_function_return_type_at(const char* tokens, int declStart) {
     }
     if (typeName.empty()) return const_cast<char*>("Unit");
 
-    char* result = static_cast<char*>(std::malloc(typeName.size() + 1));
+    char* result = static_cast<char*>(csecAlloc(typeName.size() + 1));
     if (!result) return const_cast<char*>("Unit");
     std::memcpy(result, typeName.c_str(), typeName.size() + 1);
     return result;
@@ -297,7 +297,7 @@ char* csec_string_substring(const char* value, int start, int length) {
     if (begin > len) begin = len;
     size_t resultLen = length < 0 ? len - begin : static_cast<size_t>(length);
     if (resultLen > len - begin) resultLen = len - begin;
-    char* result = static_cast<char*>(std::malloc(resultLen + 1));
+    char* result = static_cast<char*>(csecAlloc(resultLen + 1));
     if (!result) return nullptr;
     std::memcpy(result, text + begin, resultLen);
     result[resultLen] = '\0';
@@ -307,7 +307,7 @@ char* csec_string_substring(const char* value, int start, int length) {
 char* csec_string_to_upper(const char* value) {
     const char* text = value ? value : "";
     size_t len = std::strlen(text);
-    char* result = static_cast<char*>(std::malloc(len + 1));
+    char* result = static_cast<char*>(csecAlloc(len + 1));
     if (!result) return nullptr;
     for (size_t i = 0; i < len; ++i) {
         const unsigned char ch = static_cast<unsigned char>(text[i]);
@@ -320,7 +320,7 @@ char* csec_string_to_upper(const char* value) {
 char* csec_string_to_lower(const char* value) {
     const char* text = value ? value : "";
     size_t len = std::strlen(text);
-    char* result = static_cast<char*>(std::malloc(len + 1));
+    char* result = static_cast<char*>(csecAlloc(len + 1));
     if (!result) return nullptr;
     for (size_t i = 0; i < len; ++i) {
         const unsigned char ch = static_cast<unsigned char>(text[i]);
@@ -341,7 +341,7 @@ char* csec_string_trim(const char* value) {
         --end;
     }
     size_t len = static_cast<size_t>(end - begin);
-    char* result = static_cast<char*>(std::malloc(len + 1));
+    char* result = static_cast<char*>(csecAlloc(len + 1));
     if (!result) return nullptr;
     std::memcpy(result, begin, len);
     result[len] = '\0';
@@ -353,7 +353,7 @@ char* csec_to_string_i64(long long value) {
     auto converted = std::to_chars(buffer, buffer + sizeof(buffer), value);
     if (converted.ec != std::errc()) return nullptr;
     const size_t length = static_cast<size_t>(converted.ptr - buffer);
-    char* result = static_cast<char*>(std::malloc(length + 1));
+    char* result = static_cast<char*>(csecAlloc(length + 1));
     if (!result) return nullptr;
     std::memcpy(result, buffer, length);
     result[length] = '\0';
@@ -366,12 +366,12 @@ char* csec_to_string_double(double value) {
     if (written < 0) return nullptr;
     const size_t length = static_cast<size_t>(written);
     if (length < sizeof(stackBuffer)) {
-        char* result = static_cast<char*>(std::malloc(length + 1));
+        char* result = static_cast<char*>(csecAlloc(length + 1));
         if (!result) return nullptr;
         std::memcpy(result, stackBuffer, length + 1);
         return result;
     }
-    char* result = static_cast<char*>(std::malloc(length + 1));
+    char* result = static_cast<char*>(csecAlloc(length + 1));
     if (!result) return nullptr;
     std::snprintf(result, length + 1, "%f", value);
     return result;
@@ -380,14 +380,14 @@ char* csec_to_string_double(double value) {
 char* csec_to_string_bool(int value) {
     const char* text = value ? "true" : "false";
     const size_t len = value ? 4 : 5;
-    char* result = static_cast<char*>(std::malloc(len + 1));
+    char* result = static_cast<char*>(csecAlloc(len + 1));
     if (!result) return nullptr;
     std::memcpy(result, text, len + 1);
     return result;
 }
 
 char* csec_to_string_char(char value) {
-    char* result = static_cast<char*>(std::malloc(2));
+    char* result = static_cast<char*>(csecAlloc(2));
     if (!result) return nullptr;
     result[0] = value;
     result[1] = '\0';
@@ -395,7 +395,7 @@ char* csec_to_string_char(char value) {
 }
 
 char* csec_read_line(void) {
-    char* buffer = static_cast<char*>(std::malloc(4096));
+    char* buffer = static_cast<char*>(csecAlloc(4096));
     if (!buffer) return nullptr;
     buffer[0] = '\0';
     if (!std::fgets(buffer, 4096, stdin)) {
@@ -467,7 +467,7 @@ char* csec_command_line_arg(int index) {
         value = g_argv[index];
     }
     size_t length = std::strlen(value);
-    char* copy = static_cast<char*>(std::malloc(length + 1));
+    char* copy = static_cast<char*>(csecAlloc(length + 1));
     if (!copy) return nullptr;
     std::memcpy(copy, value, length + 1);
     return copy;
@@ -477,14 +477,14 @@ char* csec_file_read_all_text(const char* path) {
     if (!path) return nullptr;
     FILE* file = std::fopen(path, "rb");
     if (!file) {
-        char* empty = static_cast<char*>(std::malloc(1));
+        char* empty = static_cast<char*>(csecAlloc(1));
         if (empty) empty[0] = '\0';
         return empty;
     }
 
     if (std::fseek(file, 0, SEEK_END) != 0) {
         std::fclose(file);
-        char* empty = static_cast<char*>(std::malloc(1));
+        char* empty = static_cast<char*>(csecAlloc(1));
         if (empty) empty[0] = '\0';
         return empty;
     }
@@ -493,7 +493,7 @@ char* csec_file_read_all_text(const char* path) {
     if (size < 0) size = 0;
     std::rewind(file);
 
-    char* buffer = static_cast<char*>(std::malloc(static_cast<size_t>(size) + 1));
+    char* buffer = static_cast<char*>(csecAlloc(static_cast<size_t>(size) + 1));
     if (!buffer) {
         std::fclose(file);
         return nullptr;
@@ -776,7 +776,7 @@ char* csec_expand_imports(const char* path) {
     std::vector<std::filesystem::path> includeStack;
     std::vector<std::filesystem::path> includedFiles;
     std::string expanded = csecExpandImports(std::filesystem::path(path ? path : ""), includeStack, includedFiles);
-    char* result = static_cast<char*>(std::malloc(expanded.size() + 1));
+    char* result = static_cast<char*>(csecAlloc(expanded.size() + 1));
     if (!result) return nullptr;
     std::memcpy(result, expanded.data(), expanded.size());
     result[expanded.size()] = '\0';
@@ -1117,7 +1117,7 @@ int csec_tcp_send(long long socket_handle, const char* data) {
 
 char* csec_tcp_recv(long long socket_handle, int max_bytes) {
     if (max_bytes < 0) max_bytes = 0;
-    char* buffer = static_cast<char*>(std::malloc(static_cast<size_t>(max_bytes) + 1));
+    char* buffer = static_cast<char*>(csecAlloc(static_cast<size_t>(max_bytes) + 1));
     if (!buffer) return nullptr;
     buffer[0] = '\0';
 #ifdef _WIN32
@@ -1152,7 +1152,7 @@ int csec_posix_open(const char* path, int flags, int mode) {
 
 char* csec_posix_read(int fd, int max_bytes) {
     if (max_bytes < 0) max_bytes = 0;
-    char* buffer = static_cast<char*>(std::malloc(static_cast<size_t>(max_bytes) + 1));
+    char* buffer = static_cast<char*>(csecAlloc(static_cast<size_t>(max_bytes) + 1));
     if (!buffer) return nullptr;
     buffer[0] = '\0';
     if (fd < 0) return buffer;
@@ -1257,7 +1257,7 @@ char* csec_posix_getenv(const char* name) {
     const char* value = std::getenv(name);
     if (!value) value = "";
     size_t len = std::strlen(value);
-    char* copy = static_cast<char*>(std::malloc(len + 1));
+    char* copy = static_cast<char*>(csecAlloc(len + 1));
     if (!copy) return nullptr;
     std::memcpy(copy, value, len + 1);
     return copy;

@@ -113,6 +113,7 @@ void printUsage(const char* programName) {
         << "  --link-path <path>           Add a native library search path\n"
         << "  --strict-ownership           Force M2 strict ownership on (default; move-check all non-copy types)\n"
         << "  --no-strict-ownership        Opt out of default strict ownership (box-only move-checking)\n"
+        << "  --leak-check                 Track heap blocks; run with CSEC_LEAK_CHECK=1 to report unfreed blocks\n"
         << "  -- <args...>                 Pass arguments to a program run with --run\n"
         << "  --mangle <itanium|msvc> <signature>\n"
         << "                               Print a C++ ABI mangled name and exit\n";
@@ -1441,6 +1442,7 @@ int main(int argc, char** argv) {
     // --static: link the native runtime directly into the emitted executable (no System.Native.dll
     // dependency at run time). Only affects --emit-exe.
     bool staticRuntime = false;
+    bool leakCheck = false;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (parsingRuntimeArgs) {
@@ -1494,6 +1496,10 @@ int main(int argc, char** argv) {
         if (arg == "--strict-ownership") {
             // M2 strict ownership is on by default; kept for explicitness / forcing it back on.
             setStrictOwnership(true);
+            continue;
+        }
+        if (arg == "--leak-check") {
+            leakCheck = true;
             continue;
         }
         if (arg == "--no-strict-ownership") {
@@ -1703,6 +1709,18 @@ int main(int argc, char** argv) {
         }
     }
 
+    if (leakCheck) {
+        auto* ptrTy = llvm::PointerType::getUnqual(codeGen.context);
+        auto redirect = [&](const char* from, const char* to, llvm::FunctionType* type) {
+            llvm::Function* original = codeGen.module->getFunction(from);
+            if (!original || original->use_empty()) return;
+            llvm::FunctionCallee tracked = codeGen.module->getOrInsertFunction(to, type);
+            original->replaceAllUsesWith(tracked.getCallee());
+        };
+        redirect("malloc", "csec_alloc", llvm::FunctionType::get(ptrTy, { llvm::Type::getInt64Ty(codeGen.context) }, false));
+        redirect("free", "csec_free", llvm::FunctionType::get(llvm::Type::getVoidTy(codeGen.context), { ptrTy }, false));
+        codeGen.requireSystemNative();
+    }
     codeGen.stripFreshTensorMarks();
     debuginfo::finalize();
     if (llvm::verifyModule(*codeGen.module, &llvm::errs())) {

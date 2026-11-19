@@ -108,6 +108,9 @@ public:
     void emitCurrentScopeCleanups();
     void releaseFromCurrentScope(llvm::Value* value);
     llvm::Value* copyStackBufferToHeap(llvm::Value* value);
+    llvm::Function* classDropFunction(const Type* type);
+    void emitOwnedValueDrop(llvm::Value* value, const Type* type);
+    void registerOwnedValueCleanup(llvm::Value* value, const Type* type);
     void emitAllCleanups();
     void emitAllCleanupsExcept(llvm::Value* retainedValue);
     // Number of open cleanup scopes, and the drops of every scope opened at or above `depth`
@@ -144,6 +147,7 @@ private:
     // Shared/Weak control block (freeing it only when both counts reach zero).
     enum class CleanupKind { Free = 0, TensorFree = 1, SharedRelease = 2, WeakRelease = 3 };
     std::unordered_map<llvm::Value*, llvm::Value*> dropFlags;  // owned pointer -> its i1 drop flag
+    std::unordered_map<llvm::Value*, llvm::Function*> dropFunctions;
     std::vector<std::vector<std::pair<llvm::Value*, CleanupKind>>> cleanupScopes;
     void registerOwned(llvm::Value* pointer, CleanupKind kind);
     void emitCleanupEntry(llvm::Value* pointer, CleanupKind kind, const std::unordered_set<llvm::Value*>& retained);

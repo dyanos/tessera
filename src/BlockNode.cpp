@@ -186,6 +186,23 @@ bool onlyBorrowingTensorUses(const std::string& name, std::vector<std::unique_pt
     for (size_t i = from; i < statements.size() && safe; ++i) visit(statements[i].get(), nullptr);
     return safe;
 }
+bool initializerOwnsResult(ASTNode* initializer) {
+    if (dynamic_cast<ClassInstanceCreationNode*>(initializer)) return true;
+    if (auto* prefix = dynamic_cast<PrefixExpressionNode*>(initializer)) return prefix->op == "<-";
+    if (auto* call = dynamic_cast<FunctionCallNode*>(initializer)) {
+        return CodeGenerator::getInstance().symbolTable.lookupFunction(call->functionName, {}) != nullptr;
+    }
+    if (auto* call = dynamic_cast<MethodCallNode*>(initializer)) {
+        auto receiverType = call->object ? call->object->getType() : nullptr;
+        if (!receiverType || receiverType->getKind() != Type::Kind::CLASS) return false;
+        std::string className = receiverType->getName();
+        std::string templateName;
+        if (templateInstanceArguments(className, &templateName, nullptr)) className = templateName;
+        return !methodMayKeepThis(className, call->methodName);
+    }
+    return false;
+}
+
 bool yieldsValue(ASTNode* statement) {
     return dynamic_cast<IdentifierNode*>(statement) || dynamic_cast<PrefixExpressionNode*>(statement) ||
            dynamic_cast<TupleExpressionNode*>(statement) || dynamic_cast<IfStatementNode*>(statement) ||
@@ -214,7 +231,7 @@ llvm::Value* BlockNode::codegen() {
             if (declType && declType->getName() == "Tensor") {
                 decl->autoDrop = !decl->isMutable && onlyBorrowingTensorUses(decl->name, statements, i + 1);
             }
-            else if (isStrictOwnership() && dynamic_cast<ClassInstanceCreationNode*>(decl->initializer.get())) {
+            else if (isStrictOwnership() && initializerOwnsResult(decl->initializer.get())) {
                 if (declType && declType->getKind() == Type::Kind::CLASS && !isStructClassType(declType.get()) &&
                     !enumOfType(declType.get())) {
                     std::string className = declType->getName();
