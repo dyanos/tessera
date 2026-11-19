@@ -25,6 +25,8 @@ CSEC_NATIVE_API void csec_rc_adopt_with(const void* block, void* destructor);
 CSEC_NATIVE_API void csec_rng_free(long long handle);
 CSEC_NATIVE_API void csec_rc_retain(const void* block);
 CSEC_NATIVE_API void csec_rc_release(const void* block);
+CSEC_NATIVE_API void csec_array_track(const void* block, long long count);
+CSEC_NATIVE_API long long csec_array_untrack(const void* block);
 CSEC_NATIVE_API void csec_print_string(const char* value);
 CSEC_NATIVE_API void csec_assert_fail(const char* where, const char* message);
 CSEC_NATIVE_API void csec_print_i64(long long value);

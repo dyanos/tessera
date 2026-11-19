@@ -2237,6 +2237,15 @@ void TypeChecker::visit(FunctionCallNode& node) {
     if (node.functionName == "print" || node.functionName == "println") {
         for (auto& arg : node.arguments) wrapInToString(arg, *this);
     }
+    if (node.functionName == "Shared" && node.arguments.size() == 1 && node.arguments[0] &&
+        !dynamic_cast<FunctionType*>(cg.symbolTable.lookup("Shared") ? cg.symbolTable.lookup("Shared")->type.get() : nullptr)) {
+        auto payload = node.arguments[0]->getType();
+        if (payload) payload = stripBorrow(payload);
+        if (payload && !isCopyType(payload.get())) {
+            reportError("Type error: Shared<" + payload->getName() + "> cannot hold an owned value; a Shared payload "
+                        "must be immutable (numbers, String, struct, enum, interface) so shared values cannot form cycles");
+        }
+    }
     if (auto* tmpl = dynamic_cast<TemplateSymbol*>(cg.symbolTable.lookup(node.functionName))) {
         auto* decl = dynamic_cast<FunctionDeclarationNode*>(tmpl->declaration.get());
         std::vector<std::unique_ptr<Type>> owned(tmpl->templateParams.size());

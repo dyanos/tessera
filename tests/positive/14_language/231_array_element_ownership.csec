@@ -1,0 +1,43 @@
+// Array elements own the strings and structs stored in them: an overwritten element is released,
+// and an array created with `new` releases its elements when it is dropped (checked with --leak-check).
+struct Item(name: String, n: Int) { }
+
+def item(i: Int): Item = new Item("item" + i, i)
+
+def fill(xs: &mut Array<String>, n: Int): Int {
+    for (i <- 0 until n) { xs[i] = "f" + i; }
+    return n;
+}
+
+def labels(n: Int): Array<String> {
+    var out = new String[n];
+    for (i <- 0 until n) { out[i] = "l" + i; }
+    return out;
+}
+
+def round(): Int {
+    var items = [item(1), item(2), item(3)];
+    items[1] = item(20);
+    val kept = items[1];
+    var names = new String[4];
+    names[2] = "k" + 2;
+    var total = kept.n + fill(&mut names, 3);
+    names[0] = "x" + 1;
+    val got = labels(5);
+    val third = got[3];
+    total = total + got[4].length() + third.length();
+    var scratch = new String[2];
+    scratch[0] = third;
+    free(scratch);
+    if (names[0] + names[1] + names[2] + third + items[0].name + items[1].name != "x1f1f2l3item1item20") {
+        return -1000;
+    }
+    return total;
+}
+
+def main(): Int {
+    var total = 0;
+    for (i <- 0 until 20) { total = total + round(); }
+    if (total != 540) { return 1; }
+    return 0;
+}

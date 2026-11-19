@@ -378,7 +378,7 @@ llvm::Value* MethodCallNode::codegen() {
     }
     auto* objectType = typeValue.get();
 
-    // Shared<T>/Weak<T> methods over the control block { i64 strong, i64 weak, payload }.
+    // Shared<T>/Weak<T> methods over the control block { i64 strong, i64 weak, payload drop, payload }.
     //   Shared.clone() retains (bumps strong, returns the same block);
     //   Shared.get()   reads the payload;
     //   Weak.get()     reads the payload if the value is still alive (strong > 0), else 0.
@@ -390,7 +390,8 @@ llvm::Value* MethodCallNode::codegen() {
             ? cg.getLLVMType(genType->typeArguments[0].get()) : nullptr;
         if (payloadType) {
             auto* i64Ty = llvm::Type::getInt64Ty(cg.context);
-            llvm::StructType* blockType = llvm::StructType::get(cg.context, { i64Ty, i64Ty, payloadType });
+            llvm::StructType* blockType = llvm::StructType::get(
+                cg.context, { i64Ty, i64Ty, llvm::PointerType::getUnqual(cg.context), payloadType });
             llvm::Value* block = cg.builder.CreateBitCast(
                 objectValue, llvm::PointerType::getUnqual(blockType->getContext()), "shared.block");
             if (!isWeak && methodName == "clone") {
@@ -400,7 +401,7 @@ llvm::Value* MethodCallNode::codegen() {
                 return objectValue;
             }
             if (methodName == "get") {
-                llvm::Value* payloadPtr = cg.builder.CreateStructGEP(blockType, block, 2, "shared.payload.ptr");
+                llvm::Value* payloadPtr = cg.builder.CreateStructGEP(blockType, block, 3, "shared.payload.ptr");
                 if (!isWeak) {
                     return cg.builder.CreateLoad(payloadType, payloadPtr, "shared.get");
                 }

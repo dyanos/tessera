@@ -347,7 +347,7 @@ void CodeGenerator::emitCleanupBody(llvm::Value* pointer, CleanupKind kind) {
         builder.CreateCall(freeFunction, { raw });
     }
     else if (kind == CleanupKind::SharedRelease || kind == CleanupKind::WeakRelease) {
-        // The control block is { i64 strong, i64 weak, payload }. A Shared owner decrements strong,
+        // The control block is { i64 strong, i64 weak, payload drop, payload }. A Shared owner decrements strong,
         // a Weak handle decrements weak. The block is freed only when BOTH counts reach zero (so a
         // live Weak keeps the block, and dropping the last Weak after all strong owners reclaims it).
         auto* i64Ty = llvm::Type::getInt64Ty(context);
@@ -363,6 +363,15 @@ void CodeGenerator::emitCleanupBody(llvm::Value* pointer, CleanupKind kind) {
             auto* lastStrongBB = llvm::BasicBlock::Create(context, "block.last.strong", fn);
             builder.CreateCondBr(builder.CreateICmpEQ(strong, one, "strong.last"), lastStrongBB, contBB);
             builder.SetInsertPoint(lastStrongBB);
+            llvm::Value* dropSlot = builder.CreateGEP(i64Ty, pointer, llvm::ConstantInt::get(i64Ty, 2), "block.drop.ptr");
+            llvm::Value* payloadDrop = builder.CreateLoad(i8PtrTy, dropSlot, "block.drop");
+            auto* dropBB = llvm::BasicBlock::Create(context, "block.drop.payload", fn);
+            auto* weakBB = llvm::BasicBlock::Create(context, "block.weak", fn);
+            builder.CreateCondBr(builder.CreateIsNull(payloadDrop), weakBB, dropBB);
+            builder.SetInsertPoint(dropBB);
+            builder.CreateCall(llvm::FunctionType::get(llvm::Type::getVoidTy(context), { i8PtrTy }, false), payloadDrop, { raw });
+            builder.CreateBr(weakBB);
+            builder.SetInsertPoint(weakBB);
         }
         llvm::Value* weak = builder.CreateAtomicRMW(llvm::AtomicRMWInst::Sub, weakPtr, one, llvm::MaybeAlign(8),
                                                     llvm::AtomicOrdering::AcquireRelease);
@@ -461,6 +470,95 @@ llvm::Function* CodeGenerator::classDropFunction(const Type* type) {
     return fn;
 }
 
+llvm::Function* CodeGenerator::arrayDropFunction(const Type* type) {
+    if (!ownedArrayType(type)) return nullptr;
+    const Type* element = nullptr;
+    if (auto* array = dynamic_cast<const ArrayType*>(type)) element = array->elementType.get();
+    else if (auto* generic = dynamic_cast<const GenericType*>(type)) {
+        if (generic->getName() != "Array" || generic->typeArguments.empty()) return nullptr;
+        element = generic->typeArguments[0].get();
+    }
+    if (!element || !isRefcountedType(element)) return nullptr;
+    llvm::Type* elementType = getLLVMType(element);
+    if (!elementType || !elementType->isPointerTy()) return nullptr;
+    const std::string name = "__csec_array_drop." + element->getName();
+    if (llvm::Function* existing = module->getFunction(name)) return existing;
+    auto* ptrTy = llvm::PointerType::getUnqual(context);
+    auto* i64Ty = llvm::Type::getInt64Ty(context);
+    requireSystemNative();
+    llvm::FunctionCallee untrack = module->getOrInsertFunction(
+        "csec_array_untrack", llvm::FunctionType::get(i64Ty, { ptrTy }, false));
+    auto* fn = llvm::Function::Create(llvm::FunctionType::get(llvm::Type::getVoidTy(context), { ptrTy }, false),
+                                      llvm::Function::InternalLinkage, name, module.get());
+    llvm::IRBuilderBase::InsertPointGuard guard(builder);
+    builder.SetCurrentDebugLocation(llvm::DebugLoc());
+    ++stringHookDepth;
+    auto* entryBB = llvm::BasicBlock::Create(context, "entry", fn);
+    auto* headBB = llvm::BasicBlock::Create(context, "head", fn);
+    auto* bodyBB = llvm::BasicBlock::Create(context, "body", fn);
+    auto* freeBB = llvm::BasicBlock::Create(context, "free", fn);
+    auto* doneBB = llvm::BasicBlock::Create(context, "done", fn);
+    builder.SetInsertPoint(entryBB);
+    llvm::Value* array = fn->getArg(0);
+    llvm::BasicBlock* countBB = llvm::BasicBlock::Create(context, "count", fn, headBB);
+    builder.CreateCondBr(builder.CreateIsNull(array), doneBB, countBB);
+    builder.SetInsertPoint(countBB);
+    llvm::Value* count = builder.CreateCall(untrack, { array }, "count");
+    builder.CreateBr(headBB);
+    builder.SetInsertPoint(headBB);
+    llvm::PHINode* index = builder.CreatePHI(i64Ty, 2, "index");
+    index->addIncoming(builder.getInt64(0), countBB);
+    builder.CreateCondBr(builder.CreateICmpSLT(index, count), bodyBB, freeBB);
+    builder.SetInsertPoint(bodyBB);
+    llvm::Value* item = builder.CreateLoad(ptrTy, builder.CreateGEP(ptrTy, array, index), "element");
+    builder.CreateCall(rcReleaseFunction(), { item });
+    index->addIncoming(builder.CreateAdd(index, builder.getInt64(1)), bodyBB);
+    builder.CreateBr(headBB);
+    builder.SetInsertPoint(freeBB);
+    builder.CreateCall(freeFunction, { array });
+    builder.CreateBr(doneBB);
+    builder.SetInsertPoint(doneBB);
+    builder.CreateRetVoid();
+    --stringHookDepth;
+    return fn;
+}
+
+llvm::Function* CodeGenerator::sharedPayloadDropFunction(const Type* type, llvm::Type* payloadType) {
+    if (!type || !payloadType) return nullptr;
+    const bool counted = isRefcountedType(type) && payloadType->isPointerTy();
+    llvm::Function* structRelease = counted ? nullptr : structCountFunction(type, false);
+    if (!counted && !structRelease) return nullptr;
+    const std::string name = "__csec_shared_payload_drop." + type->getName();
+    if (llvm::Function* existing = module->getFunction(name)) return existing;
+    auto* ptrTy = llvm::PointerType::getUnqual(context);
+    auto* i64Ty = llvm::Type::getInt64Ty(context);
+    auto* fn = llvm::Function::Create(llvm::FunctionType::get(llvm::Type::getVoidTy(context), { ptrTy }, false),
+                                      llvm::Function::InternalLinkage, name, module.get());
+    llvm::IRBuilderBase::InsertPointGuard guard(builder);
+    builder.SetCurrentDebugLocation(llvm::DebugLoc());
+    ++stringHookDepth;
+    builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", fn));
+    llvm::StructType* blockType = llvm::StructType::get(context, { i64Ty, i64Ty, ptrTy, payloadType });
+    llvm::Value* payloadPtr = builder.CreateStructGEP(blockType, fn->getArg(0), 3, "payload.ptr");
+    if (counted) builder.CreateCall(rcReleaseFunction(), { builder.CreateLoad(ptrTy, payloadPtr, "payload") });
+    else builder.CreateCall(structRelease, { payloadPtr });
+    builder.CreateRetVoid();
+    --stringHookDepth;
+    return fn;
+}
+
+void CodeGenerator::trackArrayElements(llvm::Value* array, llvm::Value* count) {
+    if (!array || !count || !builder.GetInsertBlock()) return;
+    auto* ptrTy = llvm::PointerType::getUnqual(context);
+    auto* i64Ty = llvm::Type::getInt64Ty(context);
+    requireSystemNative();
+    llvm::FunctionCallee track = module->getOrInsertFunction(
+        "csec_array_track", llvm::FunctionType::get(llvm::Type::getVoidTy(context), { ptrTy, i64Ty }, false));
+    ++stringHookDepth;
+    builder.CreateCall(track, { array, builder.CreateZExtOrTrunc(count, i64Ty) });
+    --stringHookDepth;
+}
+
 void CodeGenerator::emitClassDropBody(llvm::Function* fn, const Type* type) {
     ClassSymbol* classSymbol = symbolTable.lookupClass(type->getName());
     if (!classSymbol || !llvm::dyn_cast_or_null<llvm::StructType>(classSymbol->classType)) {
@@ -543,6 +641,10 @@ void CodeGenerator::emitOwnedValueDrop(llvm::Value* value, const Type* type) {
         builder.CreateCall(drop, { value });
         return;
     }
+    if (llvm::Function* drop = arrayDropFunction(type)) {
+        builder.CreateCall(drop, { value });
+        return;
+    }
     if (type->getKind() == Type::Kind::BOX || ownedArrayType(type)) {
         builder.CreateCall(freeFunction, { value });
         return;
@@ -586,6 +688,11 @@ void CodeGenerator::registerOwnedValueCleanup(llvm::Value* value, const Type* ty
     if (type->getKind() == Type::Kind::GENERIC && (type->getName() == "Dict" || type->getName() == "Set")) {
         registerOwned(value, CleanupKind::Free);
         dropFunctions[value] = dictFreeFunction();
+        return;
+    }
+    if (llvm::Function* drop = arrayDropFunction(type)) {
+        registerOwned(value, CleanupKind::Free);
+        dropFunctions[value] = drop;
         return;
     }
     if (TensorRuntime::isTensorTypeName(type->getName())) registerOwned(value, CleanupKind::TensorFree);
@@ -998,7 +1105,8 @@ llvm::Function* CodeGenerator::rcReleaseFunction() {
 void CodeGenerator::registerArrayElementsCleanup(llvm::Value* array, const Type* elementType, unsigned count) {
     if (!array || !elementType || count == 0) return;
     const bool counted = isRefcountedType(elementType);
-    if (!counted && typeIsCopy(elementType)) return;
+    llvm::Function* structRelease = counted ? nullptr : structCountFunction(elementType, false);
+    if (!counted && !structRelease && typeIsCopy(elementType)) return;
     if (ownedArrayType(elementType)) return;
     auto* ptrTy = llvm::PointerType::getUnqual(context);
     static int arrayReleaseCount = 0;
@@ -1010,7 +1118,12 @@ void CodeGenerator::registerArrayElementsCleanup(llvm::Value* array, const Type*
         builder.SetCurrentDebugLocation(llvm::DebugLoc());
         ++stringHookDepth;
         builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", fn));
+        llvm::Type* storage = structRelease ? getLLVMType(elementType) : nullptr;
         for (unsigned i = 0; i < count; ++i) {
+            if (structRelease) {
+                builder.CreateCall(structRelease, { builder.CreateGEP(storage, fn->getArg(0), builder.getInt64(i)) });
+                continue;
+            }
             llvm::Value* element = builder.CreateLoad(ptrTy, builder.CreateGEP(ptrTy, fn->getArg(0), builder.getInt64(i)), "element");
             if (counted) releaseString(element);
             else emitOwnedValueDrop(element, elementType);
