@@ -50,6 +50,10 @@ llvm::Value* AssignmentNode::codegen() {
         return exprValue;
     }
     if (exprValue->getType()->isPointerTy()) exprValue = cg.takeOwned(exprValue, symbol->type.get());
+    if (cg.structHoldsCounted(symbol->type.get()) && !exprValue->getType()->isPointerTy()) {
+        cg.takeOwned(exprValue, symbol->type.get());
+        cg.emitStructCount(symbol->value, symbol->type.get(), false);
+    }
     CodeGenerator::getInstance().builder.CreateStore(exprValue, symbol->value);
     CodeGenerator::clearFreshTensor(exprValue);
 

@@ -391,6 +391,10 @@ llvm::Value* LambdaExpressionNode::codegen() {
             llvm::Value* env = cg.builder.CreateLoad(ptrTy, cg.builder.CreateStructGEP(closureType, release->getArg(0), 1), "env");
             for (size_t i = 0; i < captured.size(); ++i) {
                 const Type* semantic = captured[i].semanticType.get();
+                if (semantic && captured[i].fieldType->isStructTy() && cg.structHoldsCounted(semantic)) {
+                    cg.emitStructCount(cg.builder.CreateStructGEP(envType, env, static_cast<unsigned>(i)), semantic, false);
+                    continue;
+                }
                 if (!captured[i].fieldType->isPointerTy() || !semantic) continue;
                 llvm::Value* value = cg.builder.CreateLoad(captured[i].fieldType, cg.builder.CreateStructGEP(envType, env, static_cast<unsigned>(i)), "captured");
                 if (cg.isRefcountedType(semantic)) cg.releaseString(value);

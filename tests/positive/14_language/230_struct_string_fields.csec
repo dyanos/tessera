@@ -1,0 +1,40 @@
+// A struct copies the strings it holds: each copy owns them, and each is released when it goes away
+// (checked with --leak-check).
+interface Labeled { def label(): String; }
+
+struct Person(name: String, age: Int) implements Labeled {
+    def label(): String = name + "/" + age
+}
+
+struct Pair(first: Person, second: Person) { }
+
+class Registry(owner: Person) {
+    var latest: Person = new Person("nobody", 0);
+    def record(p: Person): Int { latest = p; return latest.age; }
+}
+
+def make(i: Int): Person = new Person("p" + i, i)
+
+def older(a: Person, b: Person): Person {
+    if (a.age > b.age) { return a; }
+    return b;
+}
+
+def main(): Int {
+    var total = 0;
+    for (i <- 0 until 30) {
+        val p = make(i);
+        val q = p;
+        var r = make(i + 1);
+        r = older(p, r);
+        val pair = new Pair(p, make(i * 2));
+        val reg = new Registry(make(i));
+        total = total + reg.record(pair.second);
+        val shown: Labeled = q;
+        if (shown.label() != "p" + i + "/" + i) { return 1; }
+        if (r.name != "p" + (i + 1)) { return 2; }
+        total = total - i * 2;
+    }
+    if (total != 0) { return 3; }
+    return 0;
+}

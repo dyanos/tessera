@@ -223,6 +223,14 @@ llvm::Value* AssignmentExpressionNode::codegen() {
             return rightValue;
         }
     }
+    if (op == "=" || op == "<-") {
+        auto& cg = CodeGenerator::getInstance();
+        auto assignedType = left->getType();
+        if (cg.structHoldsCounted(assignedType.get())) {
+            cg.takeOwned(rightValue, assignedType.get());
+            if (!dynamic_cast<ArrayAccessNode*>(left.get())) cg.emitStructCount(targetPtr, assignedType.get(), false);
+        }
+    }
     CodeGenerator::getInstance().builder.CreateStore(rightValue, targetPtr);
     CodeGenerator::clearFreshTensor(rightValue);
     return rightValue;

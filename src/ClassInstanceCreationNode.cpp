@@ -670,7 +670,9 @@ llvm::Value* ClassInstanceCreationNode::codegen() {
             cg.symbolTable.exitScope();
             {
                 ClassType instanceType(resolvedClassName);
-                cg.registerOwnedTemporary(instance, cg.classDropFunction(&instanceType));
+                llvm::Function* drop = cg.classDropFunction(&instanceType);
+                if (!drop) drop = cg.structCountFunction(&instanceType, false);
+                cg.registerOwnedTemporary(instance, drop);
             }
             return instance;
         }
@@ -760,7 +762,9 @@ llvm::Value* ClassInstanceCreationNode::codegen() {
     cg.symbolTable.exitScope();
     {
         ClassType instanceType(resolvedClassName);
-        cg.registerOwnedTemporary(instance, cg.classDropFunction(&instanceType));
+        llvm::Function* drop = cg.classDropFunction(&instanceType);
+        if (!drop) drop = cg.structCountFunction(&instanceType, false);
+        cg.registerOwnedTemporary(instance, drop);
     }
 
     return instance;
