@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #ifndef _WIN32
@@ -53,7 +54,7 @@ struct Pipe {
     bool closed = false;
 };
 
-HandleTable<Pipe>& pipes() { static HandleTable<Pipe> table; return table; }
+HandleTable<Pipe>& pipes() { return csec_threads::leakedTable<Pipe>(); }
 
 // Take one line (without its terminator) from `buffer` when a full line or end of input is there.
 bool takeLine(std::string& buffer, bool atEnd, std::string& line) {
@@ -73,6 +74,8 @@ bool takeLine(std::string& buffer, bool atEnd, std::string& line) {
 // ---- child processes with piped stdin/stdout -------------------------------------------------------
 
 struct PipedProcess {
+    std::mutex inputMutex;
+    std::mutex outputMutex;
     std::string buffer;
     bool eof = false;
     bool inputOpen = true;
@@ -87,11 +90,19 @@ struct PipedProcess {
 #endif
 };
 
-HandleTable<PipedProcess>& pipedProcesses() { static HandleTable<PipedProcess> table; return table; }
+HandleTable<PipedProcess>& pipedProcesses() { return csec_threads::leakedTable<PipedProcess>(); }
 
 // Move whatever the child has written so far into the buffer without blocking; detects end of output.
 void pumpChildOutput(PipedProcess& p) {
     if (p.eof) return;
+#ifdef _WIN32
+    if (!p.fromChild) {
+#else
+    if (p.fromChild < 0) {
+#endif
+        p.eof = true;
+        return;
+    }
     char chunk[4096];
 #ifdef _WIN32
     for (;;) {
@@ -123,7 +134,7 @@ void pumpChildOutput(PipedProcess& p) {
 #endif
 }
 
-void closeChildInput(PipedProcess& p) {
+void closeChildInputLocked(PipedProcess& p) {
     if (!p.inputOpen) return;
     p.inputOpen = false;
 #ifdef _WIN32
@@ -133,6 +144,11 @@ void closeChildInput(PipedProcess& p) {
     ::close(p.toChild);
     p.toChild = -1;
 #endif
+}
+
+void closeChildInput(PipedProcess& p) {
+    std::lock_guard<std::mutex> lock(p.inputMutex);
+    closeChildInputLocked(p);
 }
 
 // ---- shared memory -------------------------------------------------------------------------------
@@ -151,6 +167,7 @@ static_assert(sizeof(SharedHeader) == kSharedHeader, "shared header layout");
 struct SharedRegion {
     unsigned char* base = nullptr;
     size_t mapped = 0;
+    size_t usable = 0;
     bool named = false;
 #ifdef _WIN32
     HANDLE mapping = nullptr;
@@ -158,7 +175,7 @@ struct SharedRegion {
 
     SharedHeader* header() const { return reinterpret_cast<SharedHeader*>(base); }
     unsigned char* data() const { return base + kSharedHeader; }
-    size_t size() const { return base ? static_cast<size_t>(header()->size.load()) : 0; }
+    size_t size() const { return base ? usable : 0; }
 
     ~SharedRegion() {
         if (!base) return;
@@ -175,7 +192,7 @@ struct SharedRegion {
     }
 };
 
-HandleTable<SharedRegion>& sharedRegions() { static HandleTable<SharedRegion> table; return table; }
+HandleTable<SharedRegion>& sharedRegions() { return csec_threads::leakedTable<SharedRegion>(); }
 
 std::string sanitizedName(const char* name) {
     std::string result = "csec_";
@@ -223,7 +240,7 @@ std::shared_ptr<SharedRegion> openNamedRegion(const std::string& name, size_t da
     region->base = static_cast<unsigned char*>(MapViewOfFile(region->mapping, FILE_MAP_ALL_ACCESS, 0, 0, 0));
     if (!region->base) return nullptr;
     MEMORY_BASIC_INFORMATION info{};
-    VirtualQuery(region->base, &info, sizeof(info));
+    if (VirtualQuery(region->base, &info, sizeof(info)) == 0) return nullptr;
     region->mapped = info.RegionSize;
 #else
     const std::string objectName = posixSharedName(name);
@@ -236,7 +253,7 @@ std::shared_ptr<SharedRegion> openNamedRegion(const std::string& name, size_t da
         fd = shm_open(objectName.c_str(), O_RDWR, 0600);
         if (fd < 0) return nullptr;
         struct stat st{};
-        fstat(fd, &st);
+        if (fstat(fd, &st) != 0 || st.st_size < static_cast<off_t>(kSharedHeader)) { ::close(fd); return nullptr; }
         region->mapped = static_cast<size_t>(st.st_size);
     }
     void* mapped = mmap(nullptr, region->mapped, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
@@ -244,15 +261,17 @@ std::shared_ptr<SharedRegion> openNamedRegion(const std::string& name, size_t da
     if (mapped == MAP_FAILED) return nullptr;
     region->base = static_cast<unsigned char*>(mapped);
 #endif
+    if (region->mapped < kSharedHeader) return nullptr;
     SharedHeader* header = region->header();
     if (created) {
         header->size.store(dataBytes);
         header->magic.store(kSharedMagic);
+        region->usable = (std::min)(dataBytes, region->mapped - kSharedHeader);
     } else {
         // The creator may still be initialising the header.
         csecCooperativeWait([&] { return header->magic.load() == kSharedMagic; }, 2000);
         if (header->magic.load() != kSharedMagic) return nullptr;
-        if (kSharedHeader + header->size.load() > region->mapped) header->size.store(region->mapped - kSharedHeader);
+        region->usable = static_cast<size_t>((std::min<unsigned long long>)(header->size.load(), region->mapped - kSharedHeader));
     }
     return region;
 }
@@ -261,7 +280,7 @@ std::shared_ptr<SharedRegion> regionFor(long long handle) { return sharedRegions
 
 template <typename T>
 T* slotAt(SharedRegion& region, long long offset) {
-    if (offset < 0 || static_cast<unsigned long long>(offset) + sizeof(T) > region.size()) return nullptr;
+    if (offset < 0 || static_cast<unsigned long long>(offset) > region.size() || sizeof(T) > region.size() - static_cast<size_t>(offset)) return nullptr;
     return reinterpret_cast<T*>(region.data() + offset);
 }
 
@@ -296,6 +315,7 @@ static_assert(sizeof(MailState) == 64, "mail state layout");
 struct MailEndpoint {
     std::shared_ptr<SharedRegion> region;
     std::string sender;
+    std::mutex lastMutex;
     std::string lastBody;
     std::string lastSender;
     long long lastTag = 0;
@@ -305,7 +325,7 @@ struct MailEndpoint {
     size_t capacity() const { return region->size() - sizeof(MailState); }
 };
 
-HandleTable<MailEndpoint>& mailEndpoints() { static HandleTable<MailEndpoint> table; return table; }
+HandleTable<MailEndpoint>& mailEndpoints() { return csec_threads::leakedTable<MailEndpoint>(); }
 
 void ringWrite(MailEndpoint& box, unsigned long long position, const void* source, size_t length) {
     const size_t cap = box.capacity();
@@ -323,22 +343,37 @@ void ringRead(MailEndpoint& box, unsigned long long position, void* target, size
 bool popMail(MailEndpoint& box) {
     lockRegion(*box.region);
     MailState* state = box.state();
-    if (state->count <= 0) {
+    const unsigned long long head = state->head;
+    const unsigned long long used = state->tail - head;
+    std::uint32_t lengths[2] = { 0, 0 };
+    long long tag = 0;
+    if (state->count <= 0 || used > box.capacity() || used < sizeof(lengths) + sizeof(tag)) {
         unlockRegion(*box.region);
         return false;
     }
-    std::uint32_t lengths[2];
-    long long tag = 0;
-    ringRead(box, state->head, lengths, sizeof(lengths));
-    ringRead(box, state->head + sizeof(lengths), &tag, sizeof(tag));
-    unsigned long long cursor = state->head + sizeof(lengths) + sizeof(tag);
-    std::string sender(lengths[1], '\0');
-    std::string body(lengths[0], '\0');
+    ringRead(box, head, lengths, sizeof(lengths));
+    ringRead(box, head + sizeof(lengths), &tag, sizeof(tag));
+    const unsigned long long cursor = head + sizeof(lengths) + sizeof(tag);
+    const unsigned long long payload = used - sizeof(lengths) - sizeof(tag);
+    if (lengths[1] > payload || lengths[0] > payload - lengths[1]) {
+        unlockRegion(*box.region);
+        return false;
+    }
+    std::string sender;
+    std::string body;
+    try {
+        sender.resize(lengths[1]);
+        body.resize(lengths[0]);
+    } catch (...) {
+        unlockRegion(*box.region);
+        return false;
+    }
     ringRead(box, cursor, sender.data(), sender.size());
     ringRead(box, cursor + sender.size(), body.data(), body.size());
     state->head = cursor + sender.size() + body.size();
     state->count -= 1;
     unlockRegion(*box.region);
+    std::lock_guard<std::mutex> lock(box.lastMutex);
     box.lastTag = tag;
     box.lastSender = std::move(sender);
     box.lastBody = std::move(body);
@@ -418,7 +453,10 @@ int csec_pipe_available(long long handle) {
 }
 
 void csec_pipe_free(long long handle) {
-    csec_ipc::pipes().take(handle);
+    auto pipe = csec_ipc::pipes().take(handle);
+    if (!pipe) return;
+    std::lock_guard<std::mutex> lock(pipe->mutex);
+    pipe->closed = true;
 }
 
 // ---- child processes with piped stdin/stdout -------------------------------------------------------
@@ -463,9 +501,13 @@ long long csec_piped_process_open(const char* command) {
     int toChild[2], fromChild[2];
     if (pipe(toChild) != 0) return 0;
     if (pipe(fromChild) != 0) { ::close(toChild[0]); ::close(toChild[1]); return 0; }
+    for (int fd : { toChild[0], toChild[1], fromChild[0], fromChild[1] }) fcntl(fd, F_SETFD, FD_CLOEXEC);
     std::fflush(stdout);
     const pid_t pid = fork();
-    if (pid < 0) return 0;
+    if (pid < 0) {
+        ::close(toChild[0]); ::close(toChild[1]); ::close(fromChild[0]); ::close(fromChild[1]);
+        return 0;
+    }
     if (pid == 0) {
         dup2(toChild[0], 0);
         dup2(fromChild[1], 1);
@@ -485,7 +527,9 @@ long long csec_piped_process_open(const char* command) {
 
 int csec_piped_process_write(long long handle, const char* text) {
     auto process = csec_ipc::pipedProcesses().get(handle);
-    if (!process || !text || !process->inputOpen) return 0;
+    if (!process || !text) return 0;
+    std::lock_guard<std::mutex> lock(process->inputMutex);
+    if (!process->inputOpen) return 0;
     const size_t length = std::strlen(text);
     size_t written = 0;
     while (written < length) {
@@ -512,6 +556,7 @@ char* csec_piped_process_read_line(long long handle) {
     if (!process) return ownedCopy("");
     std::string line;
     csecCooperativeWait([&] {
+        std::lock_guard<std::mutex> lock(process->outputMutex);
         pumpChildOutput(*process);
         return takeLine(process->buffer, process->eof, line) || (process->eof && process->buffer.empty());
     }, -1);
@@ -523,12 +568,14 @@ char* csec_piped_process_read_all(long long handle) {
     using namespace csec_ipc;
     auto process = pipedProcesses().get(handle);
     if (!process) return ownedCopy("");
-    csecCooperativeWait([&] {
-        pumpChildOutput(*process);
-        return process->eof;
-    }, -1);
     std::string all;
-    all.swap(process->buffer);
+    csecCooperativeWait([&] {
+        std::lock_guard<std::mutex> lock(process->outputMutex);
+        pumpChildOutput(*process);
+        if (!process->eof) return false;
+        all.swap(process->buffer);
+        return true;
+    }, -1);
     std::string normalised;
     for (size_t i = 0; i < all.size(); ++i) {
         if (all[i] == '\r' && i + 1 < all.size() && all[i + 1] == '\n') continue;
@@ -540,6 +587,7 @@ char* csec_piped_process_read_all(long long handle) {
 int csec_piped_process_eof(long long handle) {
     auto process = csec_ipc::pipedProcesses().get(handle);
     if (!process) return 1;
+    std::lock_guard<std::mutex> lock(process->outputMutex);
     csec_ipc::pumpChildOutput(*process);
     return process->eof && process->buffer.empty() ? 1 : 0;
 }
@@ -549,25 +597,41 @@ int csec_piped_process_wait(long long handle) {
     using namespace csec_ipc;
     auto process = pipedProcesses().take(handle);
     if (!process) return -1;
-    closeChildInput(*process);
+    auto pump = [&] {
+        std::lock_guard<std::mutex> lock(process->outputMutex);
+        pumpChildOutput(*process);
+    };
+    csecCooperativeWait([&] {
+        pump();
+        std::unique_lock<std::mutex> input(process->inputMutex, std::try_to_lock);
+        if (!input.owns_lock()) return false;
+        closeChildInputLocked(*process);
+        return true;
+    }, -1);
 #ifdef _WIN32
     csecCooperativeWait([&] {
-        pumpChildOutput(*process); // keep draining so a chatty child cannot block on a full pipe
+        pump(); // keep draining so a chatty child cannot block on a full pipe
         return WaitForSingleObject(process->info.hProcess, 0) == WAIT_OBJECT_0;
     }, -1);
     DWORD code = 0;
     GetExitCodeProcess(process->info.hProcess, &code);
     CloseHandle(process->info.hThread);
     CloseHandle(process->info.hProcess);
+    std::lock_guard<std::mutex> lock(process->outputMutex);
     CloseHandle(process->fromChild);
+    process->fromChild = nullptr;
+    process->eof = true;
     return static_cast<int>(code);
 #else
     int status = 0;
     csecCooperativeWait([&] {
-        pumpChildOutput(*process);
+        pump();
         return waitpid(process->pid, &status, WNOHANG) == process->pid;
     }, -1);
+    std::lock_guard<std::mutex> lock(process->outputMutex);
     ::close(process->fromChild);
+    process->fromChild = -1;
+    process->eof = true;
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 #endif
 }
@@ -582,6 +646,7 @@ long long csec_shm_new(long long bytes) {
     region->base = static_cast<unsigned char*>(std::calloc(1, kSharedHeader + dataBytes));
     if (!region->base) return 0;
     region->mapped = kSharedHeader + dataBytes;
+    region->usable = dataBytes;
     region->header()->size.store(dataBytes);
     region->header()->magic.store(kSharedMagic);
     return sharedRegions().add(region);
@@ -695,7 +760,7 @@ void csec_shm_remove(const char* name) {
 long long csec_mail_open(const char* mailbox, const char* sender) {
     using namespace csec_ipc;
     auto region = openNamedRegion(sanitizedName(mailbox) + "_mail", sizeof(MailState) + kMailCapacity);
-    if (!region) return 0;
+    if (!region || region->size() < sizeof(MailState) + 64) return 0;
     auto endpoint = std::make_shared<MailEndpoint>();
     endpoint->region = region;
     endpoint->sender = sender ? sender : "";
@@ -712,8 +777,8 @@ int csec_mail_send(long long endpoint, long long tag, const char* body) {
     const size_t record = sizeof(lengths) + sizeof(tag) + box->sender.size() + text.size();
     lockRegion(*box->region);
     MailState* state = box->state();
-    const size_t used = static_cast<size_t>(state->tail - state->head);
-    if (record > box->capacity() - used) {
+    const unsigned long long used = state->tail - state->head;
+    if (used > box->capacity() || record > box->capacity() - used) {
         unlockRegion(*box->region);
         return 0;
     }
@@ -742,17 +807,23 @@ int csec_mail_receive(long long endpoint, long long timeoutMs) {
 
 char* csec_mail_last_body(long long endpoint) {
     auto box = csec_ipc::mailEndpoints().get(endpoint);
-    return csec_ipc::ownedCopy(box ? box->lastBody : "");
+    if (!box) return csec_ipc::ownedCopy("");
+    std::lock_guard<std::mutex> lock(box->lastMutex);
+    return csec_ipc::ownedCopy(box->lastBody);
 }
 
 char* csec_mail_last_sender(long long endpoint) {
     auto box = csec_ipc::mailEndpoints().get(endpoint);
-    return csec_ipc::ownedCopy(box ? box->lastSender : "");
+    if (!box) return csec_ipc::ownedCopy("");
+    std::lock_guard<std::mutex> lock(box->lastMutex);
+    return csec_ipc::ownedCopy(box->lastSender);
 }
 
 long long csec_mail_last_tag(long long endpoint) {
     auto box = csec_ipc::mailEndpoints().get(endpoint);
-    return box ? box->lastTag : 0;
+    if (!box) return 0;
+    std::lock_guard<std::mutex> lock(box->lastMutex);
+    return box->lastTag;
 }
 
 int csec_mail_count(long long endpoint) {
