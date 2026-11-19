@@ -279,7 +279,10 @@ llvm::Value* FunctionDeclarationNode::codegen() {
     for (auto& owned : ownedParameters) cg.registerOwnedValueCleanup(owned.first, owned.second.get());
     if (this->body) {
         ArrayLiteralNode::markHoistable(this->body.get());
+        std::set<std::string> outerMoved = std::move(cg.movedNames);
+        cg.movedNames = ArrayLiteralNode::movedNames(this->body.get());
         this->body->codegen();
+        cg.movedNames = std::move(outerMoved);
     }
     if (cg.builder.GetInsertBlock() && !csec_llvm::terminatorOrNull(cg.builder.GetInsertBlock())) {
         cg.emitCurrentScopeCleanups();

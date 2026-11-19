@@ -10,6 +10,7 @@
 #include "llvm_compat.h"
 #include <sstream>
 #include <vector>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -67,6 +68,7 @@ public:
 
     // A code-generation error that must fail the compilation (printed now, counted for main).
     int errorCount = 0;
+    std::set<std::string> movedNames;
     void reportError(const std::string& message);
     // reportError of the concatenated parts (strings, numbers, ...).
     template <class... Parts>
@@ -118,6 +120,7 @@ public:
     void markStringFunction(const std::string& name, bool runtimeAllocated);
     llvm::Value* takeOwnedString(llvm::Value* value);
     void promoteTemporaryString(llvm::Value* value);
+    void registerStringTemporary(llvm::CallInst* call);
     llvm::Value* adoptRuntimeString(llvm::Value* text);
     llvm::Value* takeOwned(llvm::Value* value, const Type* type);
     void registerOwnedTemporary(llvm::Value* value, llvm::Function* drop);
@@ -168,6 +171,7 @@ public:
     bool isFreshTensor(llvm::Value* tensor) const;
     static void clearFreshTensor(llvm::Value* tensor);
     void stripFreshTensorMarks();
+    void elideConstantRefcounts();
     void dropTemporary(llvm::Value* tensor, llvm::Value* result = nullptr);
     llvm::Value* borrowTensors(const std::vector<llvm::Value*>& operands, llvm::Value* result);
     void enterTemporaryFrame();

@@ -444,7 +444,10 @@ llvm::Function* ClassDeclarationNode::defineMethod(FunctionDeclarationNode* meth
     cg.enterCleanupScope();
     for (auto& owned : ownedParameters) cg.registerOwnedValueCleanup(owned.first, owned.second.get());
     ArrayLiteralNode::markHoistable(method->body.get());
+    std::set<std::string> outerMoved = std::move(cg.movedNames);
+    cg.movedNames = ArrayLiteralNode::movedNames(method->body.get());
     method->body->codegen();
+    cg.movedNames = std::move(outerMoved);
     if (cg.builder.GetInsertBlock() && !csec_llvm::terminatorOrNull(cg.builder.GetInsertBlock())) {
         cg.emitCurrentScopeCleanups();
     }

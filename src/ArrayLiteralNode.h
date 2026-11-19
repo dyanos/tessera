@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include <set>
 #include <memory>
 #include "ast.h"
 
@@ -33,6 +34,7 @@ public:
     virtual ~ArrayLiteralNode() = default;
 
     static void markHoistable(ASTNode* functionBody);
+    static std::set<std::string> movedNames(ASTNode* functionBody);
 
     void accept(ASTVisitor& visitor) override;
     llvm::Value* codegen() override;

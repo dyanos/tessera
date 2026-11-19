@@ -1769,6 +1769,7 @@ int main(int argc, char** argv) {
         codeGen.requireSystemNative();
     }
     codeGen.stripFreshTensorMarks();
+    codeGen.elideConstantRefcounts();
     debuginfo::finalize();
     if (llvm::verifyModule(*codeGen.module, &llvm::errs())) {
         std::cerr << "Generated LLVM IR is invalid. Aborting execution." << std::endl;
@@ -1831,6 +1832,7 @@ int main(int argc, char** argv) {
     }
     // optLevel == 0 with an emit mode: leave the module unoptimized.
     MPM.run(*codeGen.module, MAM);
+    codeGen.elideConstantRefcounts();
 
     if (outputMode == OutputMode::EmitIR || outputMode == OutputMode::EmitObject ||
         outputMode == OutputMode::EmitExecutable) {

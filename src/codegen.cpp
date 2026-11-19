@@ -881,6 +881,13 @@ void CodeGenerator::onInstructionInserted(llvm::Instruction* inst) {
     if (!runtime && !userStringFunctions.count(name)) return;
     ++stringHookDepth;
     if (runtime) builder.CreateCall(rcFunction("csec_rc_adopt"), { call });
+    --stringHookDepth;
+    registerStringTemporary(call);
+}
+
+void CodeGenerator::registerStringTemporary(llvm::CallInst* call) {
+    if (!call || !call->getType()->isPointerTy()) return;
+    ++stringHookDepth;
     llvm::Function* fn = call->getFunction();
     if (!temporaryFrames.empty() && temporaryFrames.back().function == fn) {
         TemporaryFrame& frame = temporaryFrames.back();
@@ -1262,6 +1269,22 @@ void CodeGenerator::promoteTemporaryString(llvm::Value* value) {
                               current.stringSlots.end());
     outer.stringSlots.push_back(slot);
     outer.strings[value] = slot;
+}
+
+void CodeGenerator::elideConstantRefcounts() {
+    for (const char* name : { "csec_rc_retain", "csec_rc_release" }) {
+        llvm::Function* fn = module->getFunction(name);
+        if (!fn) continue;
+        std::vector<llvm::CallInst*> dead;
+        for (llvm::User* user : fn->users()) {
+            auto* call = llvm::dyn_cast<llvm::CallInst>(user);
+            if (call && call->getCalledFunction() == fn && call->arg_size() == 1 &&
+                llvm::isa<llvm::Constant>(call->getArgOperand(0)->stripPointerCasts())) {
+                dead.push_back(call);
+            }
+        }
+        for (llvm::CallInst* call : dead) call->eraseFromParent();
+    }
 }
 
 void CodeGenerator::releaseString(llvm::Value* value) {

@@ -2488,8 +2488,9 @@ llvm::Value* FunctionCallNode::codegen() {
                     }
                     closureArgs.push_back(argValue);
                 }
-                llvm::Value* result = cg.builder.CreateCall(closureFuncType, code, closureArgs,
+                llvm::CallInst* result = cg.builder.CreateCall(closureFuncType, code, closureArgs,
                     llvmReturnType->isVoidTy() ? "" : "closure.call");
+                if (funcType->returnType && cg.isRefcountedType(funcType->returnType.get())) cg.registerStringTemporary(result);
                 type = funcType->returnType ? funcType->returnType->clone() : std::make_unique<UnknownType>();
                 return result;
             }

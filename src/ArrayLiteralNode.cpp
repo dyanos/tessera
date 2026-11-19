@@ -94,6 +94,19 @@ bool borrowsOrReads(ASTNode* parent, ASTNode* child) {
 
 }
 
+std::set<std::string> ArrayLiteralNode::movedNames(ASTNode* functionBody) {
+    std::set<std::string> names;
+    auto visit = [&](auto& self, ASTNode* node) -> void {
+        ASTNode* moved = nullptr;
+        if (auto* prefix = dynamic_cast<PrefixExpressionNode*>(node); prefix && prefix->op == "<-") moved = prefix->expression.get();
+        if (auto* assignment = dynamic_cast<AssignmentExpressionNode*>(node); assignment && assignment->op == "<-") moved = assignment->right.get();
+        if (auto* identifier = dynamic_cast<IdentifierNode*>(moved)) names.insert(identifier->value);
+        ast_walk::forEachChild(node, [&](ASTNode* child, std::unique_ptr<ASTNode>*) { self(self, child); });
+    };
+    if (functionBody) visit(visit, functionBody);
+    return names;
+}
+
 void ArrayLiteralNode::markHoistable(ASTNode* functionBody) {
     if (!functionBody) return;
     std::map<std::string, std::vector<ArrayLiteralNode*>> bound;
