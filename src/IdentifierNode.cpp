@@ -120,7 +120,7 @@ llvm::Value* IdentifierNode::codegen() {
             }
             return llvm::ConstantInt::get(llvm::Type::getInt32Ty(cg.context), static_cast<int32_t>(parsed));
         }
-		std::cerr << "Undefined variable: " << value << std::endl;
+		std::cerr << "Error: Undefined variable: " << value << std::endl;
 		return llvm::ConstantFP::get(llvm::Type::getDoubleTy(cg.context), 0.0);
 	}
 

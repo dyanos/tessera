@@ -1,11 +1,11 @@
 def main(): Int {
+    val n = 6;
     val s1 = $$\sum_{i=0}^{10} i$$;
     val s2 = $$\sum_{k=1}^{100} k$$;
     val p1 = $$\prod_{i=1}^{5} i$$;
     val p2 = $$\prod_{j=1}^{n} j$$;
 
     val i1 = $$\int_{0}^{1} x$$;
-    val i2 = $$\oint_{0}^{1} x$$;
 
     return 0;
 }

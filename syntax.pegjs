@@ -91,7 +91,7 @@ Parameter
   = Identifier _ ":" _ Type (_ "=" _ Expression)?   // default value
 
 VariableDeclaration
-  = ("val" / "var") __ Identifier _ (":" _ Type)? _ "=" _ Expression
+  = ("val" / "var") __ (Identifier / "$" _ LatexCommand _ "$") _ (":" _ Type)? _ "=" _ Expression
 
 Statement
   = "constexpr" __ Statement
@@ -364,3 +364,6 @@ __
 Comment
   = "//" (![\r\n] .)*
   / "/*" (!"*/" .)* "*/"
+
+LatexCommand
+  = "\\" [A-Za-z]+ ("{" [A-Za-z]+ "}")? / Identifier

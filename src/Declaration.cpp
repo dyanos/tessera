@@ -95,8 +95,18 @@ std::unique_ptr<ASTNode> Parser::parseClassDeclaration(bool isExternal) {
 }
 
 std::unique_ptr<VariableDeclarationNode> Parser::parseVariableDeclaration(bool isMutable) {
-	if (matchIdentifierName()) {
-		std::string varName = previous().value;
+	std::string latexName;
+	if (match(TokenType::OPERATOR, "$")) {
+		auto nameNode = parseInlineMathLatex();
+		auto* identifier = dynamic_cast<IdentifierNode*>(nameNode.get());
+		if (!identifier || !match(TokenType::OPERATOR, "$")) {
+			error("Expected a single LaTeX name between '$' and '$' after 'val' or 'var'");
+			return nullptr;
+		}
+		latexName = identifier->value;
+	}
+	if (!latexName.empty() || matchIdentifierName()) {
+		std::string varName = latexName.empty() ? previous().value : latexName;
 		std::unique_ptr<Type> varType;
 		std::unique_ptr<ASTNode> initializer;
 		bool hasExplicitType = false;

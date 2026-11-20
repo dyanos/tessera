@@ -1045,6 +1045,29 @@ The parser includes experimental inline and block LaTeX-inspired math forms for
 matrix, summation, product, set, and function-style notation. See the fixtures in
 `tests/positive/07_math_latex` for currently supported examples.
 
+Every name a formula uses must be declared, like any other variable. A declaration can spell the
+name the way the formula writes it, between `$` signs:
+
+```csec
+val $\alpha$ = 0.5e0;
+val $x_1$ = 3.0e0;
+val $\mathcal{F}$ = 2.0e0;
+val y = $\alpha \cdot x_1 + \mathcal{F}$;
+```
+
+Mathematical constants come from `std.math.constants`: `\pi`, `\e`, `\phi` (golden ratio),
+`\gamma` (Euler-Mascheroni), `\tau`, `\infty` and `\i` (the imaginary unit, a `Complex`).
+
+```csec
+import std.math.constants
+val area = $\pi \cdot r^2$;
+```
+
+`\sum` and `\prod` bind their index (`\sum_{k=1}^{n} k^2`), `\int_{t=a}^{b}` integrates numerically
+over `t` (`x` when the lower limit names no variable), and `\lim_{x=a}` evaluates the limit
+numerically on both sides of `a`. The body of each is the product term that follows it. Other large
+operators (`\oint`, `\bigcup`, `\liminf`, ...) are rejected for now.
+
 ## Notes
 
 - Statements generally end with `;`.

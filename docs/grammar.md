@@ -177,7 +177,8 @@ terminator   = [ ';' ] ;                                    (* see §7 *)
 
 decl-stmt    = ( 'val' | 'var' ) l-names [ ':' type ] [ '=' expr ] terminator ;
                                                             (* no ':' type -> the type of expr *)
-l-names      = identifier { ',' ( identifier | '_' ) } ;    (* destructuring bind *)
+l-names      = identifier { ',' ( identifier | '_' ) }      (* destructuring bind *)
+             | '$' latex-name '$' ;                         (* `val $\alpha$ = 0.5;` binds the name a formula uses *)
 
 assign-stmt  = l-value assignment expr terminator ;
 l-value      = identifier

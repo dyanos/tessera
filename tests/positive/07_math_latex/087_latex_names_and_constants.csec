@@ -1,0 +1,20 @@
+import std.math.constants
+
+def close(a: Double, b: Double): Boolean = a - b < 1.0e-3 and b - a < 1.0e-3
+
+def main(): Int {
+    val $\alpha$ = 0.5e0;
+    val $x_1$ = 3.0e0;
+    val $\mathcal{F}$ = 2.0e0;
+    var $\beta$ = 1.0e0;
+    $\beta$ = 4.0e0;
+    if (!close($$\alpha \cdot x_1 + \mathcal{F} + \beta$$, 7.5e0)) { return 1; }
+    val n = 4;
+    if (!close($$\sum_{k=1}^{n} k^2$$, 30.0e0)) { return 2; }
+    if (!close($$\prod_{i=1}^{5} i$$, 120.0e0)) { return 3; }
+    if (!close($$\int_{t=0}^{2} t^{2}$$, 2.6666e0)) { return 4; }
+    if (!close($$\lim_{x=0} \frac{\sin(x)}{x}$$, 1.0e0)) { return 5; }
+    if (!close($2 \cdot \pi$, $\tau$)) { return 6; }
+    if (!close($$\e^{1}$$, 2.71828e0)) { return 7; }
+    return 0;
+}

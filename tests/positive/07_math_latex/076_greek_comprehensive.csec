@@ -1,4 +1,33 @@
+import std.math.constants
 def main(): Int {
+    val $\alpha$ = 1.0e0;
+    val $\beta$ = 2.0e0;
+    val $\delta$ = 3.0e0;
+    val $\epsilon$ = 4.0e0;
+    val $\zeta$ = 5.0e0;
+    val $\eta$ = 6.0e0;
+    val $\theta$ = 7.0e0;
+    val $\iota$ = 8.0e0;
+    val $\kappa$ = 9.0e0;
+    val $\lambda$ = 10.0e0;
+    val $\mu$ = 11.0e0;
+    val $\nu$ = 12.0e0;
+    val $\xi$ = 13.0e0;
+    val $\rho$ = 14.0e0;
+    val $\sigma$ = 15.0e0;
+    val $\chi$ = 16.0e0;
+    val $\psi$ = 17.0e0;
+    val $\omega$ = 18.0e0;
+    val $\Gamma$ = 19.0e0;
+    val $\Delta$ = 20.0e0;
+    val $\Theta$ = 21.0e0;
+    val $\Lambda$ = 22.0e0;
+    val $\Xi$ = 23.0e0;
+    val $\Pi$ = 24.0e0;
+    val $\Sigma$ = 25.0e0;
+    val $\Phi$ = 26.0e0;
+    val $\Psi$ = 27.0e0;
+    val $\Omega$ = 28.0e0;
     /* lowercase greek */
     val v01 = $\alpha$;
     val v02 = $\beta$;

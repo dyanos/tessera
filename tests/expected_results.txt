@@ -153,6 +153,7 @@ tests/positive/07_math_latex/083_mathcal_constructs.csec 0 0
 tests/positive/07_math_latex/084_delimiters.csec 0 0
 tests/positive/07_math_latex/085_complex_expressions.csec 0 0
 tests/positive/07_math_latex/086_power_and_cdot.csec 0 0
+tests/positive/07_math_latex/087_latex_names_and_constants.csec 0 0
 tests/positive/08_utf8/080_utf8_identifiers.csec 0 10
 tests/positive/08_utf8/081_utf8_mixed_math.csec 0 0
 tests/positive/08_utf8/082_utf8_imports_and_members.csec 0 6

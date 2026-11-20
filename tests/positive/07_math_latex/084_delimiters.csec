@@ -1,7 +1,11 @@
 def main(): Int {
-    val a = $$\left( \frac{a}{b} \right)$$;
-    val b = $$\left[ x + y \right]$$;
-    val c = $$\sqrt{a^{2} + b^{2}}$$;
+    val a = 1.0e0;
+    val b = 2.0e0;
+    val x = 3.0e0;
+    val y = 4.0e0;
+    val r1 = $$\left( \frac{a}{b} \right)$$;
+    val r2 = $$\left[ x + y \right]$$;
+    val r3 = $$\sqrt{a^{2} + b^{2}}$$;
 
     return 0;
 }

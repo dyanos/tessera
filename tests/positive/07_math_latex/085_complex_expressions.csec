@@ -1,4 +1,9 @@
+import std.math.constants
 def main(): Int {
+    val n = 5;
+    val $\alpha$ = 0.1e0;
+    val $\beta$ = 0.2e0;
+    val $\delta$ = 0.4e0;
     /* nested fractions */
     val nested = $$\frac{\frac{1}{2} + \frac{1}{3}}{\frac{1}{4}}$$;
 

@@ -1,8 +1,14 @@
+import std.math.constants
 /* Scientific computing with LaTeX math */
 
 def main(): Int {
+    val a = 1.0e0;
+    val b = 5.0e0;
+    val c = 2.0e0;
+    val x = 0.5e0;
+    val n = 5;
     /* Euler's identity components */
-    val eulerExpr = $\e^{\i * \pi} + 1$;
+    val eulerExpr = $\e^{\pi} + 1$;
 
     /* Quadratic formula */
     val discriminant = $$b^{2} - 4 * a * c$$;
