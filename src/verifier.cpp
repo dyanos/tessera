@@ -1,4 +1,4 @@
-// Static verification with Z3 (`csec++ --verify`).
+// Static verification with Z3 (`tess --verify`).
 //
 // Each function of the main file is executed symbolically. Integer values are bit-vectors of their
 // machine width (Int = 32 bits, Long = 64, ...), so arithmetic wraps exactly as the compiled
@@ -92,7 +92,7 @@ static std::string exprText(ASTNode* node) {
 #if !defined(CSEC_HAVE_Z3)
 
 int verifyProgram(ASTNode*, const std::string&) {
-    std::cerr << "error: this csec++ was built without Z3, so --verify is unavailable. Run "
+    std::cerr << "error: this tess was built without Z3, so --verify is unavailable. Run "
                  "scripts/fetch_z3.ps1 (Windows) or scripts/fetch_z3.sh, then rebuild." << std::endl;
     return 2;
 }

@@ -27,6 +27,7 @@ std::unique_ptr<Type> makeDictType(const Type* keyType, const Type* valueType);
 // The K / V of a Dict type (borrows are looked through); nullptr when `type` is not a dictionary.
 const Type* dictKeyType(const Type* type);
 const Type* dictValueType(const Type* type);
+bool dictCanCopy(const Type* type);
 
 // Keys must be hashable scalars; values must fit one 64-bit slot (no value structs or tuples).
 bool isValidDictKeyType(const Type* type);

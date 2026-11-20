@@ -1,4 +1,4 @@
-// debug_info.h -- source-level debug information (`csec++ -g`): a compile unit, a subprogram per
+// debug_info.h -- source-level debug information (`tess -g`): a compile unit, a subprogram per
 // function and lambda, and the source line of every statement, so debuggers (gdb, lldb, Visual
 // Studio/WinDbg) can set breakpoints and step by line and show Tessera function names in stack traces.
 // CodeView on Windows, DWARF elsewhere. Local variables are not described yet.

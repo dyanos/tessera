@@ -33,7 +33,8 @@ llvm::Value* ReturnStatementNode::codegen() {
 
         // Returning an integer where the function's return slot is a pointer means a Nat return
         // (`def f(): Nat = 5`): promote it to a handle. No other pointer-return type accepts an integer.
-        if (returnValue && returnValue->getType()->isIntegerTy() && returnType->isPointerTy()) {
+        const bool promoteNat = returnValue->getType()->isIntegerTy() && returnType->isPointerTy();
+        if (promoteNat) {
             auto natType = std::make_unique<ClassType>("Nat");
             returnValue = coerceToNat(returnValue, natType.get(), expression.get());
         }
@@ -46,7 +47,7 @@ llvm::Value* ReturnStatementNode::codegen() {
 
         if (returnType->isPointerTy()) returnValue = cg.copyStackBufferToHeap(returnValue);
         auto returnedType = expression->getType();
-        returnValue = cg.takeOwned(returnValue, returnedType.get());
+        returnValue = promoteNat ? cg.takeOwnedString(returnValue) : cg.takeOwned(returnValue, returnedType.get());
         cg.emitAllCleanupsExcept(returnValue);
         cg.builder.CreateRet(returnValue);
     }

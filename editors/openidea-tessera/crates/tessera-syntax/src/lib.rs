@@ -1,5 +1,5 @@
 //! Editor support for Tessera (`.csec`): a lossless lexer mirroring the
-//! `csec++` lexer, highlighting classes, declarations/outline, folding and
+//! `tess` lexer, highlighting classes, declarations/outline, folding and
 //! lexical diagnostics. No dependencies, so it builds for both the OpenIDEA
 //! plugin (wasm32-wasip2) and the native language server.
 

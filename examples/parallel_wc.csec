@@ -1,6 +1,6 @@
 // parallel_wc -- a parallel line counter (like `wc -l`), written in Tessera.
 //
-//     csec++ -O3 -march=native --emit-exe examples/parallel_wc.csec -o parallel_wc.exe
+//     tess -O3 -march=native --emit-exe examples/parallel_wc.csec -o parallel_wc.exe
 //     parallel_wc <file> [threads] [chunkBytes]
 //
 // The file is split into one contiguous byte range per OS thread, and each thread counts the '\n'

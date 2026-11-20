@@ -1,5 +1,5 @@
 //! Runs every analysis over the repository's Tessera sources: nothing may
-//! panic, the lexer must accept what `csec++` accepts, and highlight ranges
+//! panic, the lexer must accept what `tess` accepts, and highlight ranges
 //! must be sorted and disjoint.
 
 use std::path::{Path, PathBuf};
@@ -11,7 +11,7 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
         let p = e.path();
         if p.is_dir() {
             collect(&p, out);
-        } else if p.extension().is_some_and(|x| x == "csec") {
+        } else if p.extension().is_some_and(|x| x == "csec" || x == "t") {
             out.push(p);
         }
     }

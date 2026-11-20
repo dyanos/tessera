@@ -1,6 +1,6 @@
 # Tessera Language Support
 
-VS Code syntax highlighting and editor configuration for Tessera (`.csec`) files.
+VS Code syntax highlighting and editor configuration for Tessera (`.t`, `.csec`) files.
 
 It recognizes comments, strings and `${...}` interpolation, numeric literals,
 declarations, core types, the `<<|` and `>>|` pipeline operators, and the current

@@ -38,7 +38,8 @@ SymbolTable* ModuleLoader::loadModule(const std::vector<std::string>& path) {
             filepath += "/";
         }
     }
-    filepath += ".csec";
+    std::ifstream probe(filepath + ".t", std::ios::binary);
+    filepath += probe.is_open() ? ".t" : ".csec";
 
     auto moduleSymbols = std::make_unique<SymbolTable>();
     if (!parseModuleFile(filepath, *moduleSymbols)) {

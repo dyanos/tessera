@@ -1,7 +1,7 @@
 id = "tessera-lang.tessera"
 name = "Tessera"
 version = "0.1.0"
-description = "Tessera (.csec) support: highlighting, structure view and folding, plus the tessera-lsp language server (csec++ diagnostics, completion, hover, navigation, rename) when it is installed."
+description = "Tessera (.t, .csec) support: highlighting, structure view and folding, plus the tessera-lsp language server (tess diagnostics, completion, hover, navigation, rename) when it is installed."
 authors = ["Tessera contributors"]
 license = "MIT"
 change-notes = "0.1.0: first release — .csec detection, highlighting, structure view, folding, file template; language server via tessera-lsp."
@@ -22,12 +22,12 @@ path = "languages/tessera.toml"
 
 [[contributes.fileIcons]]
 id = "tessera"
-patterns = ["*.csec"]
+patterns = ["*.t", "*.csec"]
 icon = "icons/tessera.svg"
 iconDark = "icons/tessera_dark.svg"
 
 [[contributes.fileTemplates]]
 id = "tessera-file"
 name = "Tessera File"
-extension = "csec"
+extension = "t"
 path = "templates/main.csec"

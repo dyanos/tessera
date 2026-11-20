@@ -1,5 +1,5 @@
 " Vim syntax file
-" Language:    Tessera (.csec)
+" Language:    Tessera (.t, .csec)
 " Maintainer:  Tessera contributors
 " Keep in sync with editors/vscode-tessera/syntaxes/tessera.tmLanguage.json and
 " editors/openidea-tessera/crates/tessera-syntax/src/{lexer,highlight}.rs.

@@ -1,6 +1,6 @@
 // web_fetch -- fetch information from the web with std.http.
 //
-//     csec++ --emit-exe examples/web_fetch.csec -o web_fetch.exe
+//     tess --emit-exe examples/web_fetch.csec -o web_fetch.exe
 //     web_fetch [url]                       (default https://example.com/)
 //
 // Shows: a GET with status and headers, the page title, its readable text and links, a JSON API

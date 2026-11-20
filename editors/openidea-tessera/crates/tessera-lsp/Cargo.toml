@@ -1,6 +1,6 @@
 [package]
 name = "tessera-lsp"
-description = "Language server for Tessera (.csec): diagnostics from csec++, symbols, navigation, completion, hover, semantic highlighting"
+description = "Language server for Tessera (.csec): diagnostics from tess, symbols, navigation, completion, hover, semantic highlighting"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

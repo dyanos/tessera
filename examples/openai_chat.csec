@@ -1,7 +1,7 @@
 // openai_chat -- talk to an OpenAI-compatible chat API with std.openai.
 //
-//     csec++ examples/openai_chat.csec --emit-ir -o openai_chat.ll
-//     csec++ --run-ir openai_chat.ll -- "your question"
+//     tess examples/openai_chat.csec --emit-ir -o openai_chat.ll
+//     tess --run-ir openai_chat.ll -- "your question"
 //
 // The server comes from the environment:
 //     OPENAI_BASE_URL   default https://api.openai.com/v1

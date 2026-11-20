@@ -2123,6 +2123,10 @@ void TypeChecker::visit(MethodCallNode& node) {
             }
         }
         else if (isDictType(receiverType.get())) {
+            if (node.methodName == "copy" && node.arguments.empty() && !dictCanCopy(receiverType.get())) {
+                reportError("Type error: Dict.copy() requires values that can be copied independently");
+                return;
+            }
             if (!dictMethodType(receiverType.get(), node.methodName, node.arguments.size())) {
                 reportError("Type error: " + typeDisplayName(receiverType.get()) + " has no method '" + node.methodName +
                             "' taking " + std::to_string(node.arguments.size()) + " argument(s); available: size(), "

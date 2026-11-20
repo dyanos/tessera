@@ -342,6 +342,7 @@ tests/positive/14_language/231_array_element_ownership.csec 0 0
 tests/positive/14_language/232_shared_payload_release.csec 0 0
 tests/positive/14_language/233_loop_locals_stack.csec 0 0
 tests/positive/14_language/234_immutable_alias_bindings.csec 0 0
+tests/positive/14_language/235_memory_lifetimes.csec 0 0
 tests/selfhost_concurrency/01_spawn_named.csec 0 42
 tests/selfhost_concurrency/02_async_go.csec 0 42
 tests/selfhost_concurrency/03_thread_atomic.csec 0 42

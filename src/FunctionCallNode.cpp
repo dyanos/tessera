@@ -2075,25 +2075,17 @@ llvm::Value* FunctionCallNode::codegen() {
         return cg.builder.CreateICmpNE(raw, llvm::ConstantInt::get(i32Ty, 0), "token.pattern");
     }
 
-    // free(x): release a heap allocation made by `new`, an array literal, a class instance, or a
-    // box. The type checker limits this consuming operation to a named owned value.
     if (functionName == "free") {
         if (!argValues.empty() && argValues[0] && argValues[0]->getType()->isPointerTy()) {
-            // Prevent the lexical owner cleanup from freeing the same allocation a second time.
-            if (cg.hasDropFlag(argValues[0])) cg.noteMoved(argValues[0]);
-            else cg.forgetCleanup(argValues[0]);
-            if (!argTypes.empty() && argTypes[0] && TensorRuntime::isTensorTypeName(argTypes[0]->getName())) {
-                auto* i8PtrTy = llvm::PointerType::getUnqual(cg.context);
-                llvm::Value* dims = TensorRuntime::loadDims(cg, argValues[0]);
-                llvm::Value* data = TensorRuntime::loadData(cg, argValues[0]);
-                cg.builder.CreateCall(cg.freeFunction, {cg.builder.CreateBitCast(data, i8PtrTy, "tensor.data.free")});
-                cg.builder.CreateCall(cg.freeFunction, {cg.builder.CreateBitCast(dims, i8PtrTy, "tensor.dims.free")});
+            llvm::Value* owner = argValues[0];
+            if (auto* name = dynamic_cast<IdentifierNode*>(arguments[0].get())) {
+                if (auto* symbol = cg.symbolTable.lookup(name->value); symbol && cg.hasDropFlag(symbol->value)) {
+                    owner = symbol->value;
+                }
             }
-            llvm::Value* raw = cg.builder.CreateBitCast(
-                argValues[0], llvm::PointerType::getUnqual(cg.context), "free.ptr");
-            llvm::Function* drop = !argTypes.empty() && argTypes[0] ? cg.classDropFunction(argTypes[0].get()) : nullptr;
-            if (!drop && !argTypes.empty() && argTypes[0]) drop = cg.arrayDropFunction(argTypes[0].get());
-            cg.builder.CreateCall(drop ? drop : cg.freeFunction, { raw });
+            if (cg.hasDropFlag(owner)) cg.noteMoved(owner);
+            else cg.forgetCleanup(owner);
+            cg.emitOwnedValueDrop(argValues[0], argTypes[0].get());
         }
         else {
             std::cerr << "Error: free() expects a heap pointer argument" << std::endl;

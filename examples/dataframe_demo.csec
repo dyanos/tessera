@@ -1,8 +1,8 @@
 import std.dataframe = pl;
 // A tour of std.dataframe's Polars-style API on the test fixture (run from the repository root):
 //
-//     csec++ examples/dataframe_demo.csec --emit-ir -o demo.ll
-//     csec++ --run-ir demo.ll
+//     tess examples/dataframe_demo.csec --emit-ir -o demo.ll
+//     tess --run-ir demo.ll
 
 def main(): Int {
     val path = "tests/stdlib/data/people_snappy_dict.parquet";

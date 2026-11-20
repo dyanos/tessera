@@ -1,0 +1,7 @@
+class Item(id: Int) {}
+
+def main(): Int {
+    val items = {"key": new Item(1)};
+    val copy = items.copy();
+    return copy.size() - 1;
+}

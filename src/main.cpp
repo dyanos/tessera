@@ -133,15 +133,15 @@ enum class OutputMode {
 
 void printUsage(const char* programName) {
     std::cerr
-        << "Usage: " << programName << " [options] <input.csec>\n"
+        << "Usage: " << programName << " [options] <input.t>\n"
         << "Options:\n"
         << "  --verify            Prove requires/ensures/assert/invariant with Z3 (no code is generated)\n"
         << "  --verify-wrap       --verify with wrap-around (bit-vector) integers; overflow is not an error\n"
         << "  --verify-overflow   with --verify-wrap, still report possible integer overflow\n"
         << "  --verify-timeout <ms>  --verify with a per-check solver time limit (default 10000)\n"
         << "  --syntax-only, --parse-only  Parse only, no code generation\n"
-        << "  --run                        Generate and run with LLVM interpreter\n"
-        << "  --run-ir <file.ll>            Run an existing LLVM IR module with the interpreter\n"
+        << "  --run                        Compile in memory (JIT) and run; exits with the program's status\n"
+        << "  --run-ir <file.ll>            Run an existing LLVM IR module (JIT)\n"
         << "  --emit-ir, -S                Write LLVM IR (.ll)\n"
         << "  --emit-obj, -c               Write native object code (.obj/.o)\n"
         << "  --emit-exe                   Write native executable (.exe) (default)\n"
@@ -332,15 +332,27 @@ llvm::Function* rebuildRuntimeMain(CodeGenerator& codeGen) {
     return jitFunction;
 }
 
-int runIRFile(const std::string& inputFile, const std::vector<std::string>& runtimeArgs, const char* programName) {
-    LLVMLinkInMCJIT();
-    LLVMLinkInInterpreter();
-    llvm::InitializeNativeTarget();
-    llvm::InitializeNativeTargetAsmPrinter();
-    llvm::InitializeNativeTargetAsmParser();
+std::filesystem::path utf8Path(const std::string& utf8);
 
-    // The runtime sits next to csec++ (System.Native.dll, libSystem.Native.so, libSystem.Native.dylib).
-    // Locate csec++ itself rather than trusting argv[0], which has no directory when run from PATH.
+struct NativeRuntimeLibrary {
+    std::filesystem::path path;
+    llvm::sys::DynamicLibrary library;
+#ifdef _WIN32
+    HMODULE module = nullptr;
+#endif
+
+    void* symbol(const std::string& name) const {
+#ifdef _WIN32
+        return reinterpret_cast<void*>(::GetProcAddress(module, name.c_str()));
+#else
+        return const_cast<llvm::sys::DynamicLibrary&>(library).getAddressOfSymbol(name.c_str());
+#endif
+    }
+};
+
+bool loadNativeRuntime(const char* programName, NativeRuntimeLibrary& runtime) {
+    // The runtime sits next to the compiler (System.Native.dll, libSystem.Native.so, libSystem.Native.dylib).
+    // Locate the compiler itself rather than trusting argv[0], which has no directory when run from PATH.
     static int mainExecutableAnchor = 0;
     std::filesystem::path executable = llvm::sys::fs::getMainExecutable(programName, &mainExecutableAnchor);
     if (executable.empty()) executable = std::filesystem::path(programName);
@@ -351,28 +363,56 @@ int runIRFile(const std::string& inputFile, const std::vector<std::string>& runt
 #else
     const char* runtimeFileName = "libSystem.Native.so";
 #endif
-    std::filesystem::path runtimePath = executable.parent_path() / runtimeFileName;
+    runtime.path = executable.parent_path() / runtimeFileName;
     std::string runtimeLoadError;
-    llvm::sys::DynamicLibrary runtimeLibrary = llvm::sys::DynamicLibrary::getPermanentLibrary(
-        runtimePath.string().c_str(), &runtimeLoadError);
-    if (!runtimeLibrary.isValid()) {
-        std::cerr << "Failed to load native runtime '" << runtimePath.string()
+    runtime.library = llvm::sys::DynamicLibrary::getPermanentLibrary(runtime.path.string().c_str(), &runtimeLoadError);
+    if (!runtime.library.isValid()) {
+        std::cerr << "Failed to load native runtime '" << runtime.path.string()
                   << "': " << runtimeLoadError << std::endl;
-        return 1;
+        return false;
     }
+#ifdef _WIN32
+    runtime.module = ::LoadLibraryW(runtime.path.c_str());
+    if (!runtime.module) {
+        std::cerr << "Failed to get a Windows module handle for native runtime '"
+                  << runtime.path.string() << "'." << std::endl;
+        return false;
+    }
+#endif
+    return true;
+}
 
-    auto context = std::make_unique<llvm::LLVMContext>();
-    llvm::SMDiagnostic diagnostic;
-    auto module = llvm::parseIRFile(inputFile, diagnostic, *context);
-    if (!module) {
-        diagnostic.print(programName, llvm::errs());
-        return 1;
+void loadExternalLibraries(const std::vector<std::string>& libraries, const std::vector<std::string>& searchPaths) {
+#if defined(_WIN32)
+    const std::vector<std::pair<std::string, std::string>> forms = {{"", ""}, {"", ".dll"}};
+#elif defined(__APPLE__)
+    const std::vector<std::pair<std::string, std::string>> forms = {{"", ""}, {"lib", ".dylib"}, {"", ".dylib"}};
+#else
+    const std::vector<std::pair<std::string, std::string>> forms = {{"", ""}, {"lib", ".so"}, {"", ".so"}};
+#endif
+    for (const auto& library : libraries) {
+        if (library.empty() || library == "System.Native") continue;
+        std::vector<std::filesystem::path> candidates;
+        const std::filesystem::path given = utf8Path(library);
+        for (const auto& [prefix, suffix] : forms) {
+            const std::filesystem::path name = given.parent_path() / (prefix + given.filename().u8string() + suffix);
+            for (const auto& directory : searchPaths) candidates.push_back(utf8Path(directory) / name);
+            candidates.push_back(name);
+        }
+        for (const auto& candidate : candidates) {
+            if (!llvm::sys::DynamicLibrary::LoadLibraryPermanently(candidate.string().c_str())) break;
+        }
     }
-    if (llvm::verifyModule(*module, &llvm::errs())) {
-        std::cerr << "Input LLVM IR is invalid." << std::endl;
-        return 1;
-    }
+}
 
+int executeModule(
+    std::unique_ptr<llvm::Module> module,
+    const NativeRuntimeLibrary& runtime,
+    llvm::EngineKind::Kind engineKind,
+    const std::string& cpu,
+    const std::string& features,
+    const std::string& preferredEntry,
+    std::vector<std::string> arguments) {
     // The host compiler emits numeric string-global identifiers (for example
     // @0). LLVM preserves those as unnamed GlobalValues, which the legacy
     // Interpreter backend rejects during module setup. Give them stable names
@@ -388,36 +428,34 @@ int runIRFile(const std::string& inputFile, const std::vector<std::string>& runt
     // platform loader. Bind every external declaration that System.Native
     // exports before creating the execution engine.
     std::vector<std::pair<std::string, void*>> runtimeSymbols;
-#ifdef _WIN32
-    HMODULE runtimeModule = ::LoadLibraryW(runtimePath.c_str());
-    if (!runtimeModule) {
-        std::cerr << "Failed to get a Windows module handle for native runtime '"
-                  << runtimePath.string() << "'." << std::endl;
-        return 1;
-    }
-#endif
     for (llvm::Function& function : *module) {
         if (!function.isDeclaration() || function.isIntrinsic()) {
             continue;
         }
         const std::string name = function.getName().str();
-#ifdef _WIN32
-        void* address = reinterpret_cast<void*>(::GetProcAddress(runtimeModule, name.c_str()));
-#else
-        void* address = runtimeLibrary.getAddressOfSymbol(name.c_str());
-#endif
+        void* address = runtime.symbol(name);
         if (address) {
             llvm::sys::DynamicLibrary::AddSymbol(function.getName(), address);
             runtimeSymbols.emplace_back(name, address);
         }
     }
 
+    if (llvm::Function* entry = module->getFunction(preferredEntry); entry && entry->hasLocalLinkage()) {
+        entry->setLinkage(llvm::GlobalValue::ExternalLinkage);
+    }
+
     std::string engineError;
-    auto engine = llvm::EngineBuilder(std::move(module))
-        .setErrorStr(&engineError)
-        .setEngineKind(llvm::EngineKind::JIT)
-        .setOptLevel(llvm::CodeGenOpt::getLevel(0).value())
-        .create();
+    llvm::EngineBuilder builder(std::move(module));
+    builder.setErrorStr(&engineError)
+        .setEngineKind(engineKind)
+        .setOptLevel(llvm::CodeGenOpt::getLevel(0).value());
+    if (!cpu.empty()) {
+        builder.setMCPU(cpu);
+        llvm::SmallVector<llvm::StringRef, 32> attributes;
+        llvm::StringRef(features).split(attributes, ',', -1, false);
+        builder.setMAttrs(std::vector<std::string>(attributes.begin(), attributes.end()));
+    }
+    llvm::ExecutionEngine* engine = builder.create();
     if (!engine) {
         std::cerr << "Failed to create ExecutionEngine: " << engineError << std::endl;
         return 1;
@@ -429,7 +467,8 @@ int runIRFile(const std::string& inputFile, const std::vector<std::string>& runt
         }
     }
 
-    llvm::Function* entryFunction = engine->FindFunctionNamed("main");
+    llvm::Function* entryFunction = preferredEntry.empty() ? nullptr : engine->FindFunctionNamed(preferredEntry);
+    if (!entryFunction) entryFunction = engine->FindFunctionNamed("main");
     if (!entryFunction) {
         // Host-emitted IR uses this zero-argument entrypoint instead of a C
         // ABI main function. It is still a valid executable CSEC program.
@@ -440,21 +479,10 @@ int runIRFile(const std::string& inputFile, const std::vector<std::string>& runt
         return 1;
     }
 
-    std::vector<std::string> arguments;
-    arguments.reserve(runtimeArgs.size() + 1);
-    arguments.push_back(inputFile);
-    arguments.insert(arguments.end(), runtimeArgs.begin(), runtimeArgs.end());
-
     // The program reads its arguments through the runtime (commandLineArg / csec_command_line_arg),
     // e.g. the self-hosted compiler's input and output paths: hand them to the loaded runtime.
     using SetCommandLineArgs = void (*)(int, char**);
-#ifdef _WIN32
-    auto setCommandLineArgs = reinterpret_cast<SetCommandLineArgs>(
-        ::GetProcAddress(runtimeModule, "csec_set_command_line_args"));
-#else
-    auto setCommandLineArgs = reinterpret_cast<SetCommandLineArgs>(
-        runtimeLibrary.getAddressOfSymbol("csec_set_command_line_args"));
-#endif
+    auto setCommandLineArgs = reinterpret_cast<SetCommandLineArgs>(runtime.symbol("csec_set_command_line_args"));
     if (!setCommandLineArgs) {
         std::cerr << "Native runtime does not export csec_set_command_line_args." << std::endl;
         return 1;
@@ -466,7 +494,40 @@ int runIRFile(const std::string& inputFile, const std::vector<std::string>& runt
     }
     setCommandLineArgs(static_cast<int>(runtimeArgv.size()), runtimeArgv.data());
 
-    return engine->runFunctionAsMain(entryFunction, arguments, {});
+    const int exitCode = engine->runFunctionAsMain(entryFunction, arguments, {});
+    std::fflush(nullptr);
+    return exitCode;
+}
+
+int runIRFile(const std::string& inputFile, const std::vector<std::string>& runtimeArgs, const char* programName) {
+    LLVMLinkInMCJIT();
+    LLVMLinkInInterpreter();
+    llvm::InitializeNativeTarget();
+    llvm::InitializeNativeTargetAsmPrinter();
+    llvm::InitializeNativeTargetAsmParser();
+
+    NativeRuntimeLibrary runtime;
+    if (!loadNativeRuntime(programName, runtime)) {
+        return 1;
+    }
+
+    auto context = std::make_unique<llvm::LLVMContext>();
+    llvm::SMDiagnostic diagnostic;
+    auto module = llvm::parseIRFile(inputFile, diagnostic, *context);
+    if (!module) {
+        diagnostic.print(programName, llvm::errs());
+        return 1;
+    }
+    if (llvm::verifyModule(*module, &llvm::errs())) {
+        std::cerr << "Input LLVM IR is invalid." << std::endl;
+        return 1;
+    }
+
+    std::vector<std::string> arguments;
+    arguments.reserve(runtimeArgs.size() + 1);
+    arguments.push_back(inputFile);
+    arguments.insert(arguments.end(), runtimeArgs.begin(), runtimeArgs.end());
+    return executeModule(std::move(module), runtime, llvm::EngineKind::JIT, "", "", "", std::move(arguments));
 }
 
 std::string trimAscii(std::string value) {
@@ -518,18 +579,27 @@ std::filesystem::path resolveImportPath(
     // Interpret the import target as UTF-8. Constructing a path directly from a narrow std::string
     // routes through the active code page on Windows, which hangs in the MSVC STL for some
     // multi-byte (e.g. Korean) sequences; u8path decodes the bytes as UTF-8 instead.
-    std::filesystem::path requested = utf8Path(target);
-    if (!requested.has_extension()) {
-        requested.replace_extension(".csec");
-    }
-    if (requested.is_absolute()) {
-        return requested;
+    auto withExtensions = [](std::filesystem::path path) {
+        if (path.has_extension()) return std::vector<std::filesystem::path>{path};
+        std::vector<std::filesystem::path> paths;
+        for (const char* extension : {".t", ".csec"}) {
+            paths.push_back(std::filesystem::path(path).replace_extension(extension));
+        }
+        return paths;
+    };
+    std::error_code ec;
+    const auto requestedPaths = withExtensions(utf8Path(target));
+    if (requestedPaths.front().is_absolute()) {
+        for (const auto& path : requestedPaths) {
+            if (std::filesystem::is_regular_file(path, ec)) return path;
+        }
+        return requestedPaths.front();
     }
 
-    std::vector<std::filesystem::path> candidates = {
-        baseDir / requested,
-        std::filesystem::current_path() / requested
-    };
+    std::vector<std::filesystem::path> candidates;
+    for (const auto& root : {baseDir, std::filesystem::current_path()}) {
+        for (const auto& path : requestedPaths) candidates.push_back(root / path);
+    }
 
     if (target.find('.') != std::string::npos && target.find('/') == std::string::npos &&
         target.find('\\') == std::string::npos) {
@@ -539,15 +609,12 @@ std::filesystem::path resolveImportPath(
                 ch = static_cast<char>(std::filesystem::path::preferred_separator);
             }
         }
-        std::filesystem::path dottedPath = utf8Path(dotted);
-        if (!dottedPath.has_extension()) {
-            dottedPath.replace_extension(".csec");
+        const auto dottedPaths = withExtensions(utf8Path(dotted));
+        for (const auto& root : {baseDir, std::filesystem::current_path()}) {
+            for (const auto& path : dottedPaths) candidates.push_back(root / path);
         }
-        candidates.push_back(baseDir / dottedPath);
-        candidates.push_back(std::filesystem::current_path() / dottedPath);
     }
 
-    std::error_code ec;
     for (const auto& candidate : candidates) {
         if (std::filesystem::exists(candidate, ec) && std::filesystem::is_regular_file(candidate, ec)) {
             return candidate;
@@ -592,6 +659,9 @@ std::string expandImports(
                            !std::filesystem::is_regular_file(canonicalPath, ec))) {
         std::cerr << "Unable to read import: " << canonicalPath.string() << std::endl;
         return "";
+    }
+    if (source.rfind("#!", 0) == 0) {
+        source.erase(0, source.find('\n') == std::string::npos ? source.size() : source.find('\n'));
     }
 
     // `import a.b = name;` makes `name.f` refer to the module's top-level function f in this file.
@@ -898,8 +968,8 @@ std::vector<std::filesystem::path> systemLibrarySearchDirectories(
         addDirectory(linkPath);
     }
     addDirectory(std::filesystem::path(outputPath).parent_path());
-    // The runtime is built next to csec++ itself, so search there too: otherwise invoking
-    // csec++ from another directory (without --link-path) cannot find it.
+    // The runtime is built next to tess itself, so search there too: otherwise invoking
+    // tess from another directory (without --link-path) cannot find it.
     {
         static int executableAnchor = 0;
         std::filesystem::path executable = llvm::sys::fs::getMainExecutable("", &executableAnchor);
@@ -1455,19 +1525,6 @@ int main(int argc, char** argv) {
         return -1;
     }*/
 
-    char* cwd =
-#ifdef _WIN32
-        _getcwd(NULL, 0);
-#else
-        getcwd(NULL, 0);
-#endif
-    if (cwd) {
-        std::cout << "get current directory: " << cwd << std::endl;
-        free(cwd);
-    }
-    else {
-        std::cout << "get current directory: <unavailable>" << std::endl;
-    }
     OutputMode outputMode = OutputMode::EmitExecutable;
     std::string inputFile;
     bool inputFileSet = false;
@@ -1629,6 +1686,23 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    const bool scriptRun = outputMode == OutputMode::Run;
+    if (!scriptRun) {
+        char* cwd =
+#ifdef _WIN32
+            _getcwd(NULL, 0);
+#else
+            getcwd(NULL, 0);
+#endif
+        if (cwd) {
+            std::cout << "get current directory: " << cwd << std::endl;
+            free(cwd);
+        }
+        else {
+            std::cout << "get current directory: <unavailable>" << std::endl;
+        }
+    }
+
     if (!inputFileSet) {
         inputFile = promptForInputFile(argv[0]);
         if (inputFile.empty()) {
@@ -1677,7 +1751,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    std::cout << "Parsing completed successfully." << std::endl;
+    if (!scriptRun) std::cout << "Parsing completed successfully." << std::endl;
     if (!checkDefaultParameters(ast.get()) || !lowerEnums(ast.get()) || !lowerInterfaces(ast.get()) ||
         !markEscapingLambdas(ast.get())) {
         return 1;
@@ -1741,6 +1815,7 @@ int main(int argc, char** argv) {
     auto& codeGen = CodeGenerator::getInstance();
     codeGen.finalizeOwnershipFunctions();
     llvm::Function* runtimeEntry = rebuildRuntimeMain(codeGen);
+    const std::string entryName = runtimeEntry ? runtimeEntry->getName().str() : "";
     if (codeGen.errorCount > 0) {
         for (llvm::Function& function : *codeGen.module) {
             for (llvm::BasicBlock& block : function) block.dropAllReferences();
@@ -1807,15 +1882,10 @@ int main(int argc, char** argv) {
     // Choose the optimization pipeline by -O level. -O1/-O2/-O3 run LLVM's full per-module pipeline
     // (which already includes mem2reg, inlining, GVN, DCE, loop opts, ...). -O0 runs nothing. The
     // legacy default (no -O flag) promotes allocas to registers only.
-    //
-    // The `--run` path executes with the LLVM *interpreter*, which cannot run fully optimized IR
-    // (vector ops, intrinsics), so it always uses the interpreter-safe mem2reg pipeline; the -O level
-    // takes effect for emitted output (--emit-ir/--emit-obj/--emit-exe), and a program run from that
-    // output (or via --run-ir) sees the optimization.
-    const bool interpreterRun = (outputMode == OutputMode::Run);
+    const bool jitRun = outputMode == OutputMode::Run && hostTarget.machine != nullptr;
+    const bool interpreterRun = outputMode == OutputMode::Run && !jitRun;
     if (interpreterRun && optLevel >= 1) {
-        std::cerr << "Note: -O optimization applies to emitted output, not the --run interpreter; "
-                     "use --emit-ir/--emit-exe (or --run-ir) to run optimized code." << std::endl;
+        std::cerr << "Note: no JIT target is available, so --run uses the LLVM interpreter without -O." << std::endl;
     }
 
     llvm::ModulePassManager MPM;
@@ -1873,31 +1943,23 @@ int main(int argc, char** argv) {
         return writeExecutableToFile(*codeGen.module, outputFile, allLinkLibraries, allLinkPaths, staticRuntime) ? 0 : 1;
     }
 
-    std::string errStr;
-    auto engine = llvm::EngineBuilder(std::move(codeGen.module))
-        .setErrorStr(&errStr)
-        .setEngineKind(llvm::EngineKind::Interpreter)
-        .setOptLevel(llvm::CodeGenOpt::getLevel(0).value())
-        .create();
-
-    if (!engine) {
-        std::cerr << "Failed to create ExecutionEngine: " << errStr << std::endl;
-        std::cerr << "Execution backend is unavailable. Skipping run phase." << std::endl;
-        return 0;
+    NativeRuntimeLibrary runtime;
+    if (!loadNativeRuntime(argv[0], runtime)) {
+        return 1;
     }
+    std::vector<std::string> allLinkLibraries = linkLibraries;
+    allLinkLibraries.insert(allLinkLibraries.end(), codeGen.externalLinkLibraries.begin(), codeGen.externalLinkLibraries.end());
+    std::vector<std::string> allLinkPaths = linkPaths;
+    allLinkPaths.insert(allLinkPaths.end(), codeGen.externalLinkPaths.begin(), codeGen.externalLinkPaths.end());
+    loadExternalLibraries(allLinkLibraries, allLinkPaths);
 
-    // main ?⑥닔 ?ㅽ뻾
-    std::vector<char*> runtimeArgv;
-    runtimeArgv.reserve(runtimeArgs.size() + 1);
-    runtimeArgv.push_back(argv[0]);
-    for (auto& runtimeArg : runtimeArgs) {
-        runtimeArgv.push_back(runtimeArg.data());
-    }
-    csec_set_command_line_args(static_cast<int>(runtimeArgv.size()), runtimeArgv.data());
-
-    auto result = engine->runFunction(runtimeEntry, {});
-
-    return 0;
+    std::vector<std::string> arguments;
+    arguments.reserve(runtimeArgs.size() + 1);
+    arguments.push_back(inputFile);
+    arguments.insert(arguments.end(), runtimeArgs.begin(), runtimeArgs.end());
+    return executeModule(std::move(codeGen.module), runtime,
+                         jitRun ? llvm::EngineKind::Either : llvm::EngineKind::Interpreter,
+                         marchNative ? hostTarget.cpu : "", hostTarget.features, entryName, std::move(arguments));
 }
 
 

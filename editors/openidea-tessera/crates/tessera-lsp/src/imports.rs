@@ -1,7 +1,7 @@
 //! `import "x";` resolution and the line map of the compiler's import
 //! expansion. Mirrors `parseImportTarget`, `resolveImportPath` and
 //! `expandImports` in `src/main.cpp`: imports are inlined textually, so the
-//! line numbers `csec++` reports refer to the expanded text.
+//! line numbers `tess` reports refer to the expanded text.
 
 use std::path::{Path, PathBuf};
 
@@ -38,7 +38,7 @@ fn starts_with_import_keyword(t: &str) -> bool {
     }
 }
 
-/// The target of an `import` line, as `csec++` reads it (one import per line).
+/// The target of an `import` line, as `tess` reads it (one import per line).
 pub fn parse_import_target(line: &str) -> Option<String> {
     let t = line.trim_matches(|c| matches!(c, ' ' | '\t' | '\r' | '\n'));
     if !starts_with_import_keyword(t) {
@@ -64,17 +64,18 @@ pub fn parse_import_target(line: &str) -> Option<String> {
 /// Resolves an import target; `None` when no candidate exists (the compiler
 /// then leaves the line in place).
 pub fn resolve_import(including_file: &Path, target: &str, cwd: &Path) -> Option<PathBuf> {
-    let with_ext = |p: PathBuf| if p.extension().is_none() { p.with_extension("csec") } else { p };
+    let with_ext = |p: PathBuf| {
+        if p.extension().is_none() { vec![p.with_extension("t"), p.with_extension("csec")] } else { vec![p] }
+    };
     let requested = with_ext(PathBuf::from(target));
-    if requested.is_absolute() {
-        return requested.is_file().then(|| canonical(&requested));
+    if requested[0].is_absolute() {
+        return requested.iter().find(|p| p.is_file()).map(|p| canonical(p));
     }
     let base = including_file.parent().unwrap_or(Path::new("."));
-    let mut candidates = vec![base.join(&requested), cwd.join(&requested)];
+    let mut candidates: Vec<PathBuf> = [base, cwd].iter().flat_map(|r| requested.iter().map(|p| r.join(p))).collect();
     if target.contains('.') && !target.contains('/') && !target.contains('\\') {
         let dotted = with_ext(PathBuf::from(target.replace('.', std::path::MAIN_SEPARATOR_STR)));
-        candidates.push(base.join(&dotted));
-        candidates.push(cwd.join(&dotted));
+        candidates.extend([base, cwd].iter().flat_map(|r| dotted.iter().map(|p| r.join(p))));
     }
     candidates.into_iter().find(|c| c.is_file()).map(|c| canonical(&c))
 }

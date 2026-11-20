@@ -2,8 +2,8 @@
 # `cmake -DCSEC_Z3_LINK=STATIC`. The official releases only ship libz3.dll, so the static library is
 # compiled here (this takes a while). Run it from a Visual Studio developer prompt.
 #
-# MSVC requires the static library and csec++ to use the same C runtime: -Config Debug (the default,
-# /MDd, for the Debug csec++) or -Config Release (/MT, or /MD with -DllCrt to match
+# MSVC requires the static library and tess to use the same C runtime: -Config Debug (the default,
+# /MDd, for the Debug tess) or -Config Release (/MT, or /MD with -DllCrt to match
 # -DCSEC_RELEASE_DLL_CRT=ON). Rebuild after switching.
 param(
     [string]$Version = "5.3.3",

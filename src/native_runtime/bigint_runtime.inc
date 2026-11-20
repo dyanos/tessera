@@ -7,9 +7,9 @@
 //  (each limb holds 0..999999999, which keeps a full limb*limb product inside
 //  a uint64_t and makes decimal formatting a plain per-limb print).
 //
-//  Handles are heap objects returned as void* and are caller-owned / leaked,
-//  matching the char* string helpers elsewhere in the runtime.
 // ============================================================================
+
+#include <new>
 
 namespace {
 
@@ -26,9 +26,12 @@ void csecBigIntTrim(std::vector<std::uint32_t>& m) {
 
 CsecBigInt* csecBigIntAlloc(int sign, std::vector<std::uint32_t> mag) {
     csecBigIntTrim(mag);
-    auto* r = new CsecBigInt();
+    void* storage = csecAlloc(sizeof(CsecBigInt));
+    if (!storage) throw std::bad_alloc();
+    auto* r = new (storage) CsecBigInt();
     r->mag = std::move(mag);
     r->sign = r->mag.empty() ? 0 : sign;   // canonical zero has sign 0
+    csec_rc_adopt_with(r, reinterpret_cast<void*>(+[](void* value) { static_cast<CsecBigInt*>(value)->~CsecBigInt(); }));
     return r;
 }
 

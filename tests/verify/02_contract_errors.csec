@@ -1,4 +1,4 @@
-// Each function has one logical problem that `csec++ --verify` reports.
+// Each function has one logical problem that `tess --verify` reports.
 def absValue(x: Int): Int
     ensures result >= 0
 {

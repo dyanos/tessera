@@ -1,12 +1,12 @@
 #!/bin/sh
 # Cross-platform test runner (Linux, macOS, and Git Bash on Windows).
 #
-#   tests/run_suite.sh [path/to/csec++]
+#   tests/run_suite.sh [path/to/tess]
 #
 # 1. fixtures: every tests/{positive,semantic_positive,stdlib,selfhost_concurrency} program is compiled
 #    with --emit-ir and run with --run-ir; the pair of exit codes must match tests/expected_results.txt.
-# 2. verify: tests/verify/*.csec through `csec++ --verify` must print their .expected diagnostics
-#    (skipped when csec++ was built without Z3).
+# 2. verify: tests/verify/*.csec through `tess --verify` must print their .expected diagnostics
+#    (skipped when tess was built without Z3).
 # 3. self-host: tests/selfhost_concurrency/*.csec compiled by the self-hosted compiler must exit 42.
 # 4. rejected: every tests/semantic_negative/*.csec must fail to compile (--emit-ir exits non-zero).
 # 5. debug info: tests/positive/14_language/*.csec compile with -g (valid debug metadata).
@@ -18,11 +18,11 @@ repo="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo"
 compiler="${1:-}"
 if [ -z "$compiler" ]; then
-  for candidate in x64/Debug/csec++.exe x64/Release/csec++.exe Debug/csec++ Release/csec++; do
+  for candidate in x64/Debug/tess.exe x64/Release/tess.exe Debug/tess Release/tess; do
     if [ -x "$candidate" ]; then compiler="$candidate"; break; fi
   done
 fi
-[ -n "$compiler" ] && [ -x "$compiler" ] || { echo "csec++ not found; pass its path" >&2; exit 2; }
+[ -n "$compiler" ] && [ -x "$compiler" ] || { echo "tess not found; pass its path" >&2; exit 2; }
 
 if command -v timeout >/dev/null 2>&1; then limit="timeout"
 elif command -v gtimeout >/dev/null 2>&1; then limit="gtimeout"
@@ -106,7 +106,7 @@ echo "debug info: $debug_bad failure(s)"
 
 # ---- 2. verify ----
 if "$compiler" --verify tests/verify/04_wrap_mode.csec 2>&1 | grep -q "built without Z3"; then
-  echo "verify: skipped (csec++ was built without Z3)"
+  echo "verify: skipped (tess was built without Z3)"
 else
   passed=0; failed=0
   for f in tests/verify/*.csec; do

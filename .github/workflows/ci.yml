@@ -48,4 +48,4 @@ jobs:
         run: cmake --build build --parallel
 
       - name: Test
-        run: sh tests/run_suite.sh Debug/csec++
+        run: sh tests/run_suite.sh Debug/tess

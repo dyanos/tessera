@@ -67,7 +67,11 @@ llvm::Value* AssignmentExpressionNode::codegen() {
             symbolOpt->value && llvm::isa<llvm::AllocaInst>(symbolOpt->value)) {
             rightValue = coerceToNat(rightValue, symbolOpt->type.get(), right.get());
             if (rightValue && rightValue->getType()->isPointerTy()) {
-                CodeGenerator::getInstance().builder.CreateStore(rightValue, symbolOpt->value);
+                auto& cg = CodeGenerator::getInstance();
+                rightValue = cg.takeOwnedString(rightValue);
+                llvm::Value* previous = cg.builder.CreateLoad(rightValue->getType(), symbolOpt->value, "nat.previous");
+                cg.builder.CreateStore(rightValue, symbolOpt->value);
+                cg.releaseString(previous);
                 return rightValue;
             }
             std::cerr << "Type error: Assignment value for Nat variable '" << id->value << "' is not a Nat" << std::endl;

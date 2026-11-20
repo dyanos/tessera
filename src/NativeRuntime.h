@@ -146,7 +146,7 @@ CSEC_NATIVE_API char* csec_to_string_i64(long long value);
 CSEC_NATIVE_API char* csec_to_string_double(double value);
 
 // Arbitrary-precision integers backing the Nat (Gaussian integer) type. Handles
-// are opaque, heap-allocated, caller-owned (leaked), like the string helpers.
+// are opaque and reference counted.
 CSEC_NATIVE_API void* csec_bigint_from_i64(long long value);
 CSEC_NATIVE_API void* csec_bigint_from_decimal(const char* text);
 CSEC_NATIVE_API void* csec_bigint_add(void* a, void* b);
@@ -164,7 +164,7 @@ CSEC_NATIVE_API double csec_bigint_to_double(void* a);
 CSEC_NATIVE_API int csec_bigint_digit_count(void* a);
 CSEC_NATIVE_API int csec_bigint_is_prime(void* a);
 
-// Tensor operations callable from the self-host compiler (csec++ inlines these instead).
+// Tensor operations callable from the self-host compiler (tess inlines these instead).
 CSEC_NATIVE_API void*  csec_tensor_new(long long count, double fill);
 CSEC_NATIVE_API double csec_tensor_get(void* t, long long i);
 CSEC_NATIVE_API void   csec_tensor_set(void* t, long long i, double v);

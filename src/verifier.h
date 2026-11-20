@@ -1,6 +1,6 @@
 #pragma once
 
-// Static verification of contracts (`csec++ --verify`): requires/ensures on functions,
+// Static verification of contracts (`tess --verify`): requires/ensures on functions,
 // invariant/decreases on loops, and assert(...) statements, proved with the Z3 SMT solver.
 // See LANGUAGE_SPEC.md §12.
 

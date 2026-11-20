@@ -1,4 +1,4 @@
-# Downloads the official Z3 release used by `csec++ --verify` into deps/z3 (include/ and bin/),
+# Downloads the official Z3 release used by `tess --verify` into deps/z3 (include/ and bin/),
 # checks its SHA-256, and unpacks it. Re-run CMake afterwards so it finds deps/z3.
 param(
     [string]$Version = "5.3.3",

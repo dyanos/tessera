@@ -1,7 +1,7 @@
-//! `tessera-lsp` ??a Language Server Protocol server for Tessera (`.csec`).
+//! `tessera-lsp` ??a Language Server Protocol server for Tessera (`.t`, `.csec`).
 //!
 //! Speaks LSP over stdio. Lexical problems are reported as you type;
-//! `csec++` runs in the background on open and save for parse and type
+//! `tess` runs in the background on open and save for parse and type
 //! errors. Run `tessera-lsp --version` to check the install.
 
 mod compiler;
@@ -118,7 +118,7 @@ impl Server {
             None => log(
                 &self.sender,
                 MessageType::INFO,
-                "tessera-lsp: csec++ not found (set initializationOptions.compilerPath or TESSERA_COMPILER); only lexical diagnostics are reported",
+                "tessera-lsp: tess not found (set initializationOptions.compilerPath or TESSERA_COMPILER); only lexical diagnostics are reported",
             ),
         }
     }
@@ -193,13 +193,13 @@ impl Server {
         store.publish(&key, &self.sender);
     }
 
-    /// Runs `csec++` on the saved file in the background.
+    /// Runs `tess` on the saved file in the background.
     fn check(&mut self, uri: &Url) {
         let Ok(path) = uri.to_file_path() else { return };
         let Some(compiler) = self.compiler.clone() else {
             if !self.warned_no_compiler {
                 self.warned_no_compiler = true;
-                log(&self.sender, MessageType::WARNING, "tessera-lsp: no csec++ compiler found; skipping compiler diagnostics");
+                log(&self.sender, MessageType::WARNING, "tessera-lsp: no tess compiler found; skipping compiler diagnostics");
             }
             return;
         };
@@ -220,7 +220,7 @@ impl Server {
             let main = imports::canonical(&path);
             let read = |p: &Path| std::fs::read_to_string(p).ok();
             let map = imports::LineMap::build(&main, &cwd, &read);
-            let name = compiler.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "csec++".into());
+            let name = compiler.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "tess".into());
             let by_file = match compiler::run(&compiler, &settings, &main, &cwd) {
                 Ok(out) => compiler::parse_output(&out, &main, &map, &read, &name),
                 Err(e) => {
@@ -270,7 +270,7 @@ impl Server {
                     if !name.starts_with('.') && !name.starts_with('_') && !SKIP.contains(&name.as_str()) && !name.starts_with("build") {
                         stack.push(p);
                     }
-                } else if name.ends_with(".csec") && files.len() < 5000 {
+                } else if (name.ends_with(".t") || name.ends_with(".csec")) && files.len() < 5000 {
                     files.push(p);
                 }
             }
@@ -507,7 +507,7 @@ fn main() {
             return;
         }
         Some("--help" | "-h") => {
-            println!("tessera-lsp {}\nLanguage server for Tessera (.csec). Speaks LSP over stdio.\n\nCompiler lookup: initializationOptions.compilerPath, $TESSERA_COMPILER, <root>/x64/{{Release,Debug}}/csec++, <root>/build/csec++, PATH.", env!("CARGO_PKG_VERSION"));
+            println!("tessera-lsp {}\nLanguage server for Tessera (.t, .csec). Speaks LSP over stdio.\n\nCompiler lookup: initializationOptions.compilerPath, $TESSERA_COMPILER, <root>/x64/{{Release,Debug}}/tess, <root>/build/tess, PATH.", env!("CARGO_PKG_VERSION"));
             return;
         }
         _ => {}

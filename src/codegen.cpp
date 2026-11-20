@@ -106,6 +106,11 @@ CodeGenerator::CodeGenerator()
     runtimeStringFunctions.insert("csec_html_title");
     runtimeStringFunctions.insert("csec_html_links");
     runtimeStringFunctions.insert("csec_bigint_to_string");
+    for (const char* producer : {"csec_bigint_from_i64", "csec_bigint_from_decimal", "csec_bigint_add",
+                                 "csec_bigint_sub", "csec_bigint_mul", "csec_bigint_div", "csec_bigint_mod",
+                                 "csec_bigint_pow", "csec_bigint_gcd", "csec_bigint_isqrt"}) {
+        userStringFunctions.insert(producer);
+    }
     runtimeStringFunctions.insert("csec_dict_to_string");
     runtimeStringFunctions.insert("csec_dict_key_at");
     runtimeStringFunctions.insert("csec_alg_residue_to_string");
@@ -475,12 +480,15 @@ llvm::Function* CodeGenerator::arrayDropFunction(const Type* type) {
     const Type* element = nullptr;
     if (auto* array = dynamic_cast<const ArrayType*>(type)) element = array->elementType.get();
     else if (auto* generic = dynamic_cast<const GenericType*>(type)) {
-        if (generic->getName() != "Array" || generic->typeArguments.empty()) return nullptr;
+        if (generic->typeArguments.empty()) return nullptr;
         element = generic->typeArguments[0].get();
     }
-    if (!element || !isRefcountedType(element)) return nullptr;
-    llvm::Type* elementType = getLLVMType(element);
-    if (!elementType || !elementType->isPointerTy()) return nullptr;
+    if (!element) return nullptr;
+    const bool counted = isRefcountedType(element);
+    llvm::Function* structDrop = counted ? nullptr : structCountFunction(element, false);
+    if (!counted && !structDrop) return nullptr;
+    llvm::Type* elementType = getABIStorageType(element);
+    if (!elementType) return nullptr;
     const std::string name = "__csec_array_drop." + element->getName();
     if (llvm::Function* existing = module->getFunction(name)) return existing;
     auto* ptrTy = llvm::PointerType::getUnqual(context);
@@ -510,8 +518,9 @@ llvm::Function* CodeGenerator::arrayDropFunction(const Type* type) {
     index->addIncoming(builder.getInt64(0), countBB);
     builder.CreateCondBr(builder.CreateICmpSLT(index, count), bodyBB, freeBB);
     builder.SetInsertPoint(bodyBB);
-    llvm::Value* item = builder.CreateLoad(ptrTy, builder.CreateGEP(ptrTy, array, index), "element");
-    builder.CreateCall(rcReleaseFunction(), { item });
+    llvm::Value* slot = builder.CreateGEP(elementType, array, index);
+    if (structDrop) builder.CreateCall(structDrop, { slot });
+    else builder.CreateCall(rcReleaseFunction(), { builder.CreateLoad(ptrTy, slot, "element") });
     index->addIncoming(builder.CreateAdd(index, builder.getInt64(1)), bodyBB);
     builder.CreateBr(headBB);
     builder.SetInsertPoint(freeBB);
@@ -520,6 +529,27 @@ llvm::Function* CodeGenerator::arrayDropFunction(const Type* type) {
     builder.SetInsertPoint(doneBB);
     builder.CreateRetVoid();
     --stringHookDepth;
+    return fn;
+}
+
+llvm::Function* CodeGenerator::sharedStrongDropFunction() {
+    const char* name = "__csec_shared_strong_drop";
+    if (llvm::Function* fn = module->getFunction(name)) return fn;
+    auto* ptr = llvm::PointerType::getUnqual(context);
+    auto* fn = llvm::Function::Create(llvm::FunctionType::get(builder.getVoidTy(), {ptr}, false),
+                                      llvm::Function::InternalLinkage, name, module.get());
+    llvm::IRBuilderBase::InsertPointGuard guard(builder);
+    builder.SetCurrentDebugLocation(llvm::DebugLoc());
+    auto* entry = llvm::BasicBlock::Create(context, "entry", fn);
+    auto* drop = llvm::BasicBlock::Create(context, "drop", fn);
+    auto* done = llvm::BasicBlock::Create(context, "done", fn);
+    builder.SetInsertPoint(entry);
+    builder.CreateCondBr(builder.CreateIsNull(fn->getArg(0)), done, drop);
+    builder.SetInsertPoint(drop);
+    emitCleanupBody(fn->getArg(0), CleanupKind::SharedRelease);
+    builder.CreateBr(done);
+    builder.SetInsertPoint(done);
+    builder.CreateRetVoid();
     return fn;
 }
 
@@ -662,12 +692,16 @@ void CodeGenerator::emitOwnedValueDrop(llvm::Value* value, const Type* type) {
         return;
     }
     if (type->getKind() == Type::Kind::GENERIC && (type->getName() == "Shared" || type->getName() == "Weak")) {
+        if (type->getName() == "Shared") {
+            builder.CreateCall(sharedStrongDropFunction(), {value});
+            return;
+        }
         llvm::Function* fn = builder.GetInsertBlock()->getParent();
         auto* releaseBB = llvm::BasicBlock::Create(context, "handle.release", fn);
         auto* doneBB = llvm::BasicBlock::Create(context, "handle.done", fn);
         builder.CreateCondBr(builder.CreateIsNull(value, "handle.null"), doneBB, releaseBB);
         builder.SetInsertPoint(releaseBB);
-        emitCleanupBody(value, type->getName() == "Shared" ? CleanupKind::SharedRelease : CleanupKind::WeakRelease);
+        emitCleanupBody(value, CleanupKind::WeakRelease);
         builder.CreateBr(doneBB);
         builder.SetInsertPoint(doneBB);
     }
@@ -1098,7 +1132,7 @@ bool CodeGenerator::ownsParameter(const std::string& function, unsigned index) c
 
 bool CodeGenerator::isRefcountedType(const Type* type) {
     if (!type) return false;
-    if (type->getName() == "String") return true;
+    if (type->getName() == "String" || type->getName() == "Nat") return true;
     if (type->getKind() == Type::Kind::FUNCTION) return isStrictOwnership();
     if (isInterfaceType(type)) return isStrictOwnership();
     const EnumInfo* info = enumOfType(type);

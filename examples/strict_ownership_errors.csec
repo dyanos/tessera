@@ -1,7 +1,7 @@
 // What strict ownership REJECTS (each of these is a compile error under the default).
 // Uncomment one block at a time to see the diagnostic.
 //
-// Compile with:  csec++ examples/strict_ownership_errors.csec --emit-ir -o out.ll
+// Compile with:  tess examples/strict_ownership_errors.csec --emit-ir -o out.ll
 
 class Account(balance: Int) {
     def balance(): Int = balance

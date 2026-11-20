@@ -1,6 +1,6 @@
 // tensor_builtins.cpp -- reductions along an axis, extrema, argmax/argmin, *Like constructors and
 // random fills for tensors. Implemented by the runtime (native_runtime/tensor_runtime.inc), which
-// shares csec++'s tensor layout { i64 rank, i64* dims, i64 count, double* data }.
+// shares tess's tensor layout { i64 rank, i64* dims, i64 count, double* data }.
 //
 //   sum(t, 0)  mean(t, 1)  max(t, -1)  min(t, 0)  prod(t, 0)   -- a tensor without that axis
 //   max(t)  min(t)  prod(t)                                    -- a Real
