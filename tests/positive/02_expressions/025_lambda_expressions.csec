@@ -1,4 +1,6 @@
 def main(): Int {
+    val left = 1;
+    val right = 2;
     val addOne = [=](x) -> {
         return x + 1;
     };

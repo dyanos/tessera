@@ -1,4 +1,7 @@
 def main(): Int {
+    val x = 3.0e0;
+    val y = 2.0e0;
+    val n = 3;
     /* basic arithmetic in math mode */
     val a = $x + y$;
     val b = $x - y$;

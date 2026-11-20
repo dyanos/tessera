@@ -1,4 +1,6 @@
 def main(): Int {
+    val $\mathbb{F}$ = 7;
+    val $\mathbb{P}$ = 2;
     val reals = $$\mathbb{R}$$;
     val complex = $$\mathbb{C}$$;
     val naturals = $$\mathbb{N}$$;

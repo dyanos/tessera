@@ -1570,13 +1570,22 @@ llvm::Value* codegenBuiltinOdeCall(const std::string& functionName, const std::v
     auto* f64Ty = llvm::Type::getDoubleTy(cg.context);
     auto* i32Ty = llvm::Type::getInt32Ty(cg.context);
 
+    auto callMathFunction = [&](llvm::Value* callee, llvm::Value* argument, const char* name) -> llvm::Value* {
+        if (auto* direct = llvm::dyn_cast<llvm::Function>(callee->stripPointerCasts())) {
+            return cg.builder.CreateCall(llvm::FunctionType::get(f64Ty, {f64Ty}, false), direct, {argument}, name);
+        }
+        auto* ptrTy = llvm::PointerType::getUnqual(cg.context);
+        auto* closureType = llvm::StructType::get(cg.context, {ptrTy, ptrTy});
+        llvm::Value* code = cg.builder.CreateLoad(ptrTy, cg.builder.CreateStructGEP(closureType, callee, 0), "math.fn.code");
+        llvm::Value* env = cg.builder.CreateLoad(ptrTy, cg.builder.CreateStructGEP(closureType, callee, 1), "math.fn.env");
+        return cg.builder.CreateCall(llvm::FunctionType::get(f64Ty, {ptrTy, f64Ty}, false), code, {env, argument}, name);
+    };
     if (functionName == "numericDerivative") {
         if (argValues.size() != 3) {
             std::cerr << "Error: numericDerivative(f, order, x) requires three arguments" << std::endl;
             return nullptr;
         }
 
-        auto* fType = llvm::FunctionType::get(f64Ty, {f64Ty}, false);
         llvm::Value* derivativeFunction = argValues[0];
         llvm::Value* order = cg.builder.CreateTrunc(coerceMathValueToI64(cg, argValues[1]), i32Ty, "derivative.order");
         llvm::Value* x = coerceMathValueToDouble(cg, argValues[2]);
@@ -1585,14 +1594,14 @@ llvm::Value* codegenBuiltinOdeCall(const std::string& functionName, const std::v
 
         llvm::Value* xPlus = cg.builder.CreateFAdd(x, h, "derivative.x.plus");
         llvm::Value* xMinus = cg.builder.CreateFSub(x, h, "derivative.x.minus");
-        llvm::Value* fPlus = cg.builder.CreateCall(fType, derivativeFunction, {xPlus}, "derivative.f.plus");
-        llvm::Value* fMinus = cg.builder.CreateCall(fType, derivativeFunction, {xMinus}, "derivative.f.minus");
+        llvm::Value* fPlus = callMathFunction(derivativeFunction, xPlus, "derivative.f.plus");
+        llvm::Value* fMinus = callMathFunction(derivativeFunction, xMinus, "derivative.f.minus");
         llvm::Value* first = cg.builder.CreateFDiv(
             cg.builder.CreateFSub(fPlus, fMinus, "derivative.first.numerator"),
             cg.builder.CreateFMul(two, h, "derivative.first.denominator"),
             "derivative.first");
 
-        llvm::Value* fCenter = cg.builder.CreateCall(fType, derivativeFunction, {x}, "derivative.f.center");
+        llvm::Value* fCenter = callMathFunction(derivativeFunction, x, "derivative.f.center");
         llvm::Value* secondNumerator = cg.builder.CreateFAdd(
             cg.builder.CreateFSub(fPlus, cg.builder.CreateFMul(two, fCenter, "derivative.twice.center"), "derivative.second.left"),
             fMinus,
@@ -1613,7 +1622,6 @@ llvm::Value* codegenBuiltinOdeCall(const std::string& functionName, const std::v
         }
 
         auto* function = cg.builder.GetInsertBlock()->getParent();
-        auto* fType = llvm::FunctionType::get(f64Ty, {f64Ty}, false);
         llvm::Value* integrand = argValues[0];
         llvm::Value* a = coerceMathValueToDouble(cg, argValues[1]);
         llvm::Value* b = coerceMathValueToDouble(cg, argValues[2]);
@@ -1654,7 +1662,7 @@ llvm::Value* codegenBuiltinOdeCall(const std::string& functionName, const std::v
             a,
             cg.builder.CreateFMul(cg.builder.CreateFAdd(iAsDouble, half, "integral.mid.index"), width, "integral.offset"),
             "integral.midpoint");
-        llvm::Value* sample = cg.builder.CreateCall(fType, integrand, {midpoint}, "integral.sample");
+        llvm::Value* sample = callMathFunction(integrand, midpoint, "integral.sample");
         llvm::Value* sum = cg.builder.CreateLoad(f64Ty, sumPtr, "integral.sum.load");
         cg.builder.CreateStore(cg.builder.CreateFAdd(sum, sample, "integral.next.sum"), sumPtr);
         cg.builder.CreateStore(cg.builder.CreateAdd(i, one, "integral.next.i"), iPtr);

@@ -1,0 +1,4 @@
+def main(): Int {
+    val area = $\pi \cdot 2$;
+    return 0;
+}

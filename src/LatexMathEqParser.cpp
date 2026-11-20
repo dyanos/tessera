@@ -9,6 +9,12 @@
 #include "UnaryExpressionNode.h"
 #include "RangeExpressionNode.h"
 #include "ArrayLiteralNode.h"
+#include "AssignmentExpressionNode.h"
+#include "BlockNode.h"
+#include "VariableDeclarationNode.h"
+#include "LambdaExpressionNode.h"
+#include "ParameterNode.h"
+#include "ReturnStatementNode.h"
 
 #include <iostream>
 
@@ -524,38 +530,43 @@ std::unique_ptr<ASTNode> LatexMathEqParser::parseTerminal() {
 
 			// Limit-like operators accept optional lower/upper bounds before the body:
 			// \lim_{x=0} f(x), \limsup^n a_n, etc.
-			if (command == "lim" || command == "liminf" || command == "limsup") {
-				auto node = std::make_unique<FunctionCallNode>();
-				node->functionName = command;
-
-				std::unique_ptr<ASTNode> lower = nullptr;
-				std::unique_ptr<ASTNode> upper = nullptr;
-				while (check(TokenType::OPERATOR, "^") || check(TokenType::OPERATOR, "_")) {
-					if (match(TokenType::OPERATOR, "^")) {
-						upper = parseArg(true);
-					}
-					else if (match(TokenType::OPERATOR, "_")) {
-						lower = parseArg(true);
-					}
-				}
-
-				node->arguments.push_back(lower ? std::move(lower) : std::make_unique<UnitNode>());
-				node->arguments.push_back(upper ? std::move(upper) : std::make_unique<UnitNode>());
-
-				if (!isAtEnd() &&
-					!check(TokenType::OPERATOR, "$") &&
-					!check(TokenType::OPERATOR, "$$") &&
-					!check(TokenType::OPERATOR, ")") &&
-					!check(TokenType::OPERATOR, "}") &&
-					!check(TokenType::OPERATOR, "&")) {
-					auto body = parseSimpleExpr();
-					node->arguments.push_back(body ? std::move(body) : std::make_unique<UnitNode>());
-				}
-				else {
-					node->arguments.push_back(std::make_unique<UnitNode>());
-				}
-
-				return node;
+			if (command == "lim") {
+				if (!match(TokenType::OPERATOR, "_")) throw std::runtime_error("\\lim needs a limit point, as in \\lim_{x=0}.");
+				auto point = parseArg(true);
+				auto* bound = dynamic_cast<BinaryExpressionNode*>(point.get());
+				auto* name = bound && bound->op == "=" ? dynamic_cast<IdentifierNode*>(bound->left.get()) : nullptr;
+				if (!name) throw std::runtime_error("\\lim needs a limit point written as variable = value.");
+				static int limitCount = 0;
+				const std::string suffix = std::to_string(limitCount++);
+				const std::string function = "__latex_lim_f_" + suffix;
+				const std::string at = "__latex_lim_a_" + suffix;
+				auto approached = std::make_unique<LambdaExpressionNode>();
+				approached->arguments.push_back(std::make_unique<ParameterNode>(name->value, std::make_unique<BasicType>("Double")));
+				auto result = std::make_unique<ReturnStatementNode>();
+				result->expression = parseMultiplicative();
+				auto body = std::make_unique<BlockNode>();
+				body->statements.push_back(std::move(result));
+				approached->body = std::move(body);
+				auto sample = [&](const char* op) {
+					auto call = std::make_unique<FunctionCallNode>();
+					call->functionName = function;
+					call->arguments.push_back(std::make_unique<BinaryExpressionNode>(
+						std::make_unique<IdentifierNode>(at), op, std::make_unique<ValueNode>("1.0e-6", TokenType::EXPONENTIAL_LITERAL)));
+					return call;
+				};
+				auto average = std::make_unique<BinaryExpressionNode>(
+					std::make_unique<BinaryExpressionNode>(sample("+"), "+", sample("-")), "/",
+					std::make_unique<ValueNode>("2.0e0", TokenType::EXPONENTIAL_LITERAL));
+				auto pointDecl = std::make_unique<VariableDeclarationNode>(at, std::make_unique<BasicType>("Double"), std::move(bound->right));
+				pointDecl->hasExplicitType = true;
+				auto block = std::make_unique<BlockNode>();
+				block->statements.push_back(std::make_unique<VariableDeclarationNode>(function, nullptr, std::move(approached)));
+				block->statements.push_back(std::move(pointDecl));
+				block->statements.push_back(std::move(average));
+				return block;
+			}
+			if (command == "liminf" || command == "limsup") {
+				throw std::runtime_error("\\" + command + " is not supported in formulas yet.");
 			}
 
 			// 두 개 인자 함수 처리
@@ -626,7 +637,7 @@ std::unique_ptr<ASTNode> LatexMathEqParser::parseTerminal() {
 			// 집계 함수 처리 (sum, int, prod 등)
 			for (int i = 0; i < sizeof(aggregateFunctionSymbolTable) / sizeof(aggregateFunctionSymbolTable[0]); ++i) {
 				if (command == aggregateFunctionSymbolTable[i]) {
-					if (command == "sum") {
+					if (command == "sum" || command == "prod") {
 						auto node = std::make_unique<ForStatementNode>();
 
 						// upper / lower limit 처리
@@ -705,11 +716,57 @@ std::unique_ptr<ASTNode> LatexMathEqParser::parseTerminal() {
 							node->iterableExpr = std::make_unique<UnitNode>();
 						}
 
+						static int accumulatorCount = 0;
+						const std::string accumulator = "__latex_" + command + "_" + std::to_string(accumulatorCount++);
+						auto step = std::make_unique<BinaryExpressionNode>(
+							std::make_unique<IdentifierNode>(accumulator), command == "sum" ? "+" : "*", parseMultiplicative());
 						auto blockNode = std::make_unique<BlockNode>();
-						blockNode->statements.push_back(parseSimpleExpr());
+						blockNode->statements.push_back(
+							std::make_unique<AssignmentExpressionNode>(std::make_unique<IdentifierNode>(accumulator), std::move(step)));
 						node->body = std::move(blockNode);
 
-						return node;
+						auto initial = std::make_unique<VariableDeclarationNode>(
+							accumulator, std::make_unique<BasicType>("Double"),
+							std::make_unique<ValueNode>(command == "sum" ? "0.0e0" : "1.0e0", TokenType::EXPONENTIAL_LITERAL), true);
+						initial->hasExplicitType = true;
+						auto aggregate = std::make_unique<BlockNode>();
+						aggregate->statements.push_back(std::move(initial));
+						aggregate->statements.push_back(std::move(node));
+						aggregate->statements.push_back(std::make_unique<IdentifierNode>(accumulator));
+						return aggregate;
+					}
+					else if (command == "int") {
+						std::unique_ptr<ASTNode> lower;
+						std::unique_ptr<ASTNode> upper;
+						while (check(TokenType::OPERATOR, "^") || check(TokenType::OPERATOR, "_")) {
+							if (match(TokenType::OPERATOR, "^")) upper = parseArg(true);
+							else if (match(TokenType::OPERATOR, "_")) lower = parseArg(true);
+						}
+						if (!lower || !upper) throw std::runtime_error("\\int needs a lower and an upper limit.");
+						std::string variable = "x";
+						if (auto* bound = dynamic_cast<BinaryExpressionNode*>(lower.get()); bound && bound->op == "=") {
+							if (auto* name = dynamic_cast<IdentifierNode*>(bound->left.get())) {
+								variable = name->value;
+								lower = std::move(bound->right);
+							}
+						}
+						auto integrand = std::make_unique<LambdaExpressionNode>();
+						integrand->capturesByReference = true;
+						integrand->arguments.push_back(std::make_unique<ParameterNode>(variable, std::make_unique<BasicType>("Double")));
+						auto result = std::make_unique<ReturnStatementNode>();
+						result->expression = parseMultiplicative();
+						auto body = std::make_unique<BlockNode>();
+						body->statements.push_back(std::move(result));
+						integrand->body = std::move(body);
+						auto call = std::make_unique<FunctionCallNode>();
+						call->functionName = "integral";
+						call->arguments.push_back(std::move(integrand));
+						call->arguments.push_back(std::move(lower));
+						call->arguments.push_back(std::move(upper));
+						return call;
+					}
+					else if (command != "sum" && command != "prod") {
+						throw std::runtime_error("\\" + command + " is not supported in formulas yet.");
 					}
 					else {
 						auto node = std::make_unique<FunctionCallNode>();

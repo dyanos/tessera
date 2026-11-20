@@ -1,4 +1,10 @@
 def main(): Int {
+    val $\mathcal{L}$ = 1.0e0;
+    val $\mathcal{F}$ = 2.0e0;
+    val $\mathcal{O}$ = 3.0e0;
+    val $\mathcal{P}$ = 4.0e0;
+    val $\mathcal{H}$ = 5.0e0;
+    val $\mathcal{B}$ = 6.0e0;
     val lagrangian = $$\mathcal{L}$$;
     val fourier = $$\mathcal{F}$$;
     val bigO = $$\mathcal{O}$$;

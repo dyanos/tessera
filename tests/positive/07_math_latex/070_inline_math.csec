@@ -1,4 +1,6 @@
 def main(): Int {
+    val x = 0.5e0;
+    val y = 1.5e0;
     val a = $x + y$;
     val b = $\sin(x)$;
     val c = $\sqrt{a + b}$;

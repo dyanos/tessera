@@ -1,4 +1,9 @@
 def main(): Int {
+    val a = 1.0e0;
+    val b = 2.0e0;
+    val c = 3.0e0;
+    val $\alpha$ = 0.1e0;
+    val $\beta$ = 0.2e0;
     val bounded = $$\left( \frac{a+b}{c} \right)$$;
     val rooted = $$\sqrt{\alpha + \beta}$$;
     val matrix = $$\begin{bmatrix} 1 & 0 \\ 0 & 1 \end{bmatrix}$$;

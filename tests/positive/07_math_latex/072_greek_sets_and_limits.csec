@@ -1,4 +1,7 @@
 def main(): Int {
+    val $\alpha$ = 0.1e0;
+    val $\beta$ = 0.2e0;
+    val $\gamma$ = 0.3e0;
     val alphaExpr = $$\alpha + \beta + \gamma$$;
     val setExpr = $$\mathbb{Z} + \mathbb{Q}$$;
     val limExpr = $$\lim_{x=0} \frac{\sin(x)}{x}$$;

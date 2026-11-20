@@ -1,3 +1,4 @@
+import std.math.constants
 /* UTF-8 identifiers with LaTeX math */
 
 def 면적계산(반지름: Int): Int {

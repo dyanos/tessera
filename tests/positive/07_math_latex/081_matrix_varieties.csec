@@ -1,4 +1,12 @@
 def main(): Int {
+    val a = 1.0e0;
+    val b = 2.0e0;
+    val c = 3.0e0;
+    val d = 4.0e0;
+    val w = 5.0e0;
+    val x = 6.0e0;
+    val y = 7.0e0;
+    val z = 8.0e0;
     /* plain matrix */
     val m1 = $$\begin{matrix} 1 & 0 \\ 0 & 1 \end{matrix}$$;
 

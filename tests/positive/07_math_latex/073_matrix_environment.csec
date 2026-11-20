@@ -1,4 +1,8 @@
 def main(): Int {
+    val a = 1.0e0;
+    val b = 2.0e0;
+    val c = 3.0e0;
+    val d = 4.0e0;
     val m = $$\begin{matrix} 1 & 2 \\ 3 & 4 \end{matrix}$$;
     val pm = $$\begin{pmatrix} a & b \\ c & d \end{pmatrix}$$;
     return 0;

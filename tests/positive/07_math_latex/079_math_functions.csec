@@ -1,4 +1,6 @@
 def main(): Int {
+    val x = 0.5e0;
+    val A = $$\begin{bmatrix} 1 & 2 \\ 3 & 4 \end{bmatrix}$$;
     val a = $\sqrt{16}$;
     val b = $\ln(x)$;
     val c = $\log(x)$;

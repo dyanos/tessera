@@ -281,6 +281,9 @@ llvm::Value* ForStatementNode::codegen() {
         cg.builder.CreateStore(startValue, value_ptr);
 
         auto rangeType = rangeExpr->startExpr->getType();
+        if (!rangeType || cg.getLLVMType(rangeType.get()) != rangeValueType) {
+            rangeType = std::make_unique<BasicType>(rangeValueType->isIntegerTy(64) ? "Long" : "Int");
+        }
         cg.symbolTable.addSymbol(
             this->variable,
             std::make_unique<Symbol>(
