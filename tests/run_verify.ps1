@@ -2,12 +2,12 @@ param(
     [string]$Filter = "*",
     [switch]$Update
 )
-# Runs `csec++ --verify` on tests/verify/*.csec and compares its diagnostics with the .expected file
+# Runs `tess --verify` on tests/verify/*.csec and compares its diagnostics with the .expected file
 # next to each fixture (counterexample lines are skipped: models are not unique). A fixture may give
 # its verifier flags on a line `// verify-flags: ...`. -Update rewrites the .expected files.
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$exe = Join-Path $repoRoot "x64\Debug\csec++.exe"
+$exe = Join-Path $repoRoot "x64\Debug\tess.exe"
 $passed = 0
 $failed = 0
 foreach ($file in Get-ChildItem (Join-Path $PSScriptRoot "verify") -Filter "$Filter.csec" | Sort-Object Name) {

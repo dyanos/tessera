@@ -569,7 +569,7 @@ std::string csecImportTarget(const std::string& line) {
 // Standard-library roots searched for `import a.b.c` after the importing file's directory and the
 // working directory. The compiler author ships the library as plain .csec modules under `lib/`;
 // a module decides which compiler intrinsics it exposes (see `[@Intrinsic]`). Order: roots added
-// with --lib-path, then CSEC_LIB_PATH entries (';' separated on Windows, ':' elsewhere), then `lib/`
+// with --lib-path, then TESS_LIB_PATH and CSEC_LIB_PATH entries (';' separated on Windows, ':' elsewhere), then `lib/`
 // next to the runtime library and up to two parent directories (x64/Debug -> repository root).
 std::vector<std::filesystem::path>& csecExtraLibraryRoots() {
     static std::vector<std::filesystem::path> roots;
@@ -597,7 +597,9 @@ std::filesystem::path csecRuntimeModuleDirectory() {
 
 std::vector<std::filesystem::path> csecLibraryRoots() {
     std::vector<std::filesystem::path> roots = csecExtraLibraryRoots();
-    if (const char* env = std::getenv("CSEC_LIB_PATH")) {
+    for (const char* variable : {"TESS_LIB_PATH", "CSEC_LIB_PATH"}) {
+        const char* env = std::getenv(variable);
+        if (!env) continue;
 #ifdef _WIN32
         const char separator = ';';
 #else
@@ -628,11 +630,12 @@ std::filesystem::path csecFindLibraryModule(const std::string& target) {
     for (char& ch : relative) {
         if (ch == '.') ch = static_cast<char>(std::filesystem::path::preferred_separator);
     }
-    std::filesystem::path module = std::filesystem::u8path(relative + ".csec");
     std::error_code ec;
     for (const auto& root : csecLibraryRoots()) {
-        auto candidate = root / module;
-        if (std::filesystem::exists(candidate, ec) && std::filesystem::is_regular_file(candidate, ec)) return candidate;
+        for (const char* extension : {".t", ".csec"}) {
+            auto candidate = root / std::filesystem::u8path(relative + extension);
+            if (std::filesystem::exists(candidate, ec) && std::filesystem::is_regular_file(candidate, ec)) return candidate;
+        }
     }
     return {};
 }
@@ -640,22 +643,29 @@ std::filesystem::path csecFindLibraryModule(const std::string& target) {
 std::filesystem::path csecResolveImportPath(
     const std::filesystem::path& includingFile,
     const std::string& target) {
-    auto withExtension = [](std::filesystem::path path) {
-        if (!path.has_extension()) {
-            path.replace_extension(".csec");
+    auto withExtensions = [](std::filesystem::path path) {
+        if (path.has_extension()) return std::vector<std::filesystem::path>{path};
+        std::vector<std::filesystem::path> paths;
+        for (const char* extension : {".t", ".csec"}) {
+            paths.push_back(std::filesystem::path(path).replace_extension(extension));
         }
-        return path;
+        return paths;
     };
 
-    std::filesystem::path requested = withExtension(std::filesystem::path(target));
-    if (requested.is_absolute()) {
-        return requested;
+    std::error_code ec;
+    const auto requestedPaths = withExtensions(std::filesystem::path(target));
+    if (requestedPaths.front().is_absolute()) {
+        for (const auto& path : requestedPaths) {
+            if (std::filesystem::is_regular_file(path, ec)) return path;
+        }
+        return requestedPaths.front();
     }
 
-    std::vector<std::filesystem::path> candidates = {
-        includingFile.parent_path() / requested,
-        std::filesystem::current_path() / requested
-    };
+    const std::filesystem::path roots[] = {includingFile.parent_path(), std::filesystem::current_path()};
+    std::vector<std::filesystem::path> candidates;
+    for (const auto& root : roots) {
+        for (const auto& path : requestedPaths) candidates.push_back(root / path);
+    }
 
     if (target.find('.') != std::string::npos &&
         target.find('/') == std::string::npos &&
@@ -664,12 +674,12 @@ std::filesystem::path csecResolveImportPath(
         for (char& ch : dotted) {
             if (ch == '.') ch = static_cast<char>(std::filesystem::path::preferred_separator);
         }
-        std::filesystem::path dottedPath = withExtension(std::filesystem::path(dotted));
-        candidates.push_back(includingFile.parent_path() / dottedPath);
-        candidates.push_back(std::filesystem::current_path() / dottedPath);
+        const auto dottedPaths = withExtensions(std::filesystem::path(dotted));
+        for (const auto& root : roots) {
+            for (const auto& path : dottedPaths) candidates.push_back(root / path);
+        }
     }
 
-    std::error_code ec;
     for (const auto& candidate : candidates) {
         if (std::filesystem::exists(candidate, ec) && std::filesystem::is_regular_file(candidate, ec)) {
             return candidate;
@@ -711,6 +721,9 @@ std::string csecExpandImports(
     }
 
     std::string source = csecReadFileString(canonical);
+    if (source.rfind("#!", 0) == 0) {
+        source.erase(0, source.find('\n') == std::string::npos ? source.size() : source.find('\n'));
+    }
     if (source.find("import") == std::string::npos) {
         return source;
     }

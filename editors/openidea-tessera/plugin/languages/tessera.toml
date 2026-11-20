@@ -1,6 +1,6 @@
 id = "tessera"
 name = "Tessera"
-extensions = ["csec"]
+extensions = ["t", "csec"]
 line-comment = "//"
 block-comment = ["/*", "*/"]
 indent = { tab-size = 4, insert-spaces = true }
@@ -19,7 +19,7 @@ command = "tessera-lsp"
 root-markers = ["CMakeLists.txt", ".git"]
 install-hint = "cargo install --path editors/openidea-tessera/crates/tessera-lsp (in the Tessera repository), then make sure ~/.cargo/bin is on PATH"
 
-# Read by tessera-lsp (all optional). compilerPath: csec++ to run (found in
+# Read by tessera-lsp (all optional). compilerPath: tess to run (found in
 # <root>/x64/{Release,Debug}, <root>/build, $TESSERA_COMPILER or PATH when
 # empty); compilerArgs: extra flags such as "--no-strict-ownership";
 # checkMode: "full" (parse + type check) or "syntax".

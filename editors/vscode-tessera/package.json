@@ -1,7 +1,7 @@
 {
   "name": "tessera-language-support",
   "displayName": "Tessera Language Support",
-  "description": "Syntax highlighting and editor configuration for Tessera (.csec) source files.",
+  "description": "Syntax highlighting and editor configuration for Tessera (.t, .csec) source files.",
   "version": "0.1.0",
   "publisher": "tessera-lang",
   "license": "MIT",
@@ -23,9 +23,11 @@
         "id": "tessera",
         "aliases": [
           "Tessera",
+          "tess",
           "csec"
         ],
         "extensions": [
+          ".t",
           ".csec"
         ],
         "configuration": "./language-configuration.json"

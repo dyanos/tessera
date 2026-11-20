@@ -31,23 +31,27 @@ enum Kind : int {
     KindDict = 5,    // a nested dictionary
     KindArray = 6,   // an array pointer; see Dict::elementKind/elementBytes
     KindOpaque = 7,  // any other reference (class instance, tensor, closure, ...)
+    KindCounted = 8,
 };
+
+constexpr bool countedValue(int kind) {
+    return kind == KindString || kind == KindCounted;
+}
 
 struct Entry {
     long long key = 0;
     long long value = 0;
     long long length = -1;  // element count for an array value, when known
     bool live = true;
-    bool ownsValue = true;
 };
 
 inline void releaseValue(int valueKind, const Entry& entry, void (*valueDrop)(void*) = nullptr) {
-    if (!entry.ownsValue || entry.value == 0) return;
+    if (entry.value == 0) return;
     void* value = reinterpret_cast<void*>(static_cast<intptr_t>(entry.value));
-    if (valueKind == KindString) csec_rc_release(value);
+    if (countedValue(valueKind)) csec_rc_release(value);
     else if (valueKind == KindDict) csec_dict_free(value);
+    else if (valueDrop) valueDrop(value);
     else if (valueKind == KindArray) csecFree(value);
-    else if (valueKind == KindOpaque && valueDrop) valueDrop(value);
 }
 
 struct Dict {
@@ -99,10 +103,9 @@ struct Dict {
         long long at = find(key);
         if (at >= 0) {
             Entry& existing = entries[static_cast<size_t>(at)];
-            if (existing.value != value) releaseValue(valueKind, existing, valueDrop);
+            if (existing.value != value || countedValue(valueKind)) releaseValue(valueKind, existing, valueDrop);
             existing.value = value;
             existing.length = length;
-            existing.ownsValue = true;
             return;
         }
         Entry entry;
@@ -417,6 +420,13 @@ void csec_dict_clear(void* handle) {
 
 void* csec_dict_copy(void* handle) {
     auto* dict = csec_dict::asDict(handle);
+    if (dict && (dict->valueKind == csec_dict::KindOpaque ||
+                 (dict->valueKind == csec_dict::KindArray &&
+                  (dict->valueDrop || (dict->elementKind >= csec_dict::KindString &&
+                                       dict->elementKind != csec_dict::KindChar))))) {
+        std::fprintf(stderr, "TypeError: Dict.copy() requires values that can be copied independently\n");
+        std::exit(1);
+    }
     auto* copy = static_cast<csec_dict::Dict*>(csec_dict_new(
         dict ? dict->keyKind : 0, dict ? dict->valueKind : 0,
         dict ? dict->elementKind : 0, dict ? dict->elementBytes : 8));
@@ -425,8 +435,7 @@ void* csec_dict_copy(void* handle) {
     copy->isSet = dict->isSet;
     for (const auto& entry : dict->entries) {
         long long value = entry.value;
-        bool owns = true;
-        if (dict->valueKind == csec_dict::KindString) {
+        if (csec_dict::countedValue(dict->valueKind)) {
             csec_rc_retain(reinterpret_cast<void*>(static_cast<intptr_t>(value)));
         }
         else if (dict->valueKind == csec_dict::KindDict && value) {
@@ -440,16 +449,11 @@ void* csec_dict_copy(void* handle) {
                 value = static_cast<long long>(reinterpret_cast<intptr_t>(buffer));
             }
             else {
-                owns = false;
+                std::fprintf(stderr, "TypeError: Dict.copy() requires a known array length\n");
+                std::exit(1);
             }
         }
-        else if (dict->valueKind == csec_dict::KindOpaque) {
-            owns = false;
-        }
-        copy->valueDrop = dict->valueDrop;
         copy->set(entry.key, value, entry.length);
-        long long at = copy->find(entry.key);
-        if (at >= 0) copy->entries[static_cast<size_t>(at)].ownsValue = owns;
     }
     return copy;
 }

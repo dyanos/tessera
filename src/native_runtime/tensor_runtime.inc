@@ -1,10 +1,10 @@
 // ============================================================================
 //  tensor_runtime.inc  --  tensor operations callable from the self-host compiler
 //
-//  csec++ lowers tensor arithmetic as inline IR (TensorRuntime.h). The self-host
+//  tess lowers tensor arithmetic as inline IR (TensorRuntime.h). The self-host
 //  compiler emits IR by string-building and cannot practically inline those
 //  loops, so it calls these runtime helpers instead. The struct layout matches
-//  csec++'s  %csec.tensor { i64 rank, i64* dims, i64 count, double* data }  so a
+//  tess's  %csec.tensor { i64 rank, i64* dims, i64 count, double* data }  so a
 //  handle is interchangeable. Handles are heap objects, caller-owned (leaked),
 //  like the string and bigint helpers.
 // ============================================================================

@@ -2,7 +2,7 @@
 
     python scripts/smoke_lsp.py <path-to-tessera-lsp> <workspace-root>
 
-Opens a scratch file with a parse error, waits for csec++ diagnostics, then
+Opens a scratch file with a parse error, waits for tess diagnostics, then
 fixes it to a type error, and exercises symbols, hover, completion,
 definition, signature help and semantic tokens. Exits non-zero on failure.
 """
@@ -115,10 +115,10 @@ check("semanticTokensProvider" in init["capabilities"], "initialize advertises s
 notify("initialized", {})
 notify("textDocument/didOpen", {"textDocument": {"uri": uri, "languageId": "tessera", "version": 1, "text": broken}})
 
-diags = wait_diagnostics(uri, lambda d: any(x.get("source") == "csec++" for x in d))
-parse = [d for d in diags if d.get("source") == "csec++"]
+diags = wait_diagnostics(uri, lambda d: any(x.get("source") == "tess" for x in d))
+parse = [d for d in diags if d.get("source") == "tess"]
 print("  diagnostics:", [(d["range"]["start"], d["message"]) for d in parse])
-check(parse and parse[0]["range"]["start"]["line"] == 5, "csec++ parse error mapped through the import to line 6")
+check(parse and parse[0]["range"]["start"]["line"] == 5, "tess parse error mapped through the import to line 6")
 
 # Fix the syntax, introduce a type error, save.
 typed = 'import "geometry";\n\ndef main(): Int {\n    val n: Double = norm2(3.0, 4.0);\n    val label: Int = "four";\n    return 0;\n}\n'

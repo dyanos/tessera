@@ -1,4 +1,4 @@
-//! A lossless lexer for Tessera that mirrors `src/lexer.cpp` of the `csec++`
+//! A lossless lexer for Tessera that mirrors `src/lexer.cpp` of the `tess`
 //! compiler: same keywords, same maximal-munch operator set, same literal
 //! rules. Unlike the compiler it keeps comments, records byte ranges, and never
 //! fails: input the compiler rejects becomes [`TokKind::Unknown`] (or a token
@@ -91,6 +91,11 @@ pub fn tokenize(src: &str) -> Vec<Tok> {
     let push = |toks: &mut Vec<Tok>, kind, start, end, terminated| {
         toks.push(Tok { kind, range: start..end, terminated });
     };
+
+    if src.starts_with("#!") {
+        pos = src.find('\n').unwrap_or(len);
+        push(&mut toks, TokKind::LineComment, 0, pos, true);
+    }
 
     while pos < len {
         let b = bytes[pos];

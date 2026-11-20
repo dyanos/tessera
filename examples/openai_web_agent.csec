@@ -1,7 +1,7 @@
 // openai_web_agent -- an LLM that browses the web through tool calls (std.openai + std.http).
 //
-//     csec++ examples/openai_web_agent.csec --emit-ir -o agent.ll
-//     csec++ --run-ir agent.ll -- "What does https://example.com/ say, and where does its link go?"
+//     tess examples/openai_web_agent.csec --emit-ir -o agent.ll
+//     tess --run-ir agent.ll -- "What does https://example.com/ say, and where does its link go?"
 //
 // Configure the server with OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL (see openai_chat.csec);
 // the model must support tool (function) calling.

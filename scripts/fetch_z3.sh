@@ -1,5 +1,5 @@
 #!/bin/sh
-# Downloads the official Z3 release used by `csec++ --verify` into deps/z3 (macOS / Linux).
+# Downloads the official Z3 release used by `tess --verify` into deps/z3 (macOS / Linux).
 # Alternatively install Z3 with your package manager (brew install z3, apt install libz3-dev) and
 # CMake finds it on the system paths.
 set -eu

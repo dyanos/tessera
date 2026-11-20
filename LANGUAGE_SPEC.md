@@ -10,24 +10,29 @@ syntax is described in `docs/syntax.md` and `docs/grammar.md`.
 
 ```
 import a.b.c
-import "relative/path.csec"
+import "relative/path.t"
 ```
 
 `import` textually includes a source file once (cycles and repeats are ignored). A
 target is resolved in this order; the first existing file wins:
 
 1. relative to the importing file, then the working directory (`a.b.c` as given, then
-   as `a/b/c.csec`);
-2. the **standard-library roots**, as `<root>/a/b/c.csec`:
+   as `a/b/c.t`);
+2. the **standard-library roots**, as `<root>/a/b/c.t`:
    1. directories passed with `--lib-path <dir>` (native compiler);
-   2. entries of the `CSEC_LIB_PATH` environment variable (`;`-separated on Windows,
-      `:` elsewhere);
+   2. entries of the `TESS_LIB_PATH` environment variable, then of the older
+      `CSEC_LIB_PATH` (`;`-separated on Windows, `:` elsewhere);
    3. `lib/` next to the runtime library (`System.Native.dll`), and `lib/` in up to two
       parent directories of it (so a build in `x64/Debug` finds the repository `lib/`).
 
-An import that resolves to no file is left in place and ignored, as before.
+A target without an extension names a `.t` file; where no `.t` file exists, the `.csec`
+file of the same name is used. An import that resolves to no file is left in place and
+ignored, as before.
 
-**Aliases.** `import a.b.c = name;` (also `import "path.csec" = name;`) imports the module as
+A first line that starts with `#!` is ignored, so a source file can carry a shebang line
+(`#!/usr/bin/env -S tess --run`).
+
+**Aliases.** `import a.b.c = name;` (also `import "path.t" = name;`) imports the module as
 usual and also gives it a local name:
 
 ```
@@ -530,9 +535,9 @@ may refer to their own instance type; every instance (`S<7>`, `S<11>`) is a dist
 operator whose overloads accept none of the right operand's types is a type error. Instances used
 while the program is type-checked are registered then and generated with the rest of the code.
 
-## 12. Contracts and static verification (`csec++ --verify`)
+## 12. Contracts and static verification (`tess --verify`)
 
-Functions and loops may carry specifications that `csec++ --verify` proves with the Z3 SMT solver
+Functions and loops may carry specifications that `tess --verify` proves with the Z3 SMT solver
 (an external library; see "Building with Z3" below). Specifications are never compiled: `requires`,
 `ensures`, `invariant`, and `decreases` only affect `--verify`. `assert` is both proved by `--verify`
 and checked at run time.
@@ -608,7 +613,7 @@ counterexample: the parameters' values and the local variables at that point:
     counterexample: a = 2147483647, b = 1
 ```
 
-`csec++ --verify` exits with status 1 when there is an error, 0 otherwise (warnings and notes do not
+`tess --verify` exits with status 1 when there is an error, 0 otherwise (warnings and notes do not
 fail). No code is generated in this mode.
 
 ### 12.2 Integer semantics
@@ -640,13 +645,13 @@ classes and structs are not verified yet.
 Z3 is an external C++ library. `scripts/fetch_z3.ps1` (Windows) or `scripts/fetch_z3.sh` (macOS,
 Linux) downloads the official release into `deps/z3` (the Windows script checks its SHA-256); CMake
 then finds it (`CSEC_WITH_Z3=AUTO`, or set `Z3_ROOT`; a system install is found too) and copies
-`libz3.dll` next to `csec++.exe`. Without Z3, `csec++` builds normally and `--verify` reports that it
+`libz3.dll` next to `tess.exe`. Without Z3, `tess` builds normally and `--verify` reports that it
 is unavailable.
 
-`-DCSEC_Z3_LINK=STATIC` links a static Z3 into csec++ and into the System.Native runtime instead,
+`-DCSEC_Z3_LINK=STATIC` links a static Z3 into tess and into the System.Native runtime instead,
 so neither needs the shared library at run time (the default, `SHARED`, links `libz3`). The official
 releases ship no static library; `scripts/build_z3_static.ps1` / `scripts/build_z3_static.sh` build
-one from the same Z3 version into `deps/z3-static` (on Windows matching csec++'s C runtime:
+one from the same Z3 version into `deps/z3-static` (on Windows matching tess's C runtime:
 `-Config Debug` or `-Config Release [-DllCrt]`).
 
 The self-hosted compiler accepts all of this syntax: it drops the specification clauses and
@@ -687,7 +692,7 @@ swap.toString();                          // "|- p & q -> q & p"
 isValid(forAll(intVar("x"), intVar("x") * intVar("x") >= intVal(0)));   // true
 ```
 
-The kernel is independent of `csec++ --verify` (§12): contracts are proved by the verifier, while
+The kernel is independent of `tess --verify` (§12): contracts are proved by the verifier, while
 `std.logic` reasons about formulas a program builds. Like other struct-based modules, it is
 native-only (§5).
 
@@ -843,7 +848,7 @@ Forward-mode automatic differentiation: `Dual(v, d)` carries a value and a deriv
 
 ## 18. Debug information
 
-`csec++ -g` describes every function, method and lambda and the source line of each statement,
+`tess -g` describes every function, method and lambda and the source line of each statement,
 mapped through import expansion to the original file: CodeView with a `.pdb` (linked with
 `/DEBUG`) on Windows, DWARF elsewhere. Local variables are not described.
 
@@ -859,7 +864,7 @@ The self-hosted compiler (`selfhost/`, whose emitter lives in `src/native_runtim
   futures of `Int`, `Long`, `Boolean`, `Double`, and pointer-represented results;
 - `text[i]` on String locals and parameters, and escaped `Char` literals (`'\n'`, `'\t'`, ...);
 - the contract syntax of §12: `requires`/`ensures`/`invariant`/`decreases` clauses are accepted and
-  dropped (verification is `csec++ --verify`), and `assert(c[, message])` is a run-time check;
+  dropped (verification is `tess --verify`), and `assert(c[, message])` is a run-time check;
 - dictionaries (§10.2) with scalar keys and values (`Int`, `Long`, `Short`, `Byte`, `Double`,
   `Float`, `Boolean`, `Char`, `String`): literals, `val d: Dict<K, V> = {}`, `d[k]`,
   `d[k] = v`, `d[k] op= v`, `get`, `size`, `isEmpty`, `contains`, `remove`, `clear`, `Dict`

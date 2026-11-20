@@ -1,7 +1,7 @@
 // web_crawler -- breadth-first crawl of one web site with std.http.
 //
-//     csec++ examples/web_crawler.csec --emit-ir -o web_crawler.ll
-//     csec++ --run-ir web_crawler.ll -- <start-url> [max-pages] [workers] [max-depth]
+//     tess examples/web_crawler.csec --emit-ir -o web_crawler.ll
+//     tess --run-ir web_crawler.ll -- <start-url> [max-pages] [workers] [max-depth]
 //
 //     web_crawler https://example.com/ 30 4 3
 //

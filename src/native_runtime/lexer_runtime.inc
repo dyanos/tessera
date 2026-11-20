@@ -814,7 +814,7 @@ static size_t csec_lex_number_end(const std::string& source, size_t index) {
 
 static size_t csec_lex_operator_width(const std::string& source, size_t index) {
     // Multi-character operators for the self-host lexer. The canonical set lives in docs/grammar.md and
-    // the csec++ lexer's initializeOperators() (src/lexer.cpp); keep the three in sync. Single-character
+    // the tess lexer's initializeOperators() (src/lexer.cpp); keep the three in sync. Single-character
     // operators are handled separately by the caller.
     static const char* const operators[] = {
         "[@", "=>", "<-", "->", "<=", ">=", "==", "&&", "||", "++", "--",
@@ -845,7 +845,7 @@ static std::string csec_lex_repair_leading_r_token(const std::string& text) {
 extern "C" {
 
 // Contract clauses (`requires`/`ensures` after a function signature, `invariant`/`decreases` after a
-// while/for header) are specifications for `csec++ --verify`; they are never compiled. Remove their
+// while/for header) are specifications for `tess --verify`; they are never compiled. Remove their
 // tokens so the self-host emitter sees an ordinary signature or loop header. A token stream without
 // clauses is returned unchanged.
 static char* csec_strip_contract_clauses(char* tokens) {
@@ -987,7 +987,7 @@ char* csec_tokenize_source(const char* sourceText) {
             char kind = !hexadecimal && (text.find('.') != std::string::npos || text.find('e') != std::string::npos ||
                                          text.find('E') != std::string::npos) ? 'F' : 'N';
             // `1.5f`: a Float literal (the number scan includes the suffix). The token is the value
-            // rounded to float precision, the value csec++ gives the literal.
+            // rounded to float precision, the value tess gives the literal.
             if (kind == 'F' && !hexadecimal && text.size() > 1 && (text.back() == 'f' || text.back() == 'F')) {
                 char* rounded = csec_lex_float_text(text.substr(0, text.size() - 1).c_str());
                 text = rounded;
@@ -1008,7 +1008,7 @@ char* csec_tokenize_source(const char* sourceText) {
         } else {
             size_t width = csec_lex_operator_width(source, cursor);
             std::string text = csec_lex_slice(source, cursor, cursor + width);
-            // `&&` and `||` are the keywords `and` and `or` (as in the csec++ lexer).
+            // `&&` and `||` are the keywords `and` and `or` (as in the tess lexer).
             if (text == "&&" || text == "||") {
                 csec_token_builder_append(builder, 'K', text == "&&" ? "and" : "or");
             } else {

@@ -12,7 +12,7 @@ editors/openidea-tessera/
 maximal-munch operator set, the same literal rules. Keep it in sync when the
 lexical grammar changes (`docs/grammar.md` §1); `cargo test` lexes every
 `.csec` file in `tests/positive`, `examples` and `selfhost/src` and fails on any
-character `csec++` would accept but it doesn't.
+character `tess` would accept but it doesn't.
 
 ## Build and install
 
@@ -49,11 +49,11 @@ installs with
 | Structure view, folding (bodies, comment runs, import blocks) | plugin (wasm) |
 | `.csec` icon, *New › Tessera File*, scratch template, comment toggling | plugin |
 | Errors as you type: unknown characters, unterminated strings/comments, unbalanced brackets, `&&`/`||` | `tessera-lsp` |
-| `csec++` parse and type errors on open/save (mapped through `import` expansion) | `tessera-lsp` |
+| `tess` parse and type errors on open/save (mapped through `import` expansion) | `tessera-lsp` |
 | Completion (scope-aware locals, parameters, imported declarations, members after `.`, keywords, built-in types/functions, snippets) | `tessera-lsp` |
 | Hover (signature + doc comment), go to definition (also into imported files and on `import "…"`), references, highlights, rename (locals/globals; not fields/methods), signature help, workspace symbols, semantic tokens | `tessera-lsp` |
 
-`csec++` stops at the first parse error and reports type errors without a
+`tess` stops at the first parse error and reports type errors without a
 location; type errors are anchored on the declaration (or, for move/borrow
 errors, the last use) of the first name quoted in the message.
 
@@ -64,7 +64,7 @@ optional):
 
 | Key | Default | |
 | --- | --- | --- |
-| `compilerPath` | auto | `csec++` to run. Auto: `$TESSERA_COMPILER`, `<root>/x64/{Release,Debug}`, `<root>/build[/Release,/Debug]`, then `PATH`. |
+| `compilerPath` | auto | `tess` to run. Auto: `$TESSERA_COMPILER`, `<root>/x64/{Release,Debug}`, `<root>/build[/Release,/Debug]`, then `PATH`. |
 | `compilerArgs` | `[]` | extra flags, e.g. `["--no-strict-ownership"]` for the self-host sources |
 | `checkMode` | `"full"` | `"full"` = `--emit-ir` (parse + type check), `"syntax"` = `--syntax-only` |
 | `checkOnOpen` / `checkOnSave` | `true` | |

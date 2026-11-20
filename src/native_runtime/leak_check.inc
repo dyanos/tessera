@@ -130,12 +130,12 @@ struct Shard {
     }
 
     Entry& insert(const void* key) {
-        if (Entry* existing = find(key)) return *existing;
         if ((used + 1) * 4 >= capacity * 3) rehash(capacity ? (live * 2 + 2 > capacity ? capacity * 2 : capacity) : 64);
         const size_t mask = capacity - 1;
         size_t i = hash(key, mask);
         size_t reuse = SIZE_MAX;
         for (;; i = (i + 1) & mask) {
+            if (slots[i].key == key) return slots[i];
             if (slots[i].key == tombstone && reuse == SIZE_MAX) reuse = i;
             if (!slots[i].key) break;
         }

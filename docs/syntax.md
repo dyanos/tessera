@@ -7,7 +7,7 @@ grammar, see [grammar.md](grammar.md).
 
 ## Files And Entry Point
 
-Source files use the `.csec` extension. Executable programs usually define a
+Source files use the `.t` extension (`.csec` is still accepted). Executable programs usually define a
 zero-argument `main` function:
 
 ```ts
@@ -16,10 +16,12 @@ def main(): Int {
 }
 ```
 
-A bare `csec++ app.csec` compiles straight to a native executable (`--emit-exe`
+A bare `tess app.t` compiles straight to a native executable (`--emit-exe`
 is the default output mode); `--static` links the runtime into the binary so it
 needs no `System.Native` shared library beside it. `--emit-ir`, `--emit-obj`,
-and `--run`/`--run-ir` select the other output modes. `-g` adds debug information
+and `--run`/`--run-ir` select the other output modes. `tess --run app.t -- args`
+compiles the program in memory (JIT), runs it, and exits with its status; a first
+line starting with `#!` is ignored, so a source file can be run as a script. `-g` adds debug information
 (function names and the source line of every statement; CodeView and a `.pdb` on
 Windows, DWARF elsewhere), so debuggers can set breakpoints and step by line.
 
@@ -101,8 +103,8 @@ Static/import libraries can be linked either from the command line or from
 source attributes:
 
 ```sh
-csec++ --emit-exe app.csec -o app.exe --link-path ./native/lib --link-lib mymath.lib
-csec++ --emit-exe app.csec -o app --link-path ./native/lib --link-lib libmymath.a
+tess --emit-exe app.t -o app.exe --link-path ./native/lib --link-lib mymath.lib
+tess --emit-exe app.t -o app --link-path ./native/lib --link-lib libmymath.a
 ```
 
 ```ts
@@ -130,14 +132,14 @@ is omitted, the current platform default is used.
 For inspection, the compiler can print generated names directly:
 
 ```sh
-csec++ --mangle msvc "int add(int, int)"
-csec++ --mangle itanium "double Math::cos(double) const"
+tess --mangle msvc "int add(int, int)"
+tess --mangle itanium "double Math::cos(double) const"
 ```
 
 ## Contracts And Verification
 
 Functions can state what they need (`requires`) and promise (`ensures`, where `result` is the
-returned value); loops can state `invariant`s and a `decreases` measure. `csec++ --verify` proves
+returned value); loops can state `invariant`s and a `decreases` measure. `tess --verify` proves
 them with the Z3 solver and reports every place they may fail, with a counterexample:
 
 ```ts
@@ -514,7 +516,7 @@ named function and may not take borrows.
 ## Standard Library
 
 `import a.b.c` also searches the standard-library roots (`lib/` next to the
-compiler runtime, `--lib-path <dir>`, and `CSEC_LIB_PATH`).
+compiler runtime, `--lib-path <dir>`, and `TESS_LIB_PATH` / `CSEC_LIB_PATH`).
 
 An import can name its module: `import std.dataframe = df;` lets that file write
 `df.readParquet(...)` for any top-level function of the module. The unqualified
@@ -652,7 +654,7 @@ def countLines(path: String): Long {
 ```
 
 `examples/parallel_wc.csec` splits this loop across OS threads (`std.thread`). Build it with
-`csec++ -O3 -march=native --emit-exe examples/parallel_wc.csec -o parallel_wc.exe`.
+`tess -O3 -march=native --emit-exe examples/parallel_wc.csec -o parallel_wc.exe`.
 
 ## Templates
 

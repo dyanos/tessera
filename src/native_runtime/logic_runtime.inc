@@ -322,7 +322,7 @@ Z3Api& z3() {
     auto symbolOf = [](void* lib, const char* s) -> void* {
         return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(lib), s));
     };
-    // csec++ itself links libz3 when it was built with --verify support.
+    // tess itself links libz3 when it was built with --verify support.
     void* lib = reinterpret_cast<void*>(GetModuleHandleA("libz3.dll"));
 #else
 #if defined(__APPLE__)
@@ -335,7 +335,7 @@ Z3Api& z3() {
 #endif
     auto open = [](const std::string& p) -> void* { return dlopen(p.c_str(), RTLD_NOW | RTLD_GLOBAL); };
     auto symbolOf = [](void* lib, const char* s) -> void* { return dlsym(lib, s); };
-    // Already in the process (csec++ links libz3 for --verify): use those symbols.
+    // Already in the process (tess links libz3 for --verify): use those symbols.
     void* lib = nullptr;
     bool inProcess = dlsym(RTLD_DEFAULT, "Z3_mk_config") != nullptr;
     if (inProcess) {

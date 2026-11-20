@@ -67,7 +67,7 @@ enum class ASTNodeType {
 class ASTVisitor;
 class ASTNode;
 
-// Specification clauses for static verification (`csec++ --verify`): `requires`/`ensures` on a
+// Specification clauses for static verification (`tess --verify`): `requires`/`ensures` on a
 // function, `invariant`/`decreases` on a loop. They are checked by the verifier and never compiled.
 struct ContractClause {
     std::unique_ptr<ASTNode> expression;

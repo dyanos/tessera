@@ -1,6 +1,6 @@
-//! Runs `csec++` on a saved file and turns its output into diagnostics.
+//! Runs `tess` on a saved file and turns its output into diagnostics.
 //!
-//! `csec++` stops at the first parse error and reports type errors without a
+//! `tess` stops at the first parse error and reports type errors without a
 //! position, so: parse/lex errors are mapped exactly (through the import line
 //! map), and type errors are anchored on the declaration of the first name
 //! quoted in the message.
@@ -19,7 +19,7 @@ use tessera_syntax::{Analysis, DeclKind, TokKind};
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
-    /// Path of `csec++`; found automatically when empty.
+    /// Path of `tess`; found automatically when empty.
     pub compiler_path: Option<String>,
     /// Extra arguments, e.g. `["--no-strict-ownership"]`.
     pub compiler_args: Vec<String>,
@@ -47,7 +47,7 @@ fn exe(name: &str) -> String {
     if cfg!(windows) { format!("{name}.exe") } else { name.to_string() }
 }
 
-/// Finds `csec++`: settings, `TESSERA_COMPILER` / `CSEC_COMPILER`, the
+/// Finds `tess`: settings, `TESSERA_COMPILER` / `CSEC_COMPILER`, the
 /// workspace's build outputs, then `PATH`.
 pub fn find_compiler(settings: &Settings, roots: &[PathBuf]) -> Option<PathBuf> {
     if let Some(p) = settings.compiler_path.as_deref().filter(|p| !p.is_empty()) {
@@ -59,7 +59,7 @@ pub fn find_compiler(settings: &Settings, roots: &[PathBuf]) -> Option<PathBuf> 
             return Some(p);
         }
     }
-    let name = exe("csec++");
+    let name = exe("tess");
     for root in roots {
         for dir in ["x64/Release", "x64/Debug", "build", "build/Release", "build/Debug", "out/build", "bin"] {
             let p = dir.split('/').fold(root.clone(), |acc, part| acc.join(part)).join(&name);
@@ -202,7 +202,7 @@ fn diag(range: lsp_types::Range, severity: DiagnosticSeverity, code: &str, messa
         range,
         severity: Some(severity),
         code: Some(NumberOrString::String(code.into())),
-        source: Some("csec++".into()),
+        source: Some("tess".into()),
         message,
         ..Default::default()
     }
@@ -265,7 +265,7 @@ pub fn parse_output(
                 .get(&file)
                 .map(|f| {
                     let lr = f.index.line_range(&f.text, line0 as usize);
-                    // csec++ columns are 1-based bytes. Lexing: token start. Parsing: one past the token end.
+                    // tess columns are 1-based bytes. Lexing: token start. Parsing: one past the token end.
                     let at = (lr.start + (c.saturating_sub(1)) as usize).min(lr.end.max(lr.start));
                     let r = if lexing {
                         let end = f.text[at..].chars().next().map_or(at, |ch| at + ch.len_utf8());
@@ -448,7 +448,7 @@ def main(): Int { return f(b = 2); }
         };
         let map = LineMap::default();
         let read = |p: &Path| std::fs::read_to_string(p).ok();
-        let d = parse_output(&out, &main, &map, &read, "csec++");
+        let d = parse_output(&out, &main, &map, &read, "tess");
         let list = d.get(&main).expect("diagnostics for the main file");
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].range.start.line, 1);
@@ -470,7 +470,7 @@ def main(): Int { return f(b = 2); }
             text: "get current directory: x\nParser Error: Expected ')', but found 'return' at line 4, column 9\nParsing failed: Parser Error: Expected ')', but found 'return' at line 4, column 9\n".into(),
             timed_out: false,
         };
-        let d = parse_output(&out, &main, &map, &read, "csec++");
+        let d = parse_output(&out, &main, &map, &read, "tess");
         let v = &d[&main];
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].range, lsp_types::Range::new(lsp_types::Position::new(3, 2), lsp_types::Position::new(3, 8)));
@@ -480,7 +480,7 @@ def main(): Int { return f(b = 2); }
             text: "Type error: Variable 'y' declared as 'Int' but initialized with 'String'\nType checking found 1 error(s). Aborting code generation.\n".into(),
             timed_out: false,
         };
-        let d = parse_output(&out, &main, &map, &read, "csec++");
+        let d = parse_output(&out, &main, &map, &read, "tess");
         assert_eq!(d[&main][0].range.start, lsp_types::Position::new(2, 6));
         std::fs::remove_dir_all(&dir).ok();
     }

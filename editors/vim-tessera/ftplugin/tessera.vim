@@ -8,7 +8,7 @@ setlocal comments=s1:/*,mb:*,ex:*/,:///,://
 setlocal commentstring=//\ %s
 setlocal formatoptions-=t formatoptions+=croql
 setlocal expandtab shiftwidth=4 softtabstop=4 tabstop=4
-setlocal suffixesadd=.csec
+setlocal suffixesadd=.t,.csec
 setlocal path+=lib
 setlocal include=^\\s*import\\s\\+
 

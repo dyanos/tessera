@@ -3,7 +3,7 @@ param(
     [int]$TimeoutSeconds = 30,
     [ValidateSet("microthread", "stdlib")]
     [string]$Suite = "microthread",
-    # Compiler to test (default: the Debug build). E.g. x64\Release\csec++.exe for another LLVM build.
+    # Compiler to test (default: the Debug build). E.g. x64\Release\tess.exe for another LLVM build.
     [string]$Compiler = ""
 )
 
@@ -13,7 +13,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$exe = Join-Path $repoRoot "x64\Debug\csec++.exe"
+$exe = Join-Path $repoRoot "x64\Debug\tess.exe"
 if ($Compiler) { $exe = (Resolve-Path $Compiler).Path }
 $root = Join-Path $PSScriptRoot $Suite
 

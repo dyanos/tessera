@@ -480,7 +480,7 @@ int csec_lex_quoted(const char* source, int index) {
 }
 
 // The text of a Float literal (`0.1f`): its value rounded to float precision, written so a double
-// parse gives that float exactly ("0.100000001"), the same value csec++ uses for the literal.
+// parse gives that float exactly ("0.100000001"), the same value tess uses for the literal.
 char* csec_lex_float_text(const char* text) {
     const float value = std::strtof(text ? text : "0", nullptr);
     char buffer[64];

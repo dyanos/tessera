@@ -10,7 +10,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$exe = Join-Path $repoRoot "x64\Debug\csec++.exe"
+$exe = Join-Path $repoRoot "x64\Debug\tess.exe"
 $root = Join-Path $PSScriptRoot "async"
 
 if (-not (Test-Path $exe)) {

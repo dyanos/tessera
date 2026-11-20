@@ -1,4 +1,4 @@
-// debug_info.cpp -- source-level debug information for `csec++ -g` (see debug_info.h).
+// debug_info.cpp -- source-level debug information for `tess -g` (see debug_info.h).
 #include "codegen.h"
 
 #include "debug_info.h"
@@ -48,7 +48,7 @@ void enable(const std::string& mainFile, bool codeView) {
     s.mainFile = mainFile;
     s.codeView = codeView;
     s.builder = std::make_unique<llvm::DIBuilder>(*cg.module);
-    s.unit = s.builder->createCompileUnit(llvm::dwarf::DW_LANG_C_plus_plus, fileFor(mainFile), "csec++ (Tessera)",
+    s.unit = s.builder->createCompileUnit(llvm::dwarf::DW_LANG_C_plus_plus, fileFor(mainFile), "tess (Tessera)",
                                           false, "", 0);
 }
 

@@ -7,9 +7,10 @@ OpenMP, and GPU execution. The name comes from *tesseract* (a four-dimensional
 tensor), reflecting the tensor-native core.
 
 This repository contains the current C++17 compiler prototype, its native runtime,
-and language regression fixtures. The compiler (`csec++`) parses `.csec` source
-files, builds LLVM IR, and can emit a native executable (the default), write
-IR/object files, or run through the configured LLVM execution backend.
+and language regression fixtures. The compiler (`tess`) parses Tessera source
+files (`.t`; the older `.csec` extension is still accepted), builds LLVM IR, and can
+emit a native executable (the default), write IR/object files, or compile in memory
+and run the program directly (`--run`).
 
 For the language surface see [docs/syntax.md](docs/syntax.md); for the normative
 grammar see [docs/grammar.md](docs/grammar.md).
@@ -190,24 +191,24 @@ macOS arm64) use, and it needs no root access:
 ```sh
 conda create -n tessera -c conda-forge "llvmdev=18.*" zlib zstd libxml2 cmake ninja
 conda activate tessera
-sh scripts/fetch_z3.sh                  # optional: Z3 for `csec++ --verify` and std.logic
+sh scripts/fetch_z3.sh                  # optional: Z3 for `tess --verify` and std.logic
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
       -DLLVM_DIR="$CONDA_PREFIX/lib/cmake/llvm" -DCMAKE_PREFIX_PATH="$CONDA_PREFIX"
 cmake --build build
-sh tests/run_suite.sh Debug/csec++      # fixtures, --verify diagnostics, self-host
+sh tests/run_suite.sh Debug/tess      # fixtures, --verify diagnostics, self-host
 ```
 
 Packaged LLVMs on Linux and macOS (conda-forge, Homebrew, apt) are built to be used through their
 shared `libLLVM`; CMake detects that (`LLVM_LINK_LLVM_DYLIB`) and links it instead of the static
-component libraries (`-DCSEC_LLVM_SHARED=ON/OFF` overrides). It also compiles csec++ with `NDEBUG`
+component libraries (`-DCSEC_LLVM_SHARED=ON/OFF` overrides). It also compiles tess with `NDEBUG`
 when LLVM was built without assertions, because some LLVM classes change layout with `NDEBUG`.
 
-### Z3 (`csec++ --verify`, `std.logic`)
+### Z3 (`tess --verify`, `std.logic`)
 
-Z3 is optional. By default csec++ links the shared library (`libz3.dll`, `libz3.so`, `libz3.dylib`):
+Z3 is optional. By default tess links the shared library (`libz3.dll`, `libz3.so`, `libz3.dylib`):
 `scripts/fetch_z3.ps1` (Windows, SHA-256 checked) or `scripts/fetch_z3.sh` (Linux, macOS) downloads
-the official release into `deps/z3`, and CMake copies `libz3.dll` next to `csec++.exe`. To link Z3
-statically instead, so that neither csec++ nor the runtime needs the shared library, build the static
+the official release into `deps/z3`, and CMake copies `libz3.dll` next to `tess.exe`. To link Z3
+statically instead, so that neither tess nor the runtime needs the shared library, build the static
 library from source and select it:
 
 ```sh
@@ -216,12 +217,12 @@ powershell -File scripts\build_z3_static.ps1 -Config Debug   # Windows, from a V
 cmake -S . -B build -G Ninja -DCSEC_Z3_LINK=STATIC ...
 ```
 
-On Windows the static library must use the same C runtime as csec++: `-Config Debug` for a Debug
+On Windows the static library must use the same C runtime as tess: `-Config Debug` for a Debug
 build, `-Config Release` (add `-DllCrt` with `-DCSEC_RELEASE_DLL_CRT=ON`) for a Release build.
 
 The build produces:
 
-- `csec++`: compiler executable.
+- `tess`: compiler executable.
 - `csec_native_runtime`: shared native runtime library copied next to the
   compiler executable.
 
@@ -237,11 +238,40 @@ The build produces:
 From the build output directory:
 
 ```sh
-./csec++ --syntax-only ../tests/positive/00_smoke/001_minimal_main.csec
-./csec++ --emit-ir ../tests/native/003_posix_dynamic_symbol_default.csec -o out.ll
-./csec++ --emit-obj ../tests/native/003_posix_dynamic_symbol_default.csec -o out.o
-./csec++ --emit-exe ../tests/native/003_posix_dynamic_symbol_default.csec -o out
+./tess --syntax-only ../tests/positive/00_smoke/001_minimal_main.csec
+./tess --emit-ir ../tests/native/003_posix_dynamic_symbol_default.csec -o out.ll
+./tess --emit-obj ../tests/native/003_posix_dynamic_symbol_default.csec -o out.o
+./tess --emit-exe ../tests/native/003_posix_dynamic_symbol_default.csec -o out
 ./out
+```
+
+### Running a source file directly
+
+`--run` compiles the program in memory with LLVM's JIT and runs it, without writing an
+executable. Arguments after `--` go to the program, and `tess` exits with the program's
+exit status. If no JIT target is available it falls back to the LLVM interpreter.
+
+```sh
+tess --run script.t -- arg1 arg2
+tess --run -O2 script.t            # the -O level applies to --run too
+```
+
+A first line starting with `#!` is ignored, so on macOS and Linux a source file can be
+run as a script:
+
+```sh
+#!/usr/bin/env -S tess --run
+def main(): Int {
+    println("hello");
+    return 0;
+}
+```
+
+On Windows, associate the extension once (in an administrator `cmd`):
+
+```bat
+assoc .t=TesseraScript
+ftype TesseraScript="C:\path\to\tess.exe" --run "%1" -- %*
 ```
 
 ### Optimization
@@ -250,13 +280,13 @@ Pass `-O0`, `-O1`, `-O2`, `-O3` (or `-O` for `-O2`) to control optimization of t
 emitted output. `-O1`/`-O2`/`-O3` run LLVM's per-module optimization pipeline
 (mem2reg, inlining, GVN, DCE, loop optimizations, ...); `-O0` emits unoptimized IR;
 with no flag the compiler only promotes stack slots to registers (mem2reg). The
-level applies to `--emit-ir`/`--emit-obj`/`--emit-exe` (and code run from that
-output, e.g. `--run-ir`); `--run` always uses the interpreter-safe mem2reg pipeline.
+level applies to `--emit-ir`/`--emit-obj`/`--emit-exe`, to `--run`, and to code run
+from emitted output (e.g. `--run-ir`).
 
 ```sh
-./csec++ --emit-exe program.csec -O2 -o program   # optimized native executable
-./csec++ --emit-ir  program.csec -O3 -o program.ll # inspect optimized IR
-./csec++ --emit-exe program.csec -O3 -march=native -o program  # use this CPU's vector ISA
+./tess --emit-exe program.csec -O2 -o program   # optimized native executable
+./tess --emit-ir  program.csec -O3 -o program.ll # inspect optimized IR
+./tess --emit-exe program.csec -O3 -march=native -o program  # use this CPU's vector ISA
 ```
 
 Modules are generated for the host target triple and data layout. The default CPU
@@ -265,10 +295,11 @@ machine's CPU (e.g. AVX2/AVX-512).
 
 ### Standard Library Path
 
-`import std.io` resolves to `lib/std/io.csec`. The compiler looks in the
+`import std.io` resolves to `lib/std/io.t`, or `lib/std/io.csec` when there is no
+`.t` file. The compiler looks in the
 importing file's directory and the working directory, then in the
 standard-library roots: directories given with `--lib-path <dir>`, entries of
-`CSEC_LIB_PATH`, and `lib/` next to the runtime library (or up to two parent
+`TESS_LIB_PATH` (and the older `CSEC_LIB_PATH`), and `lib/` next to the runtime library (or up to two parent
 directories, so a build in `x64/Debug` finds the repository `lib/`). See
 `LANGUAGE_SPEC.md`.
 
@@ -296,13 +327,13 @@ Override the native linker driver with `CXX` when needed:
 
 ```sh
 export CXX=clang++
-./csec++ --emit-exe program.csec -o program
+./tess --emit-exe program.csec -o program
 ```
 
 Additional native libraries and search paths can be passed through:
 
 ```sh
-./csec++ --emit-exe program.csec -o program \
+./tess --emit-exe program.csec -o program \
   --link-path /usr/local/lib \
   --link-lib m
 ```

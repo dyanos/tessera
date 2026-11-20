@@ -26,6 +26,7 @@ enum DictKind : int {
     KindDict = 5,
     KindArray = 6,
     KindOpaque = 7,
+    KindCounted = 8,
 };
 
 const Type* unborrow(const Type* type) {
@@ -71,6 +72,7 @@ int kindOf(const Type* type) {
     if (isFloatingType(type)) return KindDouble;
     if (isBoolType(type)) return KindBool;
     if (type->isStringTy()) return KindString;
+    if (type->getName() == "Nat") return KindCounted;
     if (type->isCharTy()) return KindChar;
     if (isDictType(type) || isSetType(type)) return KindDict;  // printed through the runtime object
     if (arrayElementType(type)) return KindArray;
@@ -174,6 +176,9 @@ llvm::Value* heapArrayLiteral(ArrayLiteralNode* literal, const Type* elementType
             elementLLVM, buffer, llvm::ConstantInt::get(i64Type(), i), "dict.list.slot");
         { auto elemType = element ? element->getType() : nullptr; value = cg.takeOwned(value, elemType.get()); }
         cg.builder.CreateStore(value, slot);
+    }
+    if (cg.isRefcountedType(elementType) || cg.structHoldsCounted(elementType)) {
+        cg.trackArrayElements(buffer, llvm::ConstantInt::get(i64Type(), count));
     }
     return buffer;
 }
@@ -388,13 +393,14 @@ llvm::Value* codegenDictNewOwning(const Type* dictType) {
     auto& cg = CodeGenerator::getInstance();
     llvm::Value* handle = codegenDictNew(dictType);
     const Type* valueType = dictValueType(dictType);
-    if (handle && valueType && kindOf(valueType) == KindOpaque && isStrictOwnership() && !typeIsCopy(valueType)) {
-        if (llvm::Function* drop = cg.classDropFunction(valueType)) {
-            cg.builder.CreateCall(
-                runtimeFunction("csec_dict_set_value_drop", llvm::Type::getVoidTy(cg.context), {ptrType(), ptrType()}),
-                {handle, drop});
-        }
+    if (!handle || !valueType) return handle;
+    llvm::Function* drop = cg.arrayDropFunction(valueType);
+    if (!drop && kindOf(valueType) == KindOpaque && isStrictOwnership() && !typeIsCopy(valueType)) {
+        drop = cg.classDropFunction(valueType);
     }
+    if (drop) cg.builder.CreateCall(
+        runtimeFunction("csec_dict_set_value_drop", llvm::Type::getVoidTy(cg.context), {ptrType(), ptrType()}),
+        {handle, drop});
     return handle;
 }
 
@@ -470,6 +476,15 @@ llvm::Value* codegenDictContains(ASTNode* dictExpr, ASTNode* keyExpr) {
     llvm::Value* found = cg.builder.CreateCall(
         runtimeFunction("csec_dict_contains", i32Type(), {ptrType(), i64Type()}), {handle, key}, "dict.has");
     return cg.builder.CreateICmpNE(found, llvm::ConstantInt::get(i32Type(), 0), "dict.has.bool");
+}
+
+bool dictCanCopy(const Type* type) {
+    const Type* value = dictValueType(type);
+    if (!value) return false;
+    if (isDictType(value)) return dictCanCopy(value);
+    if (isSetType(value)) return true;
+    if (const Type* element = arrayElementType(value)) return kindOf(element) < KindString || kindOf(element) == KindChar;
+    return kindOf(value) != KindOpaque;
 }
 
 std::unique_ptr<Type> dictMethodType(const Type* dictType, const std::string& method, size_t argumentCount) {

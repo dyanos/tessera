@@ -1,6 +1,6 @@
 # Tessera for Vim / Neovim
 
-Filetype detection, syntax highlighting, indentation, and buffer settings for Tessera (`.csec`) files.
+Filetype detection, syntax highlighting, indentation, and buffer settings for Tessera (`.t`, `.csec`) files.
 
 It highlights keywords, declarations (`def` names, `def operator +`, `class` / `struct` / `object`
 names), types, numbers (hex, binary, octal, exponents), strings with `${...}` interpolation and

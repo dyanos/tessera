@@ -1,5 +1,5 @@
 //! Fast, compiler-independent problems found while typing: characters the
-//! `csec++` lexer rejects, unterminated strings and comments, and unbalanced
+//! `tess` lexer rejects, unterminated strings and comments, and unbalanced
 //! brackets.
 
 use crate::lexer::{Tok, TokKind};

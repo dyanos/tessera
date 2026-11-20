@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$exe = Join-Path $repoRoot "x64\Debug\csec++.exe"
+$exe = Join-Path $repoRoot "x64\Debug\tess.exe"
 
 if (-not (Test-Path $exe)) {
     Write-Error "Compiler executable not found: $exe"

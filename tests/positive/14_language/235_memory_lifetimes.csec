@@ -1,0 +1,41 @@
+struct Label(text: String, id: Int) {}
+
+def next(n: Nat): Nat {
+    return n + 1;
+}
+
+def main(): Int {
+    val strong = Shared("label" + 1);
+    val other = strong.clone();
+    val weak = Weak(strong);
+    free(strong);
+    val held = weak.get();
+    free(other);
+    if (held != "label1" or weak.get().length() != 0) { return 1; }
+    free(weak);
+
+    val label = Shared(new Label("item" + 2, 2));
+    val weakLabel = Weak(label);
+    val kept = weakLabel.get();
+    free(label);
+    if (kept.text != "item2" or weakLabel.get().id != 0) { return 5; }
+
+    val texts = {"key": held};
+    texts["key"] = held;
+    texts["key"] = held;
+    val copy = texts.copy();
+    texts.clear();
+    if (copy["key"] != held) { return 2; }
+    val arrays = {"key": ["element" + 1, "element" + 2]};
+    arrays.clear();
+
+    var n: Nat = 1;
+    for (i <- 0 until 100) { n = next(n); }
+    if (n != 101) { return 3; }
+    val numbers = {"key": n};
+    val saved = numbers.copy();
+    numbers.clear();
+    n = 1;
+    if (saved["key"] != 101) { return 4; }
+    return 0;
+}

@@ -1,5 +1,5 @@
 param(
-    [string]$Compiler = ".\x64\Debug\csec++.exe"
+    [string]$Compiler = ".\x64\Debug\tess.exe"
 )
 
 $ErrorActionPreference = "Stop"

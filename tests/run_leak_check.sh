@@ -4,11 +4,11 @@ repo="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo"
 compiler="${1:-}"
 if [ -z "$compiler" ]; then
-  for candidate in x64/Debug/csec++.exe x64/Release/csec++.exe Debug/csec++ Release/csec++; do
+  for candidate in x64/Debug/tess.exe x64/Release/tess.exe Debug/tess Release/tess; do
     if [ -x "$candidate" ]; then compiler="$candidate"; break; fi
   done
 fi
-[ -n "$compiler" ] && [ -x "$compiler" ] || { echo "csec++ not found; pass its path" >&2; exit 2; }
+[ -n "$compiler" ] && [ -x "$compiler" ] || { echo "tess not found; pass its path" >&2; exit 2; }
 export CSEC_LIB_PATH="$repo/lib"
 work="$(mktemp -d 2>/dev/null || mktemp -d -t tessera)"
 trap 'rm -rf "$work"' EXIT

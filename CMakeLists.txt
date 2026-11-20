@@ -7,7 +7,7 @@ endif()
 # C is enabled because LLVM's exported CMake package (e.g. Homebrew/conda LLVM on macOS) runs
 # check_c_source_compiles() in FindFFI/FindTerminfo/zlib/zstd; with CXX only, try_compile fails
 # with 'Unknown extension ".c"'.
-project(csec++ C CXX)
+project(tessera C CXX)
 
 ################################################################################
 # Set target arch type if empty. Visual studio solution generator provides it.
@@ -121,7 +121,7 @@ set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 
 
-set(PROJECT_NAME csec++)
+set(PROJECT_NAME tess)
 
 ################################################################################
 # Source groups
@@ -363,8 +363,8 @@ else()
     target_link_libraries(csec_native_runtime PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
 endif()
 # ELF shared libraries resolve even their own exported functions through the global symbol table,
-# and `csec++ --run-ir` loads a second copy of the runtime (the one beside csec++) next to the one
-# csec++ links. Without -Bsymbolic a call inside one copy can land in the other, whose state (handle
+# and `tess --run-ir` loads a second copy of the runtime (the one beside tess) next to the one
+# tess links. Without -Bsymbolic a call inside one copy can land in the other, whose state (handle
 # tables, threads, channels) is different. Bind the runtime's references to its own definitions.
 # (macOS two-level namespaces already do this; Windows DLLs never interpose.)
 if(UNIX AND NOT APPLE)
@@ -393,12 +393,12 @@ if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_definitions(${PROJECT_NAME} PRIVATE _ALLOW_COMPILER_AND_STL_VERSION_MISMATCH)
 endif()
 
-# `csec++ --verify` proves contracts with the Z3 SMT solver (an external library). AUTO uses it when
+# `tess --verify` proves contracts with the Z3 SMT solver (an external library). AUTO uses it when
 # found: deps/z3 (scripts/fetch_z3.ps1 / scripts/fetch_z3.sh), Z3_ROOT, or the system paths.
 #
-# CSEC_Z3_LINK=SHARED (default) links the shared library (libz3.dll / libz3.so / libz3.dylib): csec++
+# CSEC_Z3_LINK=SHARED (default) links the shared library (libz3.dll / libz3.so / libz3.dylib): tess
 # needs it at run time, and std.logic loads it on demand. CSEC_Z3_LINK=STATIC links a static libz3
-# into both csec++ and the System.Native runtime, so neither needs the shared library; build it with
+# into both tess and the System.Native runtime, so neither needs the shared library; build it with
 # scripts/build_z3_static.ps1 / scripts/build_z3_static.sh (deps/z3-static) or point Z3_ROOT at one.
 set(CSEC_WITH_Z3 AUTO CACHE STRING "Link Z3 for --verify (AUTO, ON, OFF)")
 set_property(CACHE CSEC_WITH_Z3 PROPERTY STRINGS AUTO ON OFF)
@@ -427,7 +427,7 @@ if(NOT CSEC_WITH_Z3 STREQUAL "OFF" AND CSEC_Z3_LINK STREQUAL "STATIC")
         message(FATAL_ERROR "CSEC_Z3_LINK=STATIC but no static libz3 was found in deps/z3-static or Z3_ROOT "
                             "(run scripts/build_z3_static.ps1 or scripts/build_z3_static.sh)")
     else()
-        message(STATUS "--verify: no static Z3 found (CSEC_Z3_LINK=STATIC); csec++ is built without the verifier")
+        message(STATUS "--verify: no static Z3 found (CSEC_Z3_LINK=STATIC); tess is built without the verifier")
     endif()
 elseif(NOT CSEC_WITH_Z3 STREQUAL "OFF")
     set(_csec_z3_hints "${CMAKE_CURRENT_SOURCE_DIR}/deps/z3" "$ENV{Z3_ROOT}" "${Z3_ROOT}")
@@ -439,7 +439,7 @@ elseif(NOT CSEC_WITH_Z3 STREQUAL "OFF")
         target_compile_definitions(${PROJECT_NAME} PRIVATE CSEC_HAVE_Z3)
         target_link_libraries(${PROJECT_NAME} PRIVATE "${CSEC_Z3_LIBRARY}")
         if(WIN32)
-            # The import library sits next to libz3.dll; copy the DLL beside csec++.exe.
+            # The import library sits next to libz3.dll; copy the DLL beside tess.exe.
             get_filename_component(_csec_z3_dir "${CSEC_Z3_LIBRARY}" DIRECTORY)
             if(EXISTS "${_csec_z3_dir}/libz3.dll")
                 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
@@ -449,7 +449,7 @@ elseif(NOT CSEC_WITH_Z3 STREQUAL "OFF")
     elseif(CSEC_WITH_Z3 STREQUAL "ON")
         message(FATAL_ERROR "CSEC_WITH_Z3=ON but z3++.h / libz3 were not found (run scripts/fetch_z3.ps1)")
     else()
-        message(STATUS "--verify: Z3 not found; csec++ is built without the verifier")
+        message(STATUS "--verify: Z3 not found; tess is built without the verifier")
     endif()
 endif()
 
@@ -467,7 +467,7 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 ################################################################################
 # Release links the static CRT by default. Prebuilt LLVM packages built against the DLL CRT (/MD:
 # e.g. conda-forge llvmdev) need -DCSEC_RELEASE_DLL_CRT=ON so the CRTs match.
-option(CSEC_RELEASE_DLL_CRT "Use the DLL CRT (/MD) for Release builds of csec++" OFF)
+option(CSEC_RELEASE_DLL_CRT "Use the DLL CRT (/MD) for Release builds of tess" OFF)
 if(CSEC_RELEASE_DLL_CRT)
     set(CSEC_RELEASE_CRT MultiThreadedDLL)
 else()
@@ -502,7 +502,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 )
 # Some LLVM classes change layout with NDEBUG, so code using the LLVM headers must agree with the
 # LLVM build. Prebuilt packages (Homebrew, conda-forge, apt) are built without assertions: compile
-# csec++ with NDEBUG for them even in a Debug build, or it crashes inside LLVM. (MSVC builds use a
+# tess with NDEBUG for them even in a Debug build, or it crashes inside LLVM. (MSVC builds use a
 # matching vcpkg LLVM per configuration.)
 if(NOT MSVC AND NOT LLVM_ENABLE_ASSERTIONS)
     target_compile_definitions(${PROJECT_NAME} PRIVATE NDEBUG)
@@ -572,7 +572,7 @@ endif()
 ################################################################################
 # Dependencies
 ################################################################################
-# csec++ targets the host (InitializeNativeTarget/AsmPrinter/AsmParser), so link the host target's
+# tess targets the host (InitializeNativeTarget/AsmPrinter/AsmParser), so link the host target's
 # libraries: X86 on x86-64, AArch64 on Apple Silicon and arm64 Linux. A target component expands to
 # its CodeGen, AsmParser, Desc, Info, ... libraries.
 if(NOT LLVM_NATIVE_ARCH)
@@ -616,7 +616,7 @@ llvm_map_components_to_libnames(LLVM_COMPONENT_LIBS
     ${LLVM_NATIVE_ARCH}
 )
 
-# Link the LLVM component libraries only. The C entry points csec++ uses (LLVMLinkInMCJIT,
+# Link the LLVM component libraries only. The C entry points tess uses (LLVMLinkInMCJIT,
 # LLVMLinkInInterpreter) live in those static libraries; also linking the LLVM-C shared library
 # (shipped e.g. by conda-forge) would give the process two copies of LLVM, so the JIT registered in
 # the DLL's copy would be invisible to the static ExecutionEngine ("JIT has not been linked in").

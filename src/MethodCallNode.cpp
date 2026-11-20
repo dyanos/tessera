@@ -386,8 +386,9 @@ llvm::Value* MethodCallNode::codegen() {
         (objectType->getName() == "Shared" || objectType->getName() == "Weak")) {
         const bool isWeak = objectType->getName() == "Weak";
         auto* genType = dynamic_cast<GenericType*>(objectType);
-        llvm::Type* payloadType = (genType && !genType->typeArguments.empty() && genType->typeArguments[0])
-            ? cg.getLLVMType(genType->typeArguments[0].get()) : nullptr;
+        const Type* payloadSemanticType = (genType && !genType->typeArguments.empty())
+            ? genType->typeArguments[0].get() : nullptr;
+        llvm::Type* payloadType = payloadSemanticType ? cg.getLLVMType(payloadSemanticType) : nullptr;
         if (payloadType) {
             auto* i64Ty = llvm::Type::getInt64Ty(cg.context);
             llvm::StructType* blockType = llvm::StructType::get(
@@ -405,15 +406,44 @@ llvm::Value* MethodCallNode::codegen() {
                 if (!isWeak) {
                     return cg.builder.CreateLoad(payloadType, payloadPtr, "shared.get");
                 }
-                // Weak.get(): return the payload only while the value is alive, else a zero value.
-                auto* strong = cg.builder.CreateLoad(
-                    i64Ty, cg.builder.CreateStructGEP(blockType, block, 0, "weak.strong.ptr"), "weak.strong");
+                auto* strongPtr = cg.builder.CreateStructGEP(blockType, block, 0, "weak.strong.ptr");
+                auto* strong = cg.builder.CreateLoad(i64Ty, strongPtr, "weak.strong");
                 strong->setAtomic(llvm::AtomicOrdering::Acquire);
                 strong->setAlignment(llvm::Align(8));
+                auto* zero = llvm::Constant::getNullValue(payloadType);
+                if (!cg.isRefcountedType(payloadSemanticType) && !cg.structHoldsCounted(payloadSemanticType)) {
+                    auto* payload = cg.builder.CreateLoad(payloadType, payloadPtr, "shared.get");
+                    return cg.builder.CreateSelect(cg.builder.CreateIsNull(strong), zero, payload, "weak.get");
+                }
+                auto* entry = cg.builder.GetInsertBlock();
+                auto* fn = entry->getParent();
+                auto* check = llvm::BasicBlock::Create(cg.context, "weak.check", fn);
+                auto* acquire = llvm::BasicBlock::Create(cg.context, "weak.acquire", fn);
+                auto* read = llvm::BasicBlock::Create(cg.context, "weak.read", fn);
+                auto* done = llvm::BasicBlock::Create(cg.context, "weak.done", fn);
+                cg.builder.CreateBr(check);
+                cg.builder.SetInsertPoint(check);
+                auto* count = cg.builder.CreatePHI(i64Ty, 2);
+                count->addIncoming(strong, entry);
+                cg.builder.CreateCondBr(cg.builder.CreateIsNull(count), done, acquire);
+                cg.builder.SetInsertPoint(acquire);
+                auto* increment = cg.builder.CreateAtomicCmpXchg(
+                    strongPtr, count, cg.builder.CreateAdd(count, cg.builder.getInt64(1)), llvm::MaybeAlign(8),
+                    llvm::AtomicOrdering::Acquire, llvm::AtomicOrdering::Monotonic);
+                count->addIncoming(cg.builder.CreateExtractValue(increment, 0), acquire);
+                cg.builder.CreateCondBr(cg.builder.CreateExtractValue(increment, 1), read, check);
+                cg.builder.SetInsertPoint(read);
                 llvm::Value* payload = cg.builder.CreateLoad(payloadType, payloadPtr, "shared.get");
-                llvm::Value* alive = cg.builder.CreateICmpSGT(strong, llvm::ConstantInt::get(i64Ty, 0), "weak.alive");
-                llvm::Value* zero = llvm::Constant::getNullValue(payloadType);
-                return cg.builder.CreateSelect(alive, payload, zero, "weak.get");
+                cg.builder.CreateBr(done);
+                cg.builder.SetInsertPoint(done);
+                auto* result = cg.builder.CreatePHI(payloadType, 2, "weak.get");
+                result->addIncoming(payload, read);
+                result->addIncoming(zero, check);
+                auto* owner = cg.builder.CreatePHI(block->getType(), 2, "weak.owner");
+                owner->addIncoming(block, read);
+                owner->addIncoming(llvm::Constant::getNullValue(block->getType()), check);
+                cg.registerOwnedTemporary(owner, cg.sharedStrongDropFunction());
+                return result;
             }
         }
     }

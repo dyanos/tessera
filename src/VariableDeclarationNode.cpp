@@ -162,6 +162,7 @@ llvm::Value* VariableDeclarationNode::codegen() {
         }
         llvm::Value* slot = cg.createEntryAlloca(handleTy, name + ".nat");
         cg.builder.CreateStore(initValue, slot);
+        if (!borrowsValue) cg.registerStringSlotCleanup(slot);
         cg.symbolTable.addSymbol(
             name, std::make_unique<Symbol>(name, type->clone(), slot, isMutable, SymbolType::VARIABLE));
         return slot;

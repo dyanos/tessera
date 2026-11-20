@@ -1,5 +1,5 @@
 param(
-    [string]$Compiler = ".\x64\Debug\csec++.exe",
+    [string]$Compiler = ".\x64\Debug\tess.exe",
     [string]$Clang = "C:\Program Files\LLVM\bin\clang.exe",
     [string]$RuntimeLib = ""
 )

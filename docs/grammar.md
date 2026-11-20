@@ -1,6 +1,6 @@
 # Tessera Grammar (normative)
 
-This is the normative grammar for Tessera as implemented by the `csec++` front end
+This is the normative grammar for Tessera as implemented by the `tess` front end
 (`src/lexer.cpp`, `src/parser.cpp`, `src/Token.cpp`, `src/Expression.cpp`,
 `src/Statement.cpp`, `src/Declaration.cpp`). The self-host lexer
 (`src/native_runtime/lexer_runtime.inc`) mirrors the lexical grammar; keep both
@@ -22,6 +22,7 @@ token        = keyword | identifier | literal | operator | comment ;
 whitespace   = ' ' | '\t' | '\r' | '\n' ;                 (* skipped, not significant *)
 comment      = '//' { any-but-newline }
              | '/*' { any } '*/' ;                          (* skipped *)
+shebang      = '#!' { any-but-newline } ;                   (* first line of a file only; skipped *)
 ```
 
 ### 1.1 Identifiers and keywords
@@ -189,7 +190,7 @@ l-value      = identifier
 if-stmt      = 'if' '(' expr ')' block [ 'else' ( block | if-stmt ) ] ;
 while-stmt   = 'while' '(' expr ')' { loop-spec } block ;
 for-stmt     = 'for' '(' identifier '<-' iterable ')' { loop-spec } block ;
-loop-spec    = 'invariant' expr | 'decreases' expr ;        (* checked by csec++ --verify only *)
+loop-spec    = 'invariant' expr | 'decreases' expr ;        (* checked by tess --verify only *)
              | 'for' '(' identifier ',' identifier '<-' token-range ')' block ;
              | 'for' '(' identifier ',' identifier '<-' expr ')' block ;   (* key, value of a Dict *)
 iterable     = expr | range ;                              (* an array, a range, a Dict or a Set *)
@@ -325,7 +326,7 @@ and should not be relied upon. Blocks (`{ … }`) do not require a trailing `;`.
 
 ## 8. Known deviations / open items
 
-- `..` is **not** a range operator in `csec++` (ranges use `to`/`until`); the
+- `..` is **not** a range operator in `tess` (ranges use `to`/`until`); the
   self-host lexer lists `..` but no parser production consumes it.
 - Member-access l-values of any depth are first-class `AccessFieldNode` chains
   (`a.b.c = …`, `a.b.c += …`, and reads of the same nest left-to-right). The one

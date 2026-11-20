@@ -113,6 +113,7 @@ public:
     llvm::Function* classDropFunction(const Type* type);
     llvm::Function* arrayDropFunction(const Type* type);
     llvm::Function* sharedPayloadDropFunction(const Type* type, llvm::Type* payloadType);
+    llvm::Function* sharedStrongDropFunction();
     void trackArrayElements(llvm::Value* array, llvm::Value* count);
     void emitOwnedValueDrop(llvm::Value* value, const Type* type);
     void registerOwnedValueCleanup(llvm::Value* value, const Type* type);
