@@ -261,12 +261,15 @@ static std::string csec_generate_llvm_flat_body_typed(const char* tokens, int bo
                     output += "  store i32 0, ptr %" + storage + "\n";
                 }
             } else if (std::strcmp(csec_llvm_type_for_name(csec_c_local_type(tokens, cursor, next, initializer)), "ptr") == 0) {
-                output += "  %" + storage + " = alloca ptr\n";
+                const bool managed = csec_selfhost_future_type(csec_c_local_type(tokens, cursor, next, initializer));
+                if (managed) output += "  %" + storage + " = call ptr @csec_selfhost_scope_slot(ptr %tess.managed.scope, i32 " + std::to_string(cursor) + ")\n";
+                else output += "  %" + storage + " = alloca ptr\n";
                 if (initializer >= cursor && initializer + 1 < next) {
                     const std::string initialValue = "%" + name + ".init." + std::to_string(cursor);
                     output += csec_emit_ptr_expression(tokens, initializer + 1, next, initialValue);
-                    output += "  store ptr " + initialValue + ", ptr %" + storage + "\n";
-                } else output += "  store ptr null, ptr %" + storage + "\n";
+                    if (managed) output += "  call void @csec_selfhost_scope_store(ptr %" + storage + ", ptr " + initialValue + ")\n";
+                    else output += "  store ptr " + initialValue + ", ptr %" + storage + "\n";
+                } else if (!managed) output += "  store ptr null, ptr %" + storage + "\n";
             } else if (csec_c_local_type(tokens, cursor, next, initializer) == "Float") {
                 output += "  %" + storage + " = alloca float\n";
                 if (initializer >= cursor && initializer + 1 < next) {
@@ -445,7 +448,15 @@ static std::string csec_generate_llvm_flat_body_typed(const char* tokens, int bo
                 : (doubling ? csec_emit_f64_expression(tokens, cursor + 2, next, value)
                 : (floating ? csec_emit_f32_expression(tokens, cursor + 2, next, value)
                             : csec_emit_i32_expression(tokens, cursor + 2, next, value))));
-            output += std::string("  store ") + (boolean ? "i1 " : (pointer ? "ptr " : (doubling ? "double " : (floating ? "float " : "i32 ")))) + value + ", ptr %" + storage + "\n";
+            const int declaration = pointer ? csec_find_visible_local(tokens, cursor, name.c_str()) : -1;
+            bool managed = false;
+            if (declaration >= 0) {
+                const int declarationEnd = csec_advance_statement(tokens, declaration, 1000000000);
+                const int initializer = csec_find_top_level_operator(tokens, declaration, declarationEnd, 1);
+                managed = csec_selfhost_future_type(csec_c_local_type(tokens, declaration, declarationEnd, initializer));
+            }
+            if (managed) output += "  call void @csec_selfhost_scope_store(ptr %" + storage + ", ptr " + value + ")\n";
+            else output += std::string("  store ") + (boolean ? "i1 " : (pointer ? "ptr " : (doubling ? "double " : (floating ? "float " : "i32 ")))) + value + ", ptr %" + storage + "\n";
         } else if ((csec_native_token_is(tokens, cursor, 'K', "go") || csec_native_token_is(tokens, cursor, 'K', "await")) &&
                    cursor + 1 < next) {
             output += csec_emit_i32_expression(tokens, cursor, next, "%discard." + std::to_string(cursor));
@@ -578,9 +589,30 @@ int csec_generate_llvm_module_into(const char* tokens, long long builder) {
         "declare i32 @csec_token_is_top_level_operator(ptr, i32, i32)\n"
         "declare ptr @csec_top_level_decl_kind(ptr, i32)\n"
         "declare ptr @csec_top_level_decl_name(ptr, i32)\n"
+        "declare void @csec_token_buffer_release(ptr)\n"
         "declare i32 @csec_validate_balanced(ptr)\n"
         "declare i32 @csec_validate_top_level(ptr)\n\n";
     if (csec_string_builder_append(builder, header) != 0) return -1;
+    static constexpr const char* managedHeader =
+        "declare ptr @csec_selfhost_scope_begin()\n"
+        "declare void @csec_selfhost_scope_track(ptr, ptr)\n"
+        "declare ptr @csec_selfhost_scope_slot(ptr, i32)\n"
+        "declare void @csec_selfhost_scope_store(ptr, ptr)\n"
+        "declare void @csec_selfhost_scope_collect(ptr)\n"
+        "declare void @csec_selfhost_scope_end(ptr, ptr)\n\n";
+    if (csec_string_builder_append(builder, managedHeader) != 0) return -1;
+    auto appendManagedDefinition = [&](const char* definition, int declaration) {
+        if (!definition) return -1;
+        const bool managedReturn = csec_selfhost_future_type(csec_function_return_type_at(tokens, declaration));
+        if (!managedReturn && !std::strstr(definition, "%tess.managed.scope")) {
+            return csec_string_builder_append(builder, definition);
+        }
+        char* scoped = csec_llvm_selfhost_scope(definition, managedReturn);
+        if (!scoped || !*scoped) return -1;
+        const int result = csec_string_builder_append(builder, scoped);
+        csecFree(scoped);
+        return result;
+    };
     char* stringGlobals = csec_generate_llvm_string_literal_globals(tokens);
     if (stringGlobals && csec_string_builder_append(builder, stringGlobals) != 0) return -1;
     const std::string lambdaTypeDefinitions = csec_lambda_type_definitions(tokens);
@@ -624,11 +656,14 @@ int csec_generate_llvm_module_into(const char* tokens, long long builder) {
         if (std::strcmp(declarationKind, "external-function") == 0 && csec_decl_has_intrinsic_attribute(tokens, cursor)) {
             // An intrinsic declaration only enables the built-in lowering; it has no symbol.
         } else if (std::strcmp(declarationKind, "external-function") == 0) {
+            const std::string symbol = " @" + std::string(csec_top_level_decl_name(tokens, cursor)) + "(";
+            if (std::strstr(header, symbol.c_str()) || std::strstr(managedHeader, symbol.c_str())) {
+                cursor = next;
+                continue;
+            }
             std::string declaration = "declare ";
             declaration += csec_llvm_type_for_name(csec_function_return_type_at(tokens, cursor));
-            declaration += " @";
-            declaration += csec_top_level_decl_name(tokens, cursor);
-            declaration += "(";
+            declaration += symbol;
             declaration += csec_function_llvm_param_list(tokens, cursor);
             declaration += ")\n";
             if (csec_string_builder_append(builder, declaration.c_str()) != 0) return -1;
@@ -639,7 +674,7 @@ int csec_generate_llvm_module_into(const char* tokens, long long builder) {
             for (int member = objectBody; objectBody >= 0 && member < objectEnd; ++member) {
                 if (csec_native_token_is(tokens, member, 'K', "def")) {
                     const std::string definition = csec_object_method_definition(tokens, cursor, member);
-                    if (definition.empty() || csec_string_builder_append(builder, definition.c_str()) != 0) return -1;
+                    if (definition.empty() || appendManagedDefinition(definition.c_str(), member) != 0) return -1;
                 }
             }
         } else if (std::strcmp(declarationKind, "class") == 0) {
@@ -655,7 +690,7 @@ int csec_generate_llvm_module_into(const char* tokens, long long builder) {
             for (int member = classBody; classBody >= 0 && member < classEnd; ++member) {
                 if (csec_native_token_is(tokens, member, 'K', "def")) {
                     const std::string definition = csec_class_method_definition(tokens, cursor, member);
-                    if (definition.empty() || csec_string_builder_append(builder, definition.c_str()) != 0) return -1;
+                    if (definition.empty() || appendManagedDefinition(definition.c_str(), member) != 0) return -1;
                 }
             }
         } else if (std::strcmp(declarationKind, "function") == 0) {
@@ -673,7 +708,7 @@ int csec_generate_llvm_module_into(const char* tokens, long long builder) {
                     if (csec_string_builder_append(builder, mainDefinition.c_str()) != 0) return -1;
                 } else {
                     char* userMain = csec_generate_llvm_function_definition(tokens, cursor);
-                    if (!userMain || csec_string_builder_append(builder, userMain) != 0) return -1;
+                    if (appendManagedDefinition(userMain, cursor) != 0) return -1;
                     hasUserMain = true;
                 }
                 cursor = next;
@@ -684,14 +719,14 @@ int csec_generate_llvm_module_into(const char* tokens, long long builder) {
                 if (csec_string_builder_append(builder, definition) != 0) return -1;
             } else {
                 char* generated = csec_generate_llvm_function_definition(tokens, cursor);
-                if (!generated || csec_string_builder_append(builder, generated) != 0) return -1;
+                if (appendManagedDefinition(generated, cursor) != 0) return -1;
             }
         }
         cursor = next;
     }
     if (!compilerDriver && !hasUserMain && userMainDeclaration >= 0) {
         char* userMain = csec_generate_llvm_function_definition(tokens, userMainDeclaration);
-        if (!userMain || csec_string_builder_append(builder, userMain) != 0) return -1;
+        if (appendManagedDefinition(userMain, userMainDeclaration) != 0) return -1;
         hasUserMain = true;
     }
     if (hasUserMain) {

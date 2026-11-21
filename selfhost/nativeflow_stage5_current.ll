@@ -3147,6 +3147,7 @@ declare ptr @csec_token_builder_new()
 declare ptr @csec_token_builder_append()
 declare ptr @csec_token_builder_finish()
 declare ptr @csec_tokenize_source()
+declare void @csec_token_buffer_release(ptr)
 declare ptr @csec_token_kind_at()
 declare ptr @csec_token_text_at()
 declare ptr @csec_token_is()
@@ -10102,6 +10103,7 @@ build:
 generate:
   %tokens = call ptr @tokenize(ptr %source)
   %generated = call i32 @generateLLVMModuleInto(ptr %tokens, i64 %builder)
+  call void @csec_token_buffer_release(ptr %tokens)
   %success = icmp eq i32 %generated, 0
   br i1 %success, label %write, label %return.generated
 write:

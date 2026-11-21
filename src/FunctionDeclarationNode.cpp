@@ -103,11 +103,12 @@ std::string overloadUniqueFunctionName(CodeGenerator& cg, const std::string& nam
 void markOwnership(CodeGenerator& cg, const std::string& functionName, const Type* returnType,
                    const std::vector<std::unique_ptr<ASTNode>>& parameters, bool hasReceiver,
                    const std::string& className, const std::string& methodName) {
+    if (returnType && returnType->getName() == "Future") cg.markStringFunction(functionName, false);
     if (!isStrictOwnership()) return;
     if (returnType && !typeIsCopy(returnType)) {
         if (llvm::Function* drop = cg.ownedValueDropFunction(returnType)) cg.markOwnedResultFunction(functionName, drop);
     }
-    if (returnType && returnType->getName() != "String" && cg.isRefcountedType(returnType)) {
+    if (returnType && returnType->getName() != "String" && returnType->getName() != "Future" && cg.isRefcountedType(returnType)) {
         cg.markStringFunction(functionName, false);
     }
     if (llvm::Function* release = cg.structCountFunction(returnType, false)) {

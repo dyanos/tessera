@@ -155,12 +155,12 @@ llvm::Value* VariableDeclarationNode::codegen() {
 
     // A Nat variable lives in a slot holding its handle (a ptr), so a `var` can be reassigned
     // (`fact = fact * i`). Reads load the handle (IdentifierNode); assignments store a new one.
-    if (type && type->getName() == "Nat") {
+    if (type && (type->getName() == "Nat" || type->getName() == "Future")) {
         auto* handleTy = llvm::PointerType::getUnqual(cg.context);
         if (!initValue || !initValue->getType()->isPointerTy()) {
             initValue = llvm::ConstantPointerNull::get(handleTy);
         }
-        llvm::Value* slot = cg.createEntryAlloca(handleTy, name + ".nat");
+        llvm::Value* slot = cg.createEntryAlloca(handleTy, name + (type->getName() == "Nat" ? ".nat" : ".future"));
         cg.builder.CreateStore(initValue, slot);
         if (!borrowsValue) cg.registerStringSlotCleanup(slot);
         cg.symbolTable.addSymbol(
@@ -216,17 +216,20 @@ llvm::Value* VariableDeclarationNode::codegen() {
         }
         return false;
     };
+    const auto* prefixInitializer = dynamic_cast<PrefixExpressionNode*>(initializer.get());
+    auto awaitedType = prefixInitializer && prefixInitializer->op == "await" && prefixInitializer->expression
+        ? prefixInitializer->expression->getType() : nullptr;
+    const bool awaitOwnsPayload = awaitedType && awaitedType->getName() == "Future";
     const bool arrayVectorFromCall = type &&
         (type->getKind() == Type::Kind::ARRAY ||
          (type->getKind() == Type::Kind::GENERIC &&
           (type->getName() == "Array" || type->getName() == "Vector"))) &&
         (dynamic_cast<CallExpressionNode*>(initializer.get()) != nullptr ||
          dynamic_cast<FunctionCallNode*>(initializer.get()) != nullptr ||
-         readsFromDict());
+         awaitOwnsPayload || readsFromDict());
 
     // Keep a moved tensor as the original pointer value. Storing it in a new pointer slot would
     // make a later return use a different LLVM Value and defeat cleanup ownership transfer.
-    const auto* prefixInitializer = dynamic_cast<PrefixExpressionNode*>(initializer.get());
     const bool tensorMoveInitializer = type && type->getName() == "Tensor" &&
         prefixInitializer && prefixInitializer->op == "<-";
     llvm::BasicBlock* declBlock = cg.builder.GetInsertBlock();
@@ -295,7 +298,8 @@ llvm::Value* VariableDeclarationNode::codegen() {
             cg.builder.CreateStore(initValue, holder);
             cg.registerStringSlotCleanup(holder);
         }
-        else if (autoDrop && type->getKind() == Type::Kind::CLASS && !declaredStructClass) {
+        else if ((autoDrop || (awaitOwnsPayload && isStrictOwnership())) &&
+                 type->getKind() == Type::Kind::CLASS && !declaredStructClass) {
             if (!moveInitializer || cg.hasCleanup(initValue)) cg.registerOwnedValueCleanup(initValue, type.get());
         }
         else if (isStrictOwnership() && !borrowsValue && declBlock && declBlock->getParent() != cg.mainFunction &&
@@ -306,6 +310,7 @@ llvm::Value* VariableDeclarationNode::codegen() {
                   dynamic_cast<ArrayCreationNode*>(initializer.get()) ||
                   dynamic_cast<FunctionCallNode*>(initializer.get()) ||
                   dynamic_cast<CallExpressionNode*>(initializer.get()) ||
+                  awaitOwnsPayload ||
                   (moveInitializer && cg.hasCleanup(initValue)))) {
             cg.registerOwnedValueCleanup(initValue, type.get());
         }
@@ -425,7 +430,7 @@ llvm::Value* VariableDeclarationNode::codegen() {
     if (referenceLocal && cg.isRefcountedType(type.get())) {
         cg.registerStringSlotCleanup(alloc);
     }
-    else if (referenceLocal && autoDrop && !typeIsCopy(type.get())) {
+    else if (referenceLocal && (autoDrop || awaitOwnsPayload) && !typeIsCopy(type.get())) {
         cg.registerOwnedSlotCleanup(alloc, cg.classDropFunction(type.get()));
     }
     const bool dictLocal = type && type->getKind() == Type::Kind::GENERIC &&

@@ -154,11 +154,16 @@ public:
 	CallReport callReport();
 
 private:
+    struct Borrow {
+        size_t scopeDepth;
+        bool isMutable;
+        const ASTNode* expression;
+    };
+
     struct OwnershipState {
         bool moved = false;
-        int immutableBorrows = 0;
-        bool mutableBorrowed = false;
         bool owned = false;
+        std::vector<Borrow> borrows;
     };
 
     int errorCount = 0;
@@ -185,8 +190,8 @@ private:
     void markMoved(const std::string& name);
     bool isFieldPath(ASTNode* node);
     void checkOwnedValueUse(ASTNode* node, const std::string& context);
-    void markBorrowed(const std::string& name, bool isMutableBorrow);
-    void releaseBorrow(const std::string& name, bool isMutableBorrow);
+    void markBorrowed(const std::string& name, bool isMutableBorrow, const ASTNode* expression = nullptr);
+    void releaseBorrow(ASTNode* expression);
     // Path-sensitive join (M3/M4): OR the `moved` flags from `source` into the current ownership
     // state (per scope, by name). Used to merge the fall-through paths of an `if` so moves made only
     // on a diverging branch are not counted after it.

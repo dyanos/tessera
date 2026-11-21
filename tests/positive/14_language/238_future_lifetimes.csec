@@ -1,0 +1,36 @@
+class Payload(value: Int) {}
+struct Label(text: String) {}
+
+def amount(n: Int): Int = n + 1
+def label(n: Int): String = "label" + n
+def payload(n: Int): Payload = new Payload(n)
+def labelSize(item: Label): Int = item.text.length()
+
+def makeFuture(n: Int): Future<Int> {
+    return async amount(n);
+}
+
+def main(): Int {
+    for (i <- 0 until 10) {
+        val original = makeFuture(i);
+        val alias = original;
+        val first: Int = await original;
+        val again: Int = await alias;
+        if (first != i + 1 or again != first) { return 1; }
+
+        val text = async label(i);
+        val a: String = await text;
+        val b: String = await text;
+        if (a != b or a.length() != 6) { return 2; }
+
+        val task = async payload(i);
+        val value: Payload = await task;
+        if (value.value != i) { return 3; }
+
+        go payload(i);
+        val discarded = async payload(i);
+        val copied: Int = await async labelSize(new Label("item" + i));
+        if (copied != 5) { return 4; }
+    }
+    return 0;
+}

@@ -26,10 +26,7 @@ struct Reporter {
         const char* detail = std::getenv("CSEC_LEAK_CHECK");
         if (detail && std::strcmp(detail, "2") == 0) {
             for (const auto& entry : t.live) {
-                std::fprintf(stderr, "  %zu bytes:", entry.second);
-                const unsigned char* at = static_cast<const unsigned char*>(entry.first);
-                for (size_t i = 0; i < entry.second && i < 48; ++i) std::fputc(at[i] >= 32 && at[i] < 127 ? at[i] : '.', stderr);
-                std::fputc('\n', stderr);
+                std::fprintf(stderr, "  %zu bytes at %p\n", entry.second, entry.first);
             }
         }
         std::fflush(stderr);

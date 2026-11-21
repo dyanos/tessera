@@ -140,13 +140,11 @@ def expandImportsFromFile(path: String, seen: String): String {
     return output;
 }
 
-def compileSource(source: String, mode: String): String {
-    val tokens: String = tokenize(source);
+external def csec_token_buffer_release(tokens: String): Void;
+
+def compileTokenBuffer(tokens: String, mode: String): String {
     if (mode.startsWith("tokenlen")) {
         return "tokens=" + tokens.length + "\n";
-    }
-    if (mode.startsWith("tokens")) {
-        return tokens;
     }
     if (mode.startsWith("ast")) {
         return generateAST(tokens);
@@ -163,6 +161,16 @@ def compileSource(source: String, mode: String): String {
     return generateExecutionC(tokens);
 }
 
+def compileSource(source: String, mode: String): String {
+    val tokens: String = tokenize(source);
+    if (mode.startsWith("tokens")) {
+        return tokens;
+    }
+    val output: String = compileTokenBuffer(tokens, mode);
+    csec_token_buffer_release(tokens);
+    return output;
+}
+
 def compileFile(inputPath: String, outputPath: String, mode: String): Int {
     val source: String = csec_expand_imports(inputPath);
     if (mode.startsWith("llvm")) {
@@ -171,11 +179,24 @@ def compileFile(inputPath: String, outputPath: String, mode: String): Int {
             System.Console.WriteLine("compile error");
             return 1;
         }
-        val generated: Int = generateLLVMModuleInto(tokenize(source), builder);
+        val tokens: String = tokenize(source);
+        val generated: Int = generateLLVMModuleInto(tokens, builder);
+        csec_token_buffer_release(tokens);
         if (generated != 0) {
             return generated;
         }
         return csec_string_builder_write_to_file(builder, outputPath);
+    }
+    if (mode.startsWith("tokens")) {
+        val tokens: String = tokenize(source);
+        if (tokens.length == 0) {
+            csec_token_buffer_release(tokens);
+            System.Console.WriteLine("compile error");
+            return 1;
+        }
+        System.IO.File.WriteAllText(outputPath, tokens);
+        csec_token_buffer_release(tokens);
+        return 0;
     }
     val output: String = compileSource(source, mode);
     if (output.length == 0) {

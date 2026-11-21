@@ -165,7 +165,7 @@ char* csec_llvm_lexer_helper_definition(const char* name) {
             ? "declare i32 @csec_generate_llvm_module_into(ptr, i64)\n\ndefine i32 @generateLLVMModuleInto(ptr %arg.tokens, i64 %arg.builder) {\nentry:\n  %ret = call i32 @csec_generate_llvm_module_into(ptr %arg.tokens, i64 %arg.builder)\n  ret i32 %ret\n}\n\n"
             : "define ptr @generateLLVMModule(ptr %arg.tokens) {\nentry:\n  %valid = call i1 @parseProgram(ptr %arg.tokens)\n  br i1 %valid, label %build, label %empty\nbuild:\n  %builder = call i64 @csec_string_builder_new()\n  %written = call i32 @generateLLVMModuleInto(ptr %arg.tokens, i64 %builder)\n  %result = call ptr @csec_string_builder_finish(i64 %builder)\n  ret ptr %result\nempty:\n  ret ptr null\n}\n\n";
     } else if (name && std::strcmp(name, "compileFile") == 0) {
-        definition = "define i32 @compileFile(ptr %arg.inputPath, ptr %arg.outputPath, ptr %arg.mode) {\nentry:\n  %llvm.raw = call i32 @csec_string_starts_with(ptr %arg.mode, ptr @.str.driver.llvm)\n  %llvm = icmp ne i32 %llvm.raw, 0\n  br i1 %llvm, label %build, label %unsupported\nbuild:\n  %source = call ptr @csec_expand_imports(ptr %arg.inputPath)\n  %builder = call i64 @csec_string_builder_new_file(ptr %arg.outputPath)\n  %ready = icmp ne i64 %builder, 0\n  br i1 %ready, label %generate, label %failed\ngenerate:\n  %tokens = call ptr @tokenize(ptr %source)\n  %generated = call i32 @generateLLVMModuleInto(ptr %tokens, i64 %builder)\n  %success = icmp eq i32 %generated, 0\n  br i1 %success, label %write, label %return.generated\nwrite:\n  %written = call i32 @csec_string_builder_write_to_file(i64 %builder, ptr %arg.outputPath)\n  ret i32 %written\nreturn.generated:\n  ret i32 %generated\nfailed:\n  ret i32 1\nunsupported:\n  ret i32 1\n}\n\n@.str.driver.llvm = private unnamed_addr constant [5 x i8] c\"llvm\\00\"\n\n";
+        definition = "define i32 @compileFile(ptr %arg.inputPath, ptr %arg.outputPath, ptr %arg.mode) {\nentry:\n  %llvm.raw = call i32 @csec_string_starts_with(ptr %arg.mode, ptr @.str.driver.llvm)\n  %llvm = icmp ne i32 %llvm.raw, 0\n  br i1 %llvm, label %build, label %unsupported\nbuild:\n  %source = call ptr @csec_expand_imports(ptr %arg.inputPath)\n  %builder = call i64 @csec_string_builder_new_file(ptr %arg.outputPath)\n  %ready = icmp ne i64 %builder, 0\n  br i1 %ready, label %generate, label %failed\ngenerate:\n  %tokens = call ptr @tokenize(ptr %source)\n  %generated = call i32 @generateLLVMModuleInto(ptr %tokens, i64 %builder)\n  call void @csec_token_buffer_release(ptr %tokens)\n  %success = icmp eq i32 %generated, 0\n  br i1 %success, label %write, label %return.generated\nwrite:\n  %written = call i32 @csec_string_builder_write_to_file(i64 %builder, ptr %arg.outputPath)\n  ret i32 %written\nreturn.generated:\n  ret i32 %generated\nfailed:\n  ret i32 1\nunsupported:\n  ret i32 1\n}\n\n@.str.driver.llvm = private unnamed_addr constant [5 x i8] c\"llvm\\00\"\n\n";
     } else if (name && (std::strcmp(name, "replaceDotsWithSlash") == 0 || std::strcmp(name, "importTargetFromLine") == 0 || std::strcmp(name, "importCandidate") == 0 || std::strcmp(name, "resolveImportPath") == 0 || std::strcmp(name, "expandImportsFromFile") == 0)) {
         const bool resolve = std::strcmp(name, "resolveImportPath") == 0;
         const bool expand = std::strcmp(name, "expandImportsFromFile") == 0;
@@ -643,10 +643,12 @@ char* csec_token_append_owned(const char* tokens, char kind, const char* text) {
     result[lhsLen + textLen + 2] = '\n';
     result[lhsLen + textLen + 3] = '\0';
 
-    if (tokens && lhsLen > 0) {
-        clearTokenCachesFor(tokens);
-    }
     return result;
+}
+
+void csec_token_buffer_release(char* tokens) {
+    clearTokenCachesFor(tokens);
+    std::free(tokens);
 }
 
 long long csec_token_builder_new(void) {

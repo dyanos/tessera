@@ -4,11 +4,11 @@
 // Residues are Longs in [0, n). Products use 128-bit intermediates, so any modulus below 2^63 is
 // exact. An element of GF(p^k) = GF(p)[x]/(m) is packed into one Long as the base-p digits of its
 // coefficients (a0 + a1*p + a2*p^2 + ...); the field's monic modulus m is packed the same way, so
-// p^(k+1) must stay below 2^62. Polynomials of any degree are runtime handles (never freed; the
-// handle table grows with every polynomial produced). Misuse -- a non-prime field characteristic,
+// p^(k+1) must stay below 2^62. Misuse -- a non-prime field characteristic,
 // mixing elements of different rings, dividing by a non-unit -- prints "AlgebraError: ..." and
 // exits with status 1.
 
+#include <charconv>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -371,35 +371,10 @@ void checkPackable(i64 p, i64 k) {
     }
 }
 
-// ---- polynomial handles ----
-
 struct PolyEntry {
     i64 p = 2;
     Poly coefficients;
 };
-
-std::mutex& polyMutex() {
-    static std::mutex mutex;
-    return mutex;
-}
-
-std::vector<PolyEntry>& polys() {
-    static auto* table = new std::vector<PolyEntry>();
-    return *table;
-}
-
-i64 store(i64 p, Poly coefficients) {
-    trim(coefficients);
-    std::lock_guard<std::mutex> lock(polyMutex());
-    polys().push_back(PolyEntry{p, std::move(coefficients)});
-    return static_cast<i64>(polys().size());
-}
-
-PolyEntry load(i64 handle) {
-    std::lock_guard<std::mutex> lock(polyMutex());
-    if (handle < 1 || static_cast<size_t>(handle) > polys().size()) fail("invalid polynomial");
-    return polys()[static_cast<size_t>(handle - 1)];
-}
 
 i64 sameCharacteristic(const PolyEntry& a, const PolyEntry& b) {
     if (a.p != b.p) {
@@ -412,6 +387,36 @@ char* ownedString(const std::string& text) {
     char* out = static_cast<char*>(csecAlloc(text.size() + 1));
     if (out) std::memcpy(out, text.c_str(), text.size() + 1);
     return out;
+}
+
+char* store(i64 p, Poly coefficients) {
+    trim(coefficients);
+    std::string value = std::to_string(p);
+    for (i64 coefficient : coefficients) {
+        value += ':';
+        value += std::to_string(coefficient);
+    }
+    return ownedString(value);
+}
+
+PolyEntry load(const char* value) {
+    if (!value) fail("invalid polynomial");
+    const char* end = value + std::strlen(value);
+    PolyEntry result;
+    auto characteristic = std::from_chars(value, end, result.p);
+    if (characteristic.ec != std::errc{} || result.p < 2) fail("invalid polynomial characteristic");
+    for (const char* current = characteristic.ptr; current != end;) {
+        if (*current != ':') fail("invalid polynomial");
+        i64 coefficient;
+        auto parsed = std::from_chars(current + 1, end, coefficient);
+        if (parsed.ec != std::errc{} || coefficient < 0 || coefficient >= result.p) {
+            fail("invalid polynomial coefficient");
+        }
+        result.coefficients.push_back(coefficient);
+        current = parsed.ptr;
+    }
+    trim(result.coefficients);
+    return result;
 }
 
 } // namespace csec_algebra
@@ -494,43 +499,43 @@ char* csec_alg_residue_to_string(long long v, long long n) {
 
 // ---- polynomials over GF(p) ----
 
-long long csec_poly_constant(long long c, long long p) {
+char* csec_poly_value_constant(long long c, long long p) {
     return csec_algebra::store(p, csec_algebra::Poly{csec_algebra::norm(c, p)});
 }
 
-long long csec_poly_monomial(long long c, long long k, long long p) {
+char* csec_poly_value_monomial(long long c, long long k, long long p) {
     if (k < 0) csec_algebra::fail("a monomial needs a non-negative exponent");
     csec_algebra::Poly a(static_cast<size_t>(k) + 1, 0);
     a[static_cast<size_t>(k)] = csec_algebra::norm(c, p);
     return csec_algebra::store(p, a);
 }
 
-long long csec_poly_characteristic(long long h) { return csec_algebra::load(h).p; }
+long long csec_poly_value_characteristic(const char* h) { return csec_algebra::load(h).p; }
 
-long long csec_poly_add(long long a, long long b) {
+char* csec_poly_value_add(const char* a, const char* b) {
     auto x = csec_algebra::load(a), y = csec_algebra::load(b);
     const auto p = csec_algebra::sameCharacteristic(x, y);
     return csec_algebra::store(p, csec_algebra::polyAdd(x.coefficients, y.coefficients, p));
 }
 
-long long csec_poly_sub(long long a, long long b) {
+char* csec_poly_value_sub(const char* a, const char* b) {
     auto x = csec_algebra::load(a), y = csec_algebra::load(b);
     const auto p = csec_algebra::sameCharacteristic(x, y);
     return csec_algebra::store(p, csec_algebra::polySub(x.coefficients, y.coefficients, p));
 }
 
-long long csec_poly_mul(long long a, long long b) {
+char* csec_poly_value_mul(const char* a, const char* b) {
     auto x = csec_algebra::load(a), y = csec_algebra::load(b);
     const auto p = csec_algebra::sameCharacteristic(x, y);
     return csec_algebra::store(p, csec_algebra::polyMul(x.coefficients, y.coefficients, p));
 }
 
-long long csec_poly_scale(long long a, long long k) {
+char* csec_poly_value_scale(const char* a, long long k) {
     auto x = csec_algebra::load(a);
     return csec_algebra::store(x.p, csec_algebra::polyScale(x.coefficients, csec_algebra::norm(k, x.p), x.p));
 }
 
-long long csec_poly_div(long long a, long long b) {
+char* csec_poly_value_div(const char* a, const char* b) {
     auto x = csec_algebra::load(a), y = csec_algebra::load(b);
     const auto p = csec_algebra::sameCharacteristic(x, y);
     csec_algebra::Poly q, r;
@@ -538,13 +543,13 @@ long long csec_poly_div(long long a, long long b) {
     return csec_algebra::store(p, q);
 }
 
-long long csec_poly_rem(long long a, long long b) {
+char* csec_poly_value_rem(const char* a, const char* b) {
     auto x = csec_algebra::load(a), y = csec_algebra::load(b);
     const auto p = csec_algebra::sameCharacteristic(x, y);
     return csec_algebra::store(p, csec_algebra::polyMod(x.coefficients, y.coefficients, p));
 }
 
-long long csec_poly_pow(long long a, long long e) {
+char* csec_poly_value_pow(const char* a, long long e) {
     if (e < 0) csec_algebra::fail("a polynomial power needs a non-negative exponent");
     auto x = csec_algebra::load(a);
     csec_algebra::Poly result{1 % x.p};
@@ -557,13 +562,13 @@ long long csec_poly_pow(long long a, long long e) {
     return csec_algebra::store(x.p, result);
 }
 
-long long csec_poly_gcd(long long a, long long b) {
+char* csec_poly_value_gcd(const char* a, const char* b) {
     auto x = csec_algebra::load(a), y = csec_algebra::load(b);
     const auto p = csec_algebra::sameCharacteristic(x, y);
     return csec_algebra::store(p, csec_algebra::polyGcd(x.coefficients, y.coefficients, p));
 }
 
-long long csec_poly_derivative(long long a) {
+char* csec_poly_value_derivative(const char* a) {
     auto x = csec_algebra::load(a);
     csec_algebra::Poly d;
     for (size_t i = 1; i < x.coefficients.size(); ++i) {
@@ -572,34 +577,34 @@ long long csec_poly_derivative(long long a) {
     return csec_algebra::store(x.p, d);
 }
 
-long long csec_poly_monic(long long a) {
+char* csec_poly_value_monic(const char* a) {
     auto x = csec_algebra::load(a);
     return csec_algebra::store(x.p, csec_algebra::polyMonic(x.coefficients, x.p));
 }
 
-int csec_poly_degree(long long a) { return csec_algebra::degree(csec_algebra::load(a).coefficients); }
+int csec_poly_value_degree(const char* a) { return csec_algebra::degree(csec_algebra::load(a).coefficients); }
 
-long long csec_poly_coeff(long long a, long long i) {
+long long csec_poly_value_coeff(const char* a, long long i) {
     auto x = csec_algebra::load(a);
     return i >= 0 && static_cast<size_t>(i) < x.coefficients.size() ? x.coefficients[static_cast<size_t>(i)] : 0;
 }
 
-long long csec_poly_eval(long long a, long long v) {
+long long csec_poly_value_eval(const char* a, long long v) {
     auto x = csec_algebra::load(a);
     return csec_algebra::polyEval(x.coefficients, csec_algebra::norm(v, x.p), x.p);
 }
 
-int csec_poly_equals(long long a, long long b) {
+int csec_poly_value_equals(const char* a, const char* b) {
     auto x = csec_algebra::load(a), y = csec_algebra::load(b);
     return x.p == y.p && x.coefficients == y.coefficients ? 1 : 0;
 }
 
-int csec_poly_is_irreducible(long long a) {
+int csec_poly_value_is_irreducible(const char* a) {
     auto x = csec_algebra::load(a);
     return csec_algebra::isIrreducible(x.coefficients, x.p) ? 1 : 0;
 }
 
-char* csec_poly_to_string(long long a) {
+char* csec_poly_value_to_string(const char* a) {
     return csec_algebra::ownedString(csec_algebra::polyToString(csec_algebra::load(a).coefficients, "x"));
 }
 
@@ -619,7 +624,7 @@ long long csec_gf_find_modulus(long long p, long long k) {
 }
 
 // A user-chosen modulus (a polynomial handle): must be irreducible; it is made monic and packed.
-long long csec_gf_modulus_from_poly(long long h) {
+long long csec_gf_modulus_from_poly_value(const char* h) {
     auto x = csec_algebra::load(h);
     csec_alg_require_prime(x.p);
     const auto k = csec_algebra::degree(x.coefficients);
@@ -676,13 +681,13 @@ long long csec_gf_inv(long long a, long long p, long long m) {
     return csec_gf_pow(a, -1, p, m);
 }
 
-long long csec_gf_from_poly(long long h, long long p, long long m) {
+long long csec_gf_from_poly_value(const char* h, long long p, long long m) {
     auto x = csec_algebra::load(h);
     csec_alg_require_same(x.p, p);
     return csec_algebra::pack(csec_algebra::polyMod(x.coefficients, csec_algebra::unpack(m, p), p), p);
 }
 
-long long csec_gf_to_poly(long long a, long long p) { return csec_algebra::store(p, csec_algebra::unpack(a, p)); }
+char* csec_gf_to_poly_value(long long a, long long p) { return csec_algebra::store(p, csec_algebra::unpack(a, p)); }
 
 // The multiplicative order of a nonzero element.
 long long csec_gf_element_order(long long a, long long p, long long m) {

@@ -5,8 +5,7 @@
 //  compiler emits IR by string-building and cannot practically inline those
 //  loops, so it calls these runtime helpers instead. The struct layout matches
 //  tess's  %csec.tensor { i64 rank, i64* dims, i64 count, double* data }  so a
-//  handle is interchangeable. Handles are heap objects, caller-owned (leaked),
-//  like the string and bigint helpers.
+//  handle is interchangeable.
 // ============================================================================
 
 namespace {
@@ -45,9 +44,82 @@ CsecTensor* csecTensorLike(const CsecTensor* src) {
     for (long long i = 0; i < src->rank; ++i) r->dims[i] = src->dims[i];
     return r;
 }
+
+struct SelfhostScope {
+    std::unordered_map<int, void*> slots;
+    std::vector<void*> temporaries;
+};
+
+void dropTensorBuffers(void* pointer) {
+    auto* tensor = static_cast<CsecTensor*>(pointer);
+    csecFree(tensor->data);
+    csecFree(tensor->dims);
+}
 }  // namespace
 
 extern "C" {
+
+void* csec_selfhost_scope_begin() {
+    return new SelfhostScope();
+}
+
+void csec_selfhost_scope_track(void* frame, void* value) {
+    if (value) static_cast<SelfhostScope*>(frame)->temporaries.push_back(value);
+}
+
+void csec_selfhost_tensor_track(void* frame, void* value) {
+    csec_rc_adopt_with(value, reinterpret_cast<void*>(dropTensorBuffers));
+    csec_selfhost_scope_track(frame, value);
+}
+
+void** csec_selfhost_scope_slot(void* frame, int ordinal) {
+    return &static_cast<SelfhostScope*>(frame)->slots[ordinal];
+}
+
+void csec_selfhost_scope_store(void** slot, void* value) {
+    csec_rc_retain(value);
+    csec_rc_release(*slot);
+    *slot = value;
+}
+
+void csec_selfhost_scope_collect(void* frame) {
+    auto& temporaries = static_cast<SelfhostScope*>(frame)->temporaries;
+    for (auto* value : temporaries) csec_rc_release(value);
+    temporaries.clear();
+}
+
+void csec_selfhost_scope_end(void* frame, void* result) {
+    auto* scope = static_cast<SelfhostScope*>(frame);
+    csec_rc_retain(result);
+    csec_selfhost_scope_collect(frame);
+    for (const auto& slot : scope->slots) csec_rc_release(slot.second);
+    delete scope;
+}
+
+char* csec_llvm_selfhost_scope(const char* definition, int managedReturn) {
+    std::string input(definition ? definition : "");
+    std::string output;
+    for (size_t pos = 0; pos < input.size();) {
+        size_t end = input.find('\n', pos);
+        if (end == std::string::npos) end = input.size();
+        const std::string line = input.substr(pos, end - pos);
+        if (line.rfind("  ret ", 0) == 0) {
+            const std::string result = managedReturn && line.rfind("  ret ptr ", 0) == 0 ? line.substr(10) : "null";
+            output += "  call void @csec_selfhost_scope_end(ptr %tess.managed.scope, ptr " + result + ")\n";
+        } else if (line.rfind("  br ", 0) == 0) {
+            output += "  call void @csec_selfhost_scope_collect(ptr %tess.managed.scope)\n";
+        }
+        output += line;
+        if (end < input.size()) output += '\n';
+        if (line == "entry:") {
+            output += "  %tess.managed.scope = call ptr @csec_selfhost_scope_begin()\n";
+        }
+        pos = end + 1;
+    }
+    auto* generated = static_cast<char*>(csecAlloc(output.size() + 1));
+    if (generated) std::memcpy(generated, output.c_str(), output.size() + 1);
+    return generated;
+}
 
 // Create a flat tensor of `count` elements, every element initialised to `fill`. For a rank-1 vector
 // `count` is the length; a higher-rank tensor is stored flat with `count` = product of its dimensions.

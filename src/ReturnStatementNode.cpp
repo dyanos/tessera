@@ -48,7 +48,7 @@ llvm::Value* ReturnStatementNode::codegen() {
         if (returnType->isPointerTy()) returnValue = cg.copyStackBufferToHeap(returnValue);
         auto returnedType = expression->getType();
         returnValue = promoteNat ? cg.takeOwnedString(returnValue) : cg.takeOwned(returnValue, returnedType.get());
-        cg.emitAllCleanupsExcept(returnValue);
+        cg.emitAllCleanupsExcept(cg.structHoldsCounted(returnedType.get()) ? nullptr : returnValue);
         cg.builder.CreateRet(returnValue);
     }
 

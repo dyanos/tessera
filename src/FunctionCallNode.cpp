@@ -906,7 +906,8 @@ llvm::Value* codegenNativeMicrothreadCall(
             }
         }
         auto* spawned = dynamic_cast<LambdaExpressionNode*>(arguments[0].get());
-        if (spawned && spawned->escapes && spawned->generatedFunction && isStrictOwnership()) {
+        const bool retainsClosure = spawned && spawned->escapes && spawned->generatedFunction && isStrictOwnership();
+        if (retainsClosure) {
             llvm::Function* target = spawned->generatedFunction;
             static int taskWrapperCount = 0;
             llvm::Function* wrapper = llvm::Function::Create(
@@ -930,14 +931,22 @@ llvm::Value* codegenNativeMicrothreadCall(
             env = box;
             envSizeValue = llvm::ConstantInt::get(i64Ty, 8);
         }
-        if (functionName == "threadStart") {
-            return cg.builder.CreateCall(
-                getOrCreateRuntimeFunction(cg, "csec_thread_start", i64Ty, {opaquePtr, opaquePtr, i64Ty}),
-                {code, env, envSizeValue}, "thread.start");
+        const bool isThread = functionName == "threadStart";
+        auto* resultType = isThread ? i64Ty : i32Ty;
+        llvm::Value* started = cg.builder.CreateCall(getOrCreateRuntimeFunction(
+            cg, isThread ? "csec_thread_start" : "csec_process_spawn", resultType, {opaquePtr, opaquePtr, i64Ty}),
+            {code, env, envSizeValue}, isThread ? "thread.start" : "proc.spawn");
+        if (retainsClosure) {
+            auto* function = cg.builder.GetInsertBlock()->getParent();
+            auto* failed = llvm::BasicBlock::Create(cg.context, "task.start.failed", function);
+            auto* done = llvm::BasicBlock::Create(cg.context, "task.start.done", function);
+            cg.builder.CreateCondBr(cg.builder.CreateICmpEQ(started, llvm::ConstantInt::get(resultType, 0)), failed, done);
+            cg.builder.SetInsertPoint(failed);
+            cg.releaseString(closure);
+            cg.builder.CreateBr(done);
+            cg.builder.SetInsertPoint(done);
         }
-        return cg.builder.CreateCall(
-            getOrCreateRuntimeFunction(cg, "csec_process_spawn", i32Ty, {opaquePtr, opaquePtr, i64Ty}),
-            {code, env, envSizeValue}, "proc.spawn");
+        return started;
     }
     if (functionName == "self") {
         if (!requireArgCount(0)) return nullptr;
