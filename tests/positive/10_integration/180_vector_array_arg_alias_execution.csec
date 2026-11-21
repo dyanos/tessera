@@ -1,4 +1,4 @@
-def build(size: Int): Vector[Int] {
+def buildArray(size: Int): Vector[Int] {
     val values = new Int[size];
     values[0] = 42;
     values[1] = 7;
@@ -10,7 +10,7 @@ def firstOf(xs: Array[Int]): Int {
 }
 
 def main(): Int {
-    val made: Vector[Int] = build(2);
+    val made: Vector[Int] = buildArray(2);
     if (firstOf(<- made) == 42) {
         return 0;
     }

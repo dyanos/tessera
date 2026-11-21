@@ -1,0 +1,19 @@
+def tensorResult(): Tensor<Double, 2> {
+    val left: Tensor<Double, 2> = new Tensor<Double, 2>(1.0);
+    val right: Tensor<Double, 2> = new Tensor<Double, 2>(2.0);
+    return (left + right) * 2.0;
+}
+
+def main(): Int {
+    var rounds: Int = 0;
+    var result: Tensor<Double, 2> = tensorResult();
+    while (rounds < 100) {
+        val bias: Tensor<Double, 2> = new Tensor<Double, 2>(1.0);
+        result = tensorResult() + bias;
+        rounds = rounds + 1;
+    }
+    if (result.x == 7.0 and result.y == 7.0) {
+        return 0;
+    }
+    return 1;
+}

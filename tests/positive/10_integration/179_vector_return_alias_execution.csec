@@ -1,4 +1,4 @@
-def build(size: Int): Vector[Int] {
+def buildArray(size: Int): Vector[Int] {
     val values = new Int[size];
     values[0] = 40;
     values[1] = 42;
@@ -6,7 +6,7 @@ def build(size: Int): Vector[Int] {
 }
 
 def main(): Int {
-    val made: Vector[Int] = build(3);
+    val made: Vector[Int] = buildArray(3);
     if (made[1] == 42) {
         return 0;
     }

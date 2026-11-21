@@ -143,7 +143,8 @@ expression.
 - `async f(a, b)` does the same but yields a `Future<T>`, where `T` is the call's type.
 - `await e`:
   - if `e : Future<T>`, blocks the current microthread until the task has finished and
-    yields its `T` result (awaiting a future again returns the same value);
+    yields its `T` result. Scalars and shared values can be awaited repeatedly.
+    An owned result transfers to the caller on the first await, and further awaits fail;
   - otherwise `e` must appear inside an `async def`, and the value is yielded unchanged
     (an `async def` still runs synchronously when called directly).
 - The operand of `go`/`async` must be a call of a named function. Arguments may not be

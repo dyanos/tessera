@@ -1,4 +1,5 @@
 external def csec_tokenize_source(source: String): String;
+external def csec_token_buffer_release(tokens: String): Void;
 
 def main(): Int {
     val tokens: String = csec_tokenize_source("if ready { return 0; }");
@@ -8,6 +9,7 @@ def main(): Int {
             matches = matches + 1;
         }
     }
+    csec_token_buffer_release(tokens);
     if (matches == 1) {
         return 0;
     }

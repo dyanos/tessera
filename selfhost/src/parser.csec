@@ -944,11 +944,14 @@ def findFunctionReturnTypeStart(tokens: String, declStart: Int): Int {
 
 def collectTypeName(tokens: String, start: Int, end: Int): String {
     var output: String = "";
-    for (text, cursor <- tokens.between(start, end).withoutTrivia()) {
+    var cursor: Int = skipTrivia(tokens, start);
+    while (cursor < end and tokenKindAt(tokens, cursor) != kindEof()) {
+        val text: String = tokenTextAt(tokens, cursor);
         if (strEq(text, "{") or strEq(text, "=") or strEq(text, ";") or strEq(text, ",")) {
             return output;
         }
         output = output + text;
+        cursor = skipTrivia(tokens, cursor + 1);
     }
     return output;
 }

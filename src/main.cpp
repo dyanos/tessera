@@ -623,7 +623,7 @@ std::filesystem::path resolveImportPath(
     // Fall back to the standard library shipped with the compiler (shared with the self-host path).
     if (char* library = csec_find_library_module(target.c_str())) {
         std::string found = library;
-        std::free(library);
+        csec_free(library);
         if (!found.empty()) return utf8Path(found);
     }
     return candidates.front();

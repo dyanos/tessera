@@ -72,30 +72,16 @@ std::unordered_map<const char*, std::unordered_map<std::string, std::string>>& t
     return cache;
 }
 
-std::vector<std::vector<std::string>>& retiredTokenTexts() {
-    static auto* retired = new std::vector<std::vector<std::string>>();
-    return *retired;
-}
-
-void retireTokenTexts(std::vector<std::string>& texts) {
-    if (!texts.empty()) retiredTokenTexts().push_back(std::move(texts));
-}
-
 void clearTokenCachesFor(const char* tokens) {
     if (!tokens) return;
     tokenLineCache().erase(tokens);
-    auto texts = tokenTextCache().find(tokens);
-    if (texts != tokenTextCache().end()) {
-        retireTokenTexts(texts->second);
-        tokenTextCache().erase(texts);
-    }
+    tokenTextCache().erase(tokens);
     tokenFunctionRangeCache().erase(tokens);
     tokenFunctionReturnTypeCache().erase(tokens);
 }
 
 void clearAllTokenCaches() {
     tokenLineCache().clear();
-    for (auto& entry : tokenTextCache()) retireTokenTexts(entry.second);
     tokenTextCache().clear();
     tokenFunctionRangeCache().clear();
     tokenFunctionReturnTypeCache().clear();

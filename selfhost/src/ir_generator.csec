@@ -8,6 +8,7 @@ external def csec_enclosing_function_decl_start(tokens: String, limit: Int): Int
 external def csec_enclosing_function_body_start(tokens: String, limit: Int): Int;
 external def csec_enclosing_function_body_end(tokens: String, limit: Int): Int;
 external def csec_llvm_lexer_helper_definition(name: String): String;
+external def csec_llvm_selfhost_scope(definition: String, managedReturn: Int): String;
 
 def parseReturnIntegerInRange(tokens: String, start: Int, end: Int): Int {
     var cursor: Int = start;
@@ -1627,6 +1628,12 @@ def expressionIsDouble(tokens: String, rawStart: Int, rawEnd: Int): Boolean {
     if (tokenKindAt(tokens, start) == kindIdentifier() and end == start + 1) {
         return strEq(lookupVisibleValueType(tokens, start, tokenTextAt(tokens, start)), "Double");
     }
+    if (tokenKindAt(tokens, start) == kindIdentifier() and end == start + 3 and
+        tokenIs(tokens, start + 1, kindOperator(), ".") and
+        tensorComponentIndex(tokenTextAt(tokens, start + 2)) >= 0 and
+        selfhostTensorType(lookupVisibleValueType(tokens, start, tokenTextAt(tokens, start)))) {
+        return true;
+    }
     // Vector element read t[i] and dot product `a inner b` are scalar doubles.
     if (tokenKindAt(tokens, start) == kindIdentifier() and start + 1 < end and
         tokenIs(tokens, start + 1, kindOperator(), "[") and
@@ -1755,6 +1762,11 @@ def generateLLVMAssignmentPtr(tokens: String, start: Int, end: Int): String {
     val storageName: String = lookupVisibleStorageName(tokens, start, name);
     val exprStart: Int = skipTrivia(tokens, op + 1);
     val exprEnd: Int = trimExpressionEnd(tokens, exprStart, end);
+    if (selfhostManagedType(lookupVisibleValueType(tokens, start, name))) {
+        val resultName: String = "%" + name + ".passign." + start;
+        return generateLLVMExpressionPtr(tokens, exprStart, exprEnd, resultName) +
+            selfhostScopeStore(storageName, resultName);
+    }
     if (tokenKindAt(tokens, exprStart) == kindString() and exprEnd == exprStart + 1) {
         val text: String = tokenTextAt(tokens, exprStart);
         val byteLength: Int = text.length + 1;
@@ -2126,12 +2138,12 @@ def expressionIsTensor(tokens: String, rawStart: Int, rawEnd: Int): Boolean {
         return expressionIsTensor(tokens, start + 1, end - 1);
     }
     if (tokenKindAt(tokens, start) == kindIdentifier() and end == start + 1) {
-        return lookupVisibleValueType(tokens, start, tokenTextAt(tokens, start)).startsWith("Tensor");
+        return selfhostTensorType(lookupVisibleValueType(tokens, start, tokenTextAt(tokens, start)));
     }
     if (tokenKindAt(tokens, start) == kindIdentifier() and start + 1 < end and
         tokenIs(tokens, start + 1, kindOperator(), "(") and
         findClosingToken(tokens, start + 1, end, "(", ")") == end - 1) {
-        return lookupFunctionReturnType(tokens, tokenTextAt(tokens, start)).startsWith("Tensor");
+        return selfhostTensorType(lookupFunctionReturnType(tokens, tokenTextAt(tokens, start)));
     }
     val op: Int = expressionTopLevelOperator(tokens, start, end);
     if (op > start and tokenKindAt(tokens, op) == kindOperator()) {
@@ -2195,6 +2207,26 @@ def generateTensorElementSet(tokens: String, cursor: Int, next: Int): String {
         ", double %tset.val." + cursor + ")\n";
 }
 
+def selfhostTensorType(name: String): Boolean {
+    return strEq(name, "Tensor") or name.startsWith("Tensor<") or name.startsWith("Tensor <");
+}
+
+def selfhostManagedType(name: String): Boolean {
+    return selfhostTensorType(name) or strEq(name, "Future") or
+        name.startsWith("Future<") or name.startsWith("Future <");
+}
+
+def selfhostScopeTrack(resultName: String, rawTensor: Boolean): String {
+    if (rawTensor) {
+        return "  call void @csec_selfhost_tensor_track(ptr %tess.managed.scope, ptr " + resultName + ")\n";
+    }
+    return "  call void @csec_selfhost_scope_track(ptr %tess.managed.scope, ptr " + resultName + ")\n";
+}
+
+def selfhostScopeStore(storageName: String, resultName: String): String {
+    return "  call void @csec_selfhost_scope_store(ptr %" + storageName + ", ptr " + resultName + ")\n";
+}
+
 def generateLLVMExpressionPtr(tokens: String, start: Int, rawEnd: Int, resultName: String): String {
     val end: Int = trimExpressionEnd(tokens, start, rawEnd);
     if (end <= start) {
@@ -2217,10 +2249,10 @@ def generateLLVMExpressionPtr(tokens: String, start: Int, rawEnd: Int, resultNam
         val fillCode: String = generateLLVMExpressionF64(tokens, lp + 1, rp, fillName);
         if (d1.length > 0) {
             return fillCode + "  " + resultName + " = call ptr @csec_tensor_new2(i64 " + d0 +
-                ", i64 " + d1 + ", double " + fillName + ")\n";
+                ", i64 " + d1 + ", double " + fillName + ")\n" + selfhostScopeTrack(resultName, true);
         }
         return fillCode + "  " + resultName + " = call ptr @csec_tensor_new(i64 " + d0 +
-            ", double " + fillName + ")\n";
+            ", double " + fillName + ")\n" + selfhostScopeTrack(resultName, true);
     }
     // Component-wise tensor arithmetic: t (+|-) t elementwise; t (*|/) scalar broadcast.
     val topOp: Int = expressionTopLevelOperator(tokens, start, end);
@@ -2234,7 +2266,8 @@ def generateLLVMExpressionPtr(tokens: String, start: Int, rawEnd: Int, resultNam
             val tr: String = resultName + ".tr";
             return generateLLVMExpressionPtr(tokens, start, topOp, tl) +
                 generateLLVMExpressionPtr(tokens, topOp + 1, end, tr) +
-                "  " + resultName + " = call ptr @" + efn + "(ptr " + tl + ", ptr " + tr + ")\n";
+                "  " + resultName + " = call ptr @" + efn + "(ptr " + tl + ", ptr " + tr + ")\n" +
+                selfhostScopeTrack(resultName, true);
         }
         if (strEq(ot, "*") or strEq(ot, "/")) {
             var sfn: String = "csec_tensor_scale";
@@ -2242,7 +2275,8 @@ def generateLLVMExpressionPtr(tokens: String, start: Int, rawEnd: Int, resultNam
             val ts: String = resultName + ".ts";
             return generateLLVMExpressionPtr(tokens, start, topOp, tl) +
                 generateLLVMExpressionF64(tokens, topOp + 1, end, ts) +
-                "  " + resultName + " = call ptr @" + sfn + "(ptr " + tl + ", double " + ts + ")\n";
+                "  " + resultName + " = call ptr @" + sfn + "(ptr " + tl + ", double " + ts + ")\n" +
+                selfhostScopeTrack(resultName, true);
         }
     }
     if (tokenKindAt(tokens, start) == kindString() and end == start + 1) {
@@ -2257,9 +2291,13 @@ def generateLLVMExpressionPtr(tokens: String, start: Int, rawEnd: Int, resultNam
     if (tokenKindAt(tokens, start) == kindIdentifier() and start + 1 < end and
         tokenIs(tokens, start + 1, kindOperator(), "(") and
         findClosingToken(tokens, start + 1, end, "(", ")") == end - 1) {
+        var cleanup: String = "";
+        if (selfhostManagedType(lookupFunctionReturnType(tokens, tokenTextAt(tokens, start)))) {
+            cleanup = selfhostScopeTrack(resultName, false);
+        }
         return generateLLVMCallArgumentLoadsI32(tokens, start + 2, end - 1, resultName) +
             "  " + resultName + " = call ptr @" + llvmRuntimeCallName(tokenTextAt(tokens, start)) + "(" +
-            generateLLVMCallArgumentListI32(tokens, start + 2, end - 1, resultName) + ")\n";
+            generateLLVMCallArgumentListI32(tokens, start + 2, end - 1, resultName) + ")\n" + cleanup;
     }
     if (tokenKindAt(tokens, start) == kindIdentifier() and start + 6 < end and
         tokenIs(tokens, start + 1, kindOperator(), ".") and
@@ -2366,6 +2404,14 @@ def generateLLVMLocalPtr(tokens: String, start: Int, end: Int): String {
     val name: String = tokenTextAt(tokens, start + 1);
     val storageName: String = name + ".addr." + start;
     val initName: String = "%" + name + ".pinit." + start;
+    if (selfhostManagedType(localDeclarationType(tokens, start, end))) {
+        val slot: String = "  %" + storageName + " = call ptr @csec_selfhost_scope_slot(ptr %tess.managed.scope, i32 " + start + ")\n";
+        if (initializer >= start) {
+            val exprStart: Int = skipTrivia(tokens, initializer + 1);
+            return slot + generateLLVMExpressionPtr(tokens, exprStart, end, initName) + selfhostScopeStore(storageName, initName);
+        }
+        return slot + selfhostScopeStore(storageName, "null");
+    }
     if (initializer >= start) {
         val exprStart: Int = skipTrivia(tokens, initializer + 1);
         val exprEnd: Int = trimExpressionEnd(tokens, exprStart, end);
@@ -3320,7 +3366,7 @@ def generateLLVMPointerBodyFromRange(tokens: String, bodyStart: Int, bodyEnd: In
                     "  ret ptr " + resultName + "\n");
                 return csec_string_builder_finish(builder);
             }
-            if (llvmExpressionLooksPtr(tokens, cursor + 1, next)) {
+            if (expressionIsTensor(tokens, cursor + 1, next) or llvmExpressionLooksPtr(tokens, cursor + 1, next)) {
                 csec_string_builder_append(builder, generateLLVMExpressionPtr(tokens, cursor + 1, next, resultName) +
                     "  ret ptr " + resultName + "\n");
                 return csec_string_builder_finish(builder);
@@ -3433,6 +3479,18 @@ def generateLLVMStringLiteralGlobals(tokens: String): String {
 }
 
 def generateLLVMFunctionDefinition(tokens: String, declStart: Int): String {
+    val definition: String = generateLLVMFunctionDefinitionRaw(tokens, declStart);
+    var managedReturn: Int = 0;
+    if (selfhostManagedType(functionReturnType(tokens, declStart))) {
+        managedReturn = 1;
+    }
+    if (definition.length > 0 and (managedReturn == 1 or definition.contains("%tess.managed.scope"))) {
+        return csec_llvm_selfhost_scope(definition, managedReturn);
+    }
+    return definition;
+}
+
+def generateLLVMFunctionDefinitionRaw(tokens: String, declStart: Int): String {
     val name: String = topLevelDeclName(tokens, declStart);
     var symbolName: String = name;
     if (strEq(name, "main")) {
@@ -3674,6 +3732,8 @@ def generateLLVMModuleInto(tokens: String, builder: Long): Int {
     val appendHeaderTen7: Int = csec_string_builder_append(builder, "declare ptr @csec_tensor_scale(ptr, double)\n");
     val appendHeaderTen8: Int = csec_string_builder_append(builder, "declare ptr @csec_tensor_div_scalar(ptr, double)\n");
     val appendHeaderTen9: Int = csec_string_builder_append(builder, "declare double @csec_tensor_inner(ptr, ptr)\n");
+    val appendHeaderScope: Int = csec_string_builder_append(builder, selfhostScopeDeclarations());
+    val appendHeaderTokenRelease: Int = csec_string_builder_append(builder, "declare void @csec_token_buffer_release(ptr)\n");
     val appendHeader20: Int = csec_string_builder_append(builder, "declare ptr @csec_token_append_owned(ptr, i8, ptr)\n");
     val appendHeader21: Int = csec_string_builder_append(builder, "declare i64 @csec_token_builder_new()\n");
     val appendHeader22: Int = csec_string_builder_append(builder, "declare i32 @csec_token_builder_append(i64, i8, ptr)\n");
@@ -3740,6 +3800,17 @@ def generateLLVMModuleInto(tokens: String, builder: Long): Int {
         val appendFallbackMain: Int = csec_string_builder_append(builder, fallbackMain);
     }
     return 0;
+}
+
+def selfhostScopeDeclarations(): String {
+    return "declare ptr @csec_selfhost_scope_begin()\n" +
+        "declare void @csec_selfhost_scope_track(ptr, ptr)\n" +
+        "declare void @csec_selfhost_tensor_track(ptr, ptr)\n" +
+        "declare ptr @csec_selfhost_scope_slot(ptr, i32)\n" +
+        "declare void @csec_selfhost_scope_store(ptr, ptr)\n" +
+        "declare void @csec_selfhost_scope_collect(ptr)\n" +
+        "declare void @csec_selfhost_scope_end(ptr, ptr)\n" +
+        "declare ptr @csec_llvm_selfhost_scope(ptr, i32)\n";
 }
 
 def generateLLVMModule(tokens: String): String {
@@ -3831,6 +3902,8 @@ def generateLLVMModule(tokens: String): String {
         "declare ptr @csec_tensor_scale(ptr, double)\n" +
         "declare ptr @csec_tensor_div_scalar(ptr, double)\n" +
         "declare double @csec_tensor_inner(ptr, ptr)\n" +
+        selfhostScopeDeclarations() +
+        "declare void @csec_token_buffer_release(ptr)\n" +
         "declare ptr @csec_token_append_owned(ptr, i8, ptr)\n" +
         "declare i64 @csec_token_builder_new()\n" +
         "declare i32 @csec_token_builder_append(i64, i8, ptr)\n" +

@@ -1,0 +1,24 @@
+import std.math.algebra
+
+def copyGenerator(field: PrimeField): PolyFp {
+    val x = field.x();
+    val copy = x;
+    return copy;
+}
+
+def main(): Int {
+    val field = primeField(7);
+    val x = field.x();
+    val saved = copyGenerator(field);
+    for (i <- 0 until 100) {
+        val high = field.monomial(3, 128);
+        val next = high + saved * 2 + 1;
+        if (next.degree() != 128 or next.coeff(128).value() != 3 or next.coeff(1).value() != 2) {
+            return 1;
+        }
+    }
+    if (x.toString() != "x" or saved != x) {
+        return 2;
+    }
+    return 0;
+}

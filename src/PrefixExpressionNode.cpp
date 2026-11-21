@@ -6,6 +6,8 @@
 
 #include "FunctionCallNode.h"
 #include "symbol.h"
+#include "type_checker.h"
+#include "type_utils.h"
 
 #include <iostream>
 #include <llvm/IR/Constants.h>
@@ -54,6 +56,23 @@ Type* futureValueType(const Type* type) {
     return generic->typeArguments.empty() ? nullptr : generic->typeArguments[0].get();
 }
 
+llvm::Function* taskResultDrop(CodeGenerator& cg, const Type* type, llvm::Value* value) {
+    if (!type || !value || !value->getType()->isPointerTy()) return nullptr;
+    if (cg.isRefcountedType(type)) return cg.rcReleaseFunction();
+    if (typeIsCopy(type)) return nullptr;
+    if (auto* drop = cg.ownedValueDropFunction(type)) return drop;
+    if (auto* drop = cg.arrayDropFunction(type)) return drop;
+    const std::string name = "__csec_task_result_drop." + type->getName();
+    auto* drop = llvm::Function::Create(llvm::FunctionType::get(llvm::Type::getVoidTy(cg.context), {opaquePointer(cg)}, false),
+        llvm::Function::InternalLinkage, name, cg.module.get());
+    llvm::IRBuilderBase::InsertPointGuard guard(cg.builder);
+    cg.builder.SetCurrentDebugLocation(llvm::DebugLoc());
+    cg.builder.SetInsertPoint(llvm::BasicBlock::Create(cg.context, "entry", drop));
+    cg.emitOwnedValueDrop(drop->getArg(0), type);
+    cg.builder.CreateRetVoid();
+    return drop;
+}
+
 // `async f(args)` / `go f(args)`: evaluate the arguments now (the task shares nothing with the
 // caller), then run the call in a new microthread. The call is re-generated inside a thunk
 // `void thunk(ptr env)` whose arguments are bound to the env copies, so overload resolution and
@@ -75,7 +94,12 @@ llvm::Value* lowerConcurrentCall(FunctionCallNode* call, bool wantFuture) {
             return nullptr;
         }
         auto type = arg->getType();
-        value = cg.copyStackBufferToHeap(value);
+        if (isStructClassType(type.get())) {
+            if (value->getType()->isPointerTy()) value = cg.builder.CreateLoad(getABIStorageType(type.get()), value, "task.struct");
+        }
+        else {
+            value = cg.copyStackBufferToHeap(value);
+        }
         value = cg.takeOwned(value, type.get());
         values.push_back(value);
         types.push_back(type ? type->clone() : std::make_unique<UnknownType>());
@@ -83,9 +107,12 @@ llvm::Value* lowerConcurrentCall(FunctionCallNode* call, bool wantFuture) {
     }
     llvm::StructType* envType = llvm::StructType::get(cg.context, fields);
 
-    llvm::Value* future = wantFuture
-        ? cg.builder.CreateCall(runtimeFunction(cg, "csec_future_new", ptrTy, {}), {}, "future")
-        : static_cast<llvm::Value*>(llvm::ConstantPointerNull::get(ptrTy));
+    llvm::Value* future = llvm::ConstantPointerNull::get(ptrTy);
+    if (wantFuture) {
+        auto* handle = cg.builder.CreateCall(runtimeFunction(cg, "csec_future_new", ptrTy, {}), {}, "future");
+        cg.registerOwnedTemporary(handle, cg.rcReleaseFunction());
+        future = handle;
+    }
     llvm::Value* env = cg.createEntryAlloca(envType, "task.env");
     cg.builder.CreateStore(future, cg.builder.CreateStructGEP(envType, env, 0));
     for (size_t i = 0; i < values.size(); ++i) {
@@ -101,6 +128,7 @@ llvm::Value* lowerConcurrentCall(FunctionCallNode* call, bool wantFuture) {
     auto savedPoint = cg.builder.GetInsertPoint();
     cg.builder.SetInsertPoint(llvm::BasicBlock::Create(cg.context, "entry", thunk));
     cg.symbolTable.enterScope();
+    cg.enterTemporaryFrame();
     llvm::Value* taskEnv = thunk->getArg(0);
     llvm::Value* taskFuture = cg.builder.CreateLoad(ptrTy, cg.builder.CreateStructGEP(envType, taskEnv, 0), "task.future");
     auto synthetic = std::make_unique<FunctionCallNode>();
@@ -108,10 +136,12 @@ llvm::Value* lowerConcurrentCall(FunctionCallNode* call, bool wantFuture) {
     for (const auto& typeArg : call->explicitTypeArgs) {
         synthetic->explicitTypeArgs.push_back(typeArg ? typeArg->clone() : nullptr);
     }
+    std::vector<llvm::Value*> taskArguments;
     for (size_t i = 0; i < values.size(); ++i) {
         const std::string name = "__task_arg_" + std::to_string(i);
         llvm::Value* argument = cg.builder.CreateLoad(fields[i + 1],
             cg.builder.CreateStructGEP(envType, taskEnv, static_cast<unsigned>(i + 1)), name + ".value");
+        taskArguments.push_back(argument);
         const Type* argType = types[i].get();
         const bool boundDirectly = argType && (argType->getName() == "Array" || argType->getName() == "Vector" ||
                                                dynamic_cast<const ArrayType*>(argType) != nullptr ||
@@ -125,10 +155,26 @@ llvm::Value* lowerConcurrentCall(FunctionCallNode* call, bool wantFuture) {
         synthetic->arguments.push_back(std::make_unique<IdentifierNode>(name));
     }
     llvm::Value* result = synthetic->codegen();
-    if (wantFuture) {
-        cg.builder.CreateCall(runtimeFunction(cg, "csec_future_complete", voidTy, { ptrTy, i64Ty }),
-            { taskFuture, toFuturePayload(cg, result) });
+    auto resultType = synthetic->getType();
+    llvm::Function* drop = taskResultDrop(cg, resultType.get(), result);
+    if (drop) result = cg.takeOwned(result, resultType.get());
+    for (size_t i = 0; i < taskArguments.size(); ++i) {
+        if (cg.isRefcountedType(types[i].get())) cg.releaseString(taskArguments[i]);
+        else if (cg.structHoldsCounted(types[i].get())) cg.emitStructCount(taskArguments[i], types[i].get(), false);
     }
+    if (wantFuture) {
+        if (drop) {
+            cg.builder.CreateCall(runtimeFunction(cg, "csec_future_complete_managed", voidTy, { ptrTy, i64Ty, ptrTy, i32Ty }),
+                { taskFuture, toFuturePayload(cg, result), drop, llvm::ConstantInt::get(i32Ty, !cg.isRefcountedType(resultType.get())) });
+        }
+        else {
+            cg.builder.CreateCall(runtimeFunction(cg, "csec_future_complete", voidTy, { ptrTy, i64Ty }),
+                { taskFuture, toFuturePayload(cg, result) });
+        }
+        cg.releaseString(taskFuture);
+    }
+    else if (drop) cg.builder.CreateCall(drop, { result });
+    cg.exitTemporaryFrame();
     cg.builder.CreateRetVoid();
     cg.symbolTable.exitScope();
     cg.builder.SetInsertPoint(savedBlock, savedPoint);
@@ -136,9 +182,24 @@ llvm::Value* lowerConcurrentCall(FunctionCallNode* call, bool wantFuture) {
     // sizeof(env) as a constant expression so it follows the target data layout.
     llvm::Constant* envSize = llvm::ConstantExpr::getPtrToInt(llvm::ConstantExpr::getGetElementPtr(envType,
         llvm::ConstantPointerNull::get(ptrTy), llvm::ArrayRef<llvm::Constant*>{ llvm::ConstantInt::get(i32Ty, 1) }), i64Ty);
-    llvm::Value* pid = cg.builder.CreateCall(
-        runtimeFunction(cg, "csec_process_spawn", i32Ty, { ptrTy, ptrTy, i64Ty }),
-        { thunk, env, envSize }, "task.pid");
+    llvm::Value* pid = wantFuture
+        ? cg.builder.CreateCall(runtimeFunction(cg, "csec_future_start", i32Ty, { ptrTy, ptrTy, ptrTy, i64Ty }),
+            { future, thunk, env, envSize }, "task.pid")
+        : cg.builder.CreateCall(runtimeFunction(cg, "csec_process_spawn", i32Ty, { ptrTy, ptrTy, i64Ty }),
+            { thunk, env, envSize }, "task.pid");
+    if (!values.empty()) {
+        auto* function = cg.builder.GetInsertBlock()->getParent();
+        auto* failed = llvm::BasicBlock::Create(cg.context, "task.start.failed", function);
+        auto* done = llvm::BasicBlock::Create(cg.context, "task.start.done", function);
+        cg.builder.CreateCondBr(cg.builder.CreateICmpEQ(pid, llvm::ConstantInt::get(i32Ty, 0)), failed, done);
+        cg.builder.SetInsertPoint(failed);
+        for (size_t i = 0; i < values.size(); ++i) {
+            if (cg.structHoldsCounted(types[i].get())) cg.emitStructCount(values[i], types[i].get(), false);
+            else cg.emitOwnedValueDrop(values[i], types[i].get());
+        }
+        cg.builder.CreateBr(done);
+        cg.builder.SetInsertPoint(done);
+    }
     return wantFuture ? future : pid;
 }
 
@@ -203,7 +264,9 @@ llvm::Value* PrefixExpressionNode::codegen() {
             llvm::Value* raw = cg.builder.CreateCall(
                 runtimeFunction(cg, "csec_future_await", llvm::Type::getInt64Ty(cg.context), { opaquePointer(cg) }),
                 { value }, "future.raw");
-            return fromFuturePayload(cg, raw, cg.getLLVMType(valueType));
+            llvm::Value* result = fromFuturePayload(cg, raw, getABIStorageType(valueType));
+            if (auto* drop = taskResultDrop(cg, valueType, result)) cg.registerOwnedTemporary(result, drop);
+            return result;
         }
         return value;
     }

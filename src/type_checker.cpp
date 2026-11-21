@@ -6,6 +6,7 @@
 #include "type_utils.h"
 #include "dict_support.h"
 
+#include <algorithm>
 #include <iostream>
 #include <set>
 
@@ -274,13 +275,12 @@ bool isMoveExpression(ASTNode* node) {
     return prefix && prefix->op == "<-";
 }
 
-// Future<A> vs Future<B>: compare the payload types by name (GenericType::equals is identity-only).
 bool sameFirstTypeArgument(const Type* left, const Type* right) {
     auto* l = dynamic_cast<const GenericType*>(left);
     auto* r = dynamic_cast<const GenericType*>(right);
     if (!l || !r || l->typeArguments.empty() || r->typeArguments.empty()) return false;
     if (!l->typeArguments[0] || !r->typeArguments[0]) return false;
-    return l->typeArguments[0]->getName() == r->typeArguments[0]->getName();
+    return l->typeArguments[0]->equals(*r->typeArguments[0]);
 }
 
 bool isBorrowExpression(ASTNode* node, bool* isMutableBorrow = nullptr) {
@@ -493,7 +493,15 @@ void TypeChecker::enterOwnershipScope() {
 
 void TypeChecker::exitOwnershipScope() {
     if (!ownershipScopes.empty()) {
+        const size_t depth = ownershipScopes.size();
         ownershipScopes.pop_back();
+        for (auto& scope : ownershipScopes) {
+            for (auto& entry : scope) {
+                auto& borrows = entry.second.borrows;
+                borrows.erase(std::remove_if(borrows.begin(), borrows.end(),
+                    [depth](const Borrow& borrow) { return borrow.scopeDepth == depth; }), borrows.end());
+            }
+        }
     }
 }
 
@@ -561,7 +569,7 @@ void TypeChecker::checkOwnedValueUse(ASTNode* node, const std::string& context) 
 void TypeChecker::markMoved(const std::string& name) {
     auto* state = findOwnership(name);
     if (!state) return;
-    if (state->immutableBorrows > 0 || state->mutableBorrowed) {
+    if (!state->borrows.empty()) {
         reportError("Type error: cannot move '" + name + "' while it is borrowed");
     }
     if (state->owned) {
@@ -569,43 +577,43 @@ void TypeChecker::markMoved(const std::string& name) {
     }
 }
 
-void TypeChecker::markBorrowed(const std::string& name, bool isMutableBorrow) {
+void TypeChecker::markBorrowed(const std::string& name, bool isMutableBorrow, const ASTNode* expression) {
     auto* state = findOwnership(name);
     if (!state) return;
     if (state->owned && state->moved) {
         reportError("Type error: cannot borrow moved value '" + name + "'");
         return;
     }
+    const bool mutableBorrowed = !state->borrows.empty() && state->borrows.front().isMutable;
     if (isMutableBorrow) {
         auto* symbol = CodeGenerator::getInstance().symbolTable.lookup(name);
         if (symbol && !symbol->isMutable) {
             reportError("Type error: cannot mutably borrow immutable value '" + name + "'");
+            return;
         }
-        if (state->immutableBorrows > 0) {
+        if (!state->borrows.empty() && !mutableBorrowed) {
             reportError("Type error: cannot mutably borrow '" + name + "' while immutable borrow exists");
+            return;
         }
-        if (state->mutableBorrowed) {
+        if (mutableBorrowed) {
             reportError("Type error: cannot mutably borrow '" + name + "' more than once");
+            return;
         }
-        state->mutableBorrowed = true;
     }
-    else {
-        if (state->mutableBorrowed) {
-            reportError("Type error: cannot immutably borrow '" + name + "' while mutable borrow exists");
-        }
-        ++state->immutableBorrows;
+    else if (mutableBorrowed) {
+        reportError("Type error: cannot immutably borrow '" + name + "' while mutable borrow exists");
+        return;
     }
+    state->borrows.push_back({ ownershipScopes.size(), isMutableBorrow, expression });
 }
 
-void TypeChecker::releaseBorrow(const std::string& name, bool isMutableBorrow) {
-    auto* state = findOwnership(name);
+void TypeChecker::releaseBorrow(ASTNode* expression) {
+    const auto name = movedOrBorrowedIdentifier(expression);
+    auto* state = findOwnership(name.substr(0, name.find('.')));
     if (!state) return;
-    if (isMutableBorrow) {
-        state->mutableBorrowed = false;
-    }
-    else if (state->immutableBorrows > 0) {
-        --state->immutableBorrows;
-    }
+    auto& borrows = state->borrows;
+    borrows.erase(std::remove_if(borrows.begin(), borrows.end(),
+        [expression](const Borrow& borrow) { return borrow.expression == expression; }), borrows.end());
 }
 
 void TypeChecker::checkFunctionArguments(const std::vector<std::unique_ptr<ASTNode>>& arguments,
@@ -859,6 +867,8 @@ void TypeChecker::visit(FunctionDeclarationNode& node) {
             if (isResolvedType(node.returnType) && isResolvedType(bodyType) &&
                 !node.returnType->isVoidTy() &&
                 !node.returnType->equals(bodyType) &&
+                !(node.returnType->getName() == "Future" && bodyType->getName() == "Future" &&
+                  sameFirstTypeArgument(node.returnType.get(), bodyType.get())) &&
                 !(isIntegerTypeName(node.returnType) && isIntegerTypeName(bodyType)) &&
                 !(isTensorLikeType(node.returnType) && isTensorLikeType(bodyType)) &&
                 !(isI64IntegerAlias(node.returnType) && isI64IntegerAlias(bodyType)) &&
@@ -2019,9 +2029,8 @@ void TypeChecker::visit(CallExpressionNode& node) {
         checkFunctionArguments(node.arguments, parameterTypes, "call expression");
     }
     for (auto& arg : node.arguments) {
-        bool mutableBorrowArg = false;
-        if (isBorrowExpression(arg.get(), &mutableBorrowArg)) {
-            releaseBorrow(movedOrBorrowedIdentifier(arg.get()), mutableBorrowArg);
+        if (isBorrowExpression(arg.get())) {
+            releaseBorrow(arg.get());
         }
     }
     checkTypeResolved(node.getType(), "call expression");
@@ -2316,9 +2325,8 @@ void TypeChecker::visit(FunctionCallNode& node) {
         }
     }
     for (auto& arg : node.arguments) {
-        bool mutableBorrowArg = false;
-        if (isBorrowExpression(arg.get(), &mutableBorrowArg)) {
-            releaseBorrow(movedOrBorrowedIdentifier(arg.get()), mutableBorrowArg);
+        if (isBorrowExpression(arg.get())) {
+            releaseBorrow(arg.get());
         }
     }
     checkTypeResolved(node.getType(), "function call '" + node.functionName + "'");
@@ -2538,6 +2546,13 @@ void TypeChecker::visit(AssignmentExpressionNode& node) {
     const std::string leftName = identifierName(node.left.get());
     const std::string rightName = movedOrBorrowedIdentifier(node.right.get());
     const bool rightIsMoveChecked = rightType && isMoveCheckedType(rightType.get());
+    if (isBorrowType(rightType.get()) && (node.op == "=" || node.op == "<-")) {
+        auto leftType = node.left ? node.left->getType() : nullptr;
+        if (isBorrowType(leftType.get()) &&
+            (leftName.empty() || ownershipScopes.empty() || ownershipScopes.back().count(leftName) == 0)) {
+            reportError("Type error: cannot store a borrowed reference outside its current scope");
+        }
+    }
     if (!leftName.empty() && dynamic_cast<IdentifierNode*>(node.left.get())) {
         auto leftType = node.left->getType();
         if (isRefcountHandleType(leftType.get())) {
@@ -2625,7 +2640,7 @@ void TypeChecker::visit(PrefixExpressionNode& node) {
     else if (node.op == "&" || node.op == "&mut") {
         if (!sourceName.empty()) {
             const size_t dot = sourceName.find('.');
-            markBorrowed(dot == std::string::npos ? sourceName : sourceName.substr(0, dot), node.op == "&mut");
+            markBorrowed(sourceName.substr(0, dot), node.op == "&mut", &node);
         }
     }
     else if (node.op == "async" || node.op == "go") {
@@ -2664,7 +2679,7 @@ void TypeChecker::visit(PrefixExpressionNode& node) {
         // Any &/&mut still active in scope when we await is rejected.
         for (const auto& scope : ownershipScopes) {
             for (const auto& entry : scope) {
-                if (entry.second.immutableBorrows > 0 || entry.second.mutableBorrowed) {
+                if (!entry.second.borrows.empty()) {
                     reportError("Type error: borrow of '" + entry.first +
                                 "' is held across an 'await'; end the borrow before awaiting "
                                 "(a reference cannot survive suspension)");

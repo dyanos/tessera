@@ -114,7 +114,20 @@ CodeGenerator::CodeGenerator()
     runtimeStringFunctions.insert("csec_dict_to_string");
     runtimeStringFunctions.insert("csec_dict_key_at");
     runtimeStringFunctions.insert("csec_alg_residue_to_string");
-    runtimeStringFunctions.insert("csec_poly_to_string");
+    runtimeStringFunctions.insert("csec_poly_value_constant");
+    runtimeStringFunctions.insert("csec_poly_value_monomial");
+    runtimeStringFunctions.insert("csec_poly_value_add");
+    runtimeStringFunctions.insert("csec_poly_value_sub");
+    runtimeStringFunctions.insert("csec_poly_value_mul");
+    runtimeStringFunctions.insert("csec_poly_value_scale");
+    runtimeStringFunctions.insert("csec_poly_value_div");
+    runtimeStringFunctions.insert("csec_poly_value_rem");
+    runtimeStringFunctions.insert("csec_poly_value_pow");
+    runtimeStringFunctions.insert("csec_poly_value_gcd");
+    runtimeStringFunctions.insert("csec_poly_value_derivative");
+    runtimeStringFunctions.insert("csec_poly_value_monic");
+    runtimeStringFunctions.insert("csec_poly_value_to_string");
+    runtimeStringFunctions.insert("csec_gf_to_poly_value");
     runtimeStringFunctions.insert("csec_gf_to_string");
     runtimeStringFunctions.insert("csec_logic_to_string");
     runtimeStringFunctions.insert("csec_logic_counterexample");
@@ -123,6 +136,7 @@ CodeGenerator::CodeGenerator()
     runtimeStringFunctions.insert("csec_sym_solve");
     runtimeStringFunctions.insert("csec_sym_to_string");
     runtimeStringFunctions.insert("csec_sym_to_latex");
+    runtimeStringFunctions.insert("csec_llvm_selfhost_scope");
     for (const char* producer : { "csec_dict_new", "csec_set_new", "csec_dict_copy", "csec_dict_keys" }) {
         dictProducerNames.push_back(producer);
     }
@@ -1133,6 +1147,7 @@ bool CodeGenerator::ownsParameter(const std::string& function, unsigned index) c
 bool CodeGenerator::isRefcountedType(const Type* type) {
     if (!type) return false;
     if (type->getName() == "String" || type->getName() == "Nat") return true;
+    if (type->getKind() == Type::Kind::GENERIC && type->getName() == "Future") return true;
     if (type->getKind() == Type::Kind::FUNCTION) return isStrictOwnership();
     if (isInterfaceType(type)) return isStrictOwnership();
     const EnumInfo* info = enumOfType(type);
@@ -1245,6 +1260,7 @@ void CodeGenerator::emitEnumReleaseBody(llvm::Function* fn, const Type* type) {
 
 llvm::Function* CodeGenerator::ownedValueDropFunction(const Type* type) {
     if (!type) return nullptr;
+    if (TensorRuntime::isTensorTypeName(type->getName())) return getTensorDropFunction();
     if (type->getKind() == Type::Kind::GENERIC && (type->getName() == "Dict" || type->getName() == "Set")) {
         return dictFreeFunction();
     }

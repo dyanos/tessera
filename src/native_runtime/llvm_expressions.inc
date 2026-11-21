@@ -52,6 +52,14 @@ static std::string csec_task_payload(const std::string& value, const std::string
 static std::string csec_task_env_type_name(int site) { return "%csec.task.env." + std::to_string(site); }
 static std::string csec_task_function_name(int site) { return "csec_task_" + std::to_string(site); }
 
+static bool csec_selfhost_future_type(const std::string& type) {
+    return type == "Future" || type.rfind("Future<", 0) == 0 || type.rfind("Future <", 0) == 0;
+}
+
+static bool csec_task_managed_type(const std::string& type) {
+    return csec_selfhost_future_type(type) || type == "Tensor" || type.rfind("Tensor<", 0) == 0 || type.rfind("Tensor <", 0) == 0;
+}
+
 static std::string csec_task_callee_symbol(const char* name) {
     return std::strcmp(name, "main") == 0 ? std::string("csec_user_main") : std::string(name);
 }
@@ -71,8 +79,12 @@ static std::string csec_emit_task_start(const char* tokens, int site, int end, c
     const std::string envType = csec_task_env_type_name(site);
     const std::string env = resultName + ".env";
     std::string output;
+    std::vector<std::string> managedArguments;
     const std::string future = wantFuture ? resultName : std::string("null");
-    if (wantFuture) output += "  " + resultName + " = call ptr @csec_future_new()\n";
+    if (wantFuture) {
+        output += "  " + resultName + " = call ptr @csec_future_new()\n" +
+            "  call void @csec_selfhost_scope_track(ptr %tess.managed.scope, ptr " + resultName + ")\n";
+    }
     output += "  " + env + " = alloca " + envType + "\n";
     output += "  " + env + ".f = getelementptr inbounds " + envType + ", ptr " + env + ", i32 0, i32 0\n";
     output += "  store ptr " + future + ", ptr " + env + ".f\n";
@@ -80,12 +92,26 @@ static std::string csec_emit_task_start(const char* tokens, int site, int end, c
         const std::string llvmType = csec_llvm_type_for_name(parameters[index].second.c_str());
         const std::string value = resultName + ".arg" + std::to_string(index);
         output += csec_emit_value_of_llvm_type(tokens, arguments[index].first, arguments[index].second, llvmType, value);
+        if (csec_task_managed_type(parameters[index].second)) {
+            output += "  call void @csec_rc_retain(ptr " + value + ")\n";
+            managedArguments.push_back(value);
+        }
         output += "  " + value + ".slot = getelementptr inbounds " + envType + ", ptr " + env + ", i32 0, i32 " + std::to_string(index + 1) + "\n";
         output += "  store " + llvmType + " " + value + ", ptr " + value + ".slot\n";
     }
     const std::string pid = wantFuture ? resultName + ".pid" : resultName;
-    output += "  " + pid + " = call i32 @csec_process_spawn(ptr @" + csec_task_function_name(site) + ", ptr " + env +
+    output += "  " + pid + " = call i32 " +
+        (wantFuture ? "@csec_future_start(ptr " + future + ", " : std::string("@csec_process_spawn(")) +
+        "ptr @" + csec_task_function_name(site) + ", ptr " + env +
         ", i64 ptrtoint (ptr getelementptr (" + envType + ", ptr null, i32 1) to i64))\n";
+    if (!managedArguments.empty()) {
+        const std::string failed = resultName + ".failed";
+        output += "  " + failed + " = icmp eq i32 " + pid + ", 0\n";
+        for (const auto& value : managedArguments) {
+            output += "  " + value + ".failed = select i1 " + failed + ", ptr " + value + ", ptr null\n";
+            output += "  call void @csec_rc_release(ptr " + value + ".failed)\n";
+        }
+    }
     return output;
 }
 
@@ -118,7 +144,7 @@ static bool csec_is_await_expression(const char* tokens, int start, int end) {
         if (declaration < 0) return false;
         const int statementEnd = csec_advance_statement(tokens, declaration, start + 1);
         const int initializer = csec_find_top_level_operator(tokens, declaration, statementEnd, 1);
-        return csec_c_local_type(tokens, declaration, statementEnd, initializer).rfind("Future", 0) == 0;
+        return csec_selfhost_future_type(csec_c_local_type(tokens, declaration, statementEnd, initializer));
     }
     return false;
 }
@@ -199,8 +225,11 @@ static std::string csec_concurrency_definitions(const char* tokens) {
         "declare i32 @csec_process_count()\n"
         "declare i32 @csec_process_join()\n"
         "declare ptr @csec_future_new()\n"
+        "declare i32 @csec_future_start(ptr, ptr, ptr, i64)\n"
         "declare void @csec_future_complete(ptr, i64)\n"
         "declare i64 @csec_future_await(ptr)\n"
+        "declare void @csec_rc_retain(ptr)\n"
+        "declare void @csec_rc_release(ptr)\n"
         "declare i64 @csec_thread_start(ptr, ptr, i64)\n\n";
     const int tokenCount = tokenCountCached(tokens ? tokens : "");
     for (int site = 0; site < tokenCount; ++site) {
@@ -216,6 +245,7 @@ static std::string csec_concurrency_definitions(const char* tokens) {
         const std::string envType = csec_task_env_type_name(site);
         std::string fields = "ptr";
         std::string loads;
+        std::string releaseArguments;
         std::string callArguments;
         for (size_t index = 0; index < arguments.size() && index < parameters.size(); ++index) {
             const std::string llvmType = csec_llvm_type_for_name(parameters[index].second.c_str());
@@ -223,6 +253,9 @@ static std::string csec_concurrency_definitions(const char* tokens) {
             fields += ", " + llvmType;
             loads += "  " + value + ".slot = getelementptr inbounds " + envType + ", ptr %env, i32 0, i32 " + std::to_string(index + 1) + "\n";
             loads += "  " + value + " = load " + llvmType + ", ptr " + value + ".slot\n";
+            if (csec_task_managed_type(parameters[index].second)) {
+                releaseArguments += "  call void @csec_rc_release(ptr " + value + ")\n";
+            }
             if (!callArguments.empty()) callArguments += ", ";
             callArguments += llvmType + " " + value;
         }
@@ -232,9 +265,16 @@ static std::string csec_concurrency_definitions(const char* tokens) {
         output += "  %future.slot = getelementptr inbounds " + envType + ", ptr %env, i32 0, i32 0\n";
         output += "  %future = load ptr, ptr %future.slot\n";
         output += loads;
-        output += "  %result = call " + returnType + " @" + csec_task_callee_symbol(csec_token_text_at(tokens, site + 1)) + "(" + callArguments + ")\n";
-        output += csec_task_payload("%result", returnType, "%payload");
-        output += "  call void @csec_future_complete(ptr %future, i64 %payload)\n  ret void\n}\n\n";
+        output += (returnType == "void" ? "  call " : "  %result = call ") + returnType +
+            " @" + csec_task_callee_symbol(csec_token_text_at(tokens, site + 1)) + "(" + callArguments + ")\n";
+        output += releaseArguments;
+        if (isAsync) {
+            if (returnType != "void") output += csec_task_payload("%result", returnType, "%payload");
+            output += "  call void @csec_future_complete(ptr %future, i64 ";
+            output += returnType == "void" ? "0)\n" : "%payload)\n";
+            output += "  call void @csec_rc_release(ptr %future)\n";
+        }
+        output += "  ret void\n}\n\n";
     }
     return output;
 }
@@ -473,7 +513,11 @@ static std::string csec_emit_ptr_expression(const char* tokens, int start, int e
                     argumentStart = cursor + 1;
                 }
             }
-            return output + "  " + resultName + " = call ptr @" + std::string(csec_token_text_at(tokens, start)) + "(" + arguments + ")\n";
+            output += "  " + resultName + " = call ptr @" + std::string(csec_token_text_at(tokens, start)) + "(" + arguments + ")\n";
+            if (csec_selfhost_future_type(csec_function_return_type_at(tokens, callee))) {
+                output += "  call void @csec_selfhost_scope_track(ptr %tess.managed.scope, ptr " + resultName + ")\n";
+            }
+            return output;
         }
     }
     return "  " + resultName + " = getelementptr i8, ptr null, i32 0\n";

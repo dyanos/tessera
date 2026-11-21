@@ -24,7 +24,7 @@
 // Elements remember their ring: combining elements of different rings (mod 7 with mod 11, GF(2^8)
 // with GF(2^4), ...) stops the program with an AlgebraError, as do division by a non-unit and a
 // field built on a non-prime characteristic. Moduli up to 2^63 are exact (128-bit products).
-// GF(p^k) needs p^(k+1) < 2^62. Polynomials are runtime handles that are never freed.
+// GF(p^k) needs p^(k+1) < 2^62.
 
 external def csec_alg_mod(a: Long, n: Long): Long;
 external def csec_alg_add(a: Long, b: Long, n: Long): Long;
@@ -45,27 +45,27 @@ external def csec_alg_require_modulus(n: Long): Long;
 external def csec_alg_require_prime(p: Long): Long;
 external def csec_alg_require_same(a: Long, b: Long): Long;
 external def csec_alg_residue_to_string(v: Long, n: Long): String;
-external def csec_poly_constant(c: Long, p: Long): Long;
-external def csec_poly_monomial(c: Long, k: Long, p: Long): Long;
-external def csec_poly_characteristic(h: Long): Long;
-external def csec_poly_add(a: Long, b: Long): Long;
-external def csec_poly_sub(a: Long, b: Long): Long;
-external def csec_poly_mul(a: Long, b: Long): Long;
-external def csec_poly_scale(a: Long, k: Long): Long;
-external def csec_poly_div(a: Long, b: Long): Long;
-external def csec_poly_rem(a: Long, b: Long): Long;
-external def csec_poly_pow(a: Long, e: Long): Long;
-external def csec_poly_gcd(a: Long, b: Long): Long;
-external def csec_poly_derivative(a: Long): Long;
-external def csec_poly_monic(a: Long): Long;
-external def csec_poly_degree(a: Long): Int;
-external def csec_poly_coeff(a: Long, i: Long): Long;
-external def csec_poly_eval(a: Long, v: Long): Long;
-external def csec_poly_equals(a: Long, b: Long): Int;
-external def csec_poly_is_irreducible(a: Long): Int;
-external def csec_poly_to_string(a: Long): String;
+external def csec_poly_value_constant(c: Long, p: Long): String;
+external def csec_poly_value_monomial(c: Long, k: Long, p: Long): String;
+external def csec_poly_value_characteristic(h: String): Long;
+external def csec_poly_value_add(a: String, b: String): String;
+external def csec_poly_value_sub(a: String, b: String): String;
+external def csec_poly_value_mul(a: String, b: String): String;
+external def csec_poly_value_scale(a: String, k: Long): String;
+external def csec_poly_value_div(a: String, b: String): String;
+external def csec_poly_value_rem(a: String, b: String): String;
+external def csec_poly_value_pow(a: String, e: Long): String;
+external def csec_poly_value_gcd(a: String, b: String): String;
+external def csec_poly_value_derivative(a: String): String;
+external def csec_poly_value_monic(a: String): String;
+external def csec_poly_value_degree(a: String): Int;
+external def csec_poly_value_coeff(a: String, i: Long): Long;
+external def csec_poly_value_eval(a: String, v: Long): Long;
+external def csec_poly_value_equals(a: String, b: String): Int;
+external def csec_poly_value_is_irreducible(a: String): Int;
+external def csec_poly_value_to_string(a: String): String;
 external def csec_gf_find_modulus(p: Long, k: Long): Long;
-external def csec_gf_modulus_from_poly(h: Long): Long;
+external def csec_gf_modulus_from_poly_value(h: String): Long;
 external def csec_gf_degree(m: Long, p: Long): Long;
 external def csec_gf_order(m: Long, p: Long): Long;
 external def csec_gf_from_int(v: Long, p: Long): Long;
@@ -74,8 +74,8 @@ external def csec_gf_sub(a: Long, b: Long, p: Long): Long;
 external def csec_gf_mul(a: Long, b: Long, p: Long, m: Long): Long;
 external def csec_gf_pow(a: Long, e: Long, p: Long, m: Long): Long;
 external def csec_gf_inv(a: Long, p: Long, m: Long): Long;
-external def csec_gf_from_poly(h: Long, p: Long, m: Long): Long;
-external def csec_gf_to_poly(a: Long, p: Long): Long;
+external def csec_gf_from_poly_value(h: String, p: Long, m: Long): Long;
+external def csec_gf_to_poly_value(a: Long, p: Long): String;
 external def csec_gf_element_order(a: Long, p: Long, m: Long): Long;
 external def csec_gf_primitive_element(p: Long, m: Long): Long;
 external def csec_gf_to_string(a: Long, p: Long): String;
@@ -237,7 +237,7 @@ struct Fp(r: Long, p: Long) {
     def operator ==(k: Long): Boolean = r == csec_alg_mod(k, p)
     def operator !=(k: Long): Boolean = r != csec_alg_mod(k, p)
     // `a * f` for a polynomial f over the same field.
-    def operator *(f: PolyFp): PolyFp = new PolyFp(csec_poly_scale(f.h, r))
+    def operator *(f: PolyFp): PolyFp = new PolyFp(csec_poly_value_scale(f.h, r))
 }
 
 // The prime field GF(p) itself.
@@ -251,11 +251,11 @@ struct PrimeField(p: Long) {
     // A generator of the multiplicative group (a primitive root modulo p).
     def generator(): Fp = new Fp(csec_alg_primitive_root(p), p)
     // The variable x of the polynomial ring GF(p)[x].
-    def x(): PolyFp = new PolyFp(csec_poly_monomial(1, 1, p))
+    def x(): PolyFp = new PolyFp(csec_poly_value_monomial(1, 1, p))
     // The constant polynomial c.
-    def constant(c: Long): PolyFp = new PolyFp(csec_poly_constant(c, p))
+    def constant(c: Long): PolyFp = new PolyFp(csec_poly_value_constant(c, p))
     // c * x^k
-    def monomial(c: Long, k: Long): PolyFp = new PolyFp(csec_poly_monomial(c, k, p))
+    def monomial(c: Long, k: Long): PolyFp = new PolyFp(csec_poly_value_monomial(c, k, p))
 }
 
 // GF(p) for a prime p (AlgebraError otherwise).
@@ -265,41 +265,41 @@ def primeField(p: Long): PrimeField = new PrimeField(csec_alg_require_prime(p))
 // GF(p)[x]: polynomials over a prime field (a Euclidean domain)
 // ---------------------------------------------------------------------------------------------
 
-struct PolyFp(h: Long) {
-    def handle(): Long = h
-    def characteristic(): Long = csec_poly_characteristic(h)
+struct PolyFp(h: String) {
+    def handle(): String = h
+    def characteristic(): Long = csec_poly_value_characteristic(h)
     // -1 for the zero polynomial.
-    def degree(): Int = csec_poly_degree(h)
-    def isZero(): Boolean = csec_poly_degree(h) < 0
+    def degree(): Int = csec_poly_value_degree(h)
+    def isZero(): Boolean = csec_poly_value_degree(h) < 0
     // The coefficient of x^i.
-    def coeff(i: Long): Fp = new Fp(csec_poly_coeff(h, i), csec_poly_characteristic(h))
-    def leading(): Fp = new Fp(csec_poly_coeff(h, csec_poly_degree(h)), csec_poly_characteristic(h))
-    def eval(v: Fp): Fp = new Fp(csec_poly_eval(h, v.r), csec_alg_require_same(csec_poly_characteristic(h), v.p))
-    def eval(v: Long): Fp = new Fp(csec_poly_eval(h, v), csec_poly_characteristic(h))
-    def derivative(): PolyFp = new PolyFp(csec_poly_derivative(h))
+    def coeff(i: Long): Fp = new Fp(csec_poly_value_coeff(h, i), csec_poly_value_characteristic(h))
+    def leading(): Fp = new Fp(csec_poly_value_coeff(h, csec_poly_value_degree(h)), csec_poly_value_characteristic(h))
+    def eval(v: Fp): Fp = new Fp(csec_poly_value_eval(h, v.r), csec_alg_require_same(csec_poly_value_characteristic(h), v.p))
+    def eval(v: Long): Fp = new Fp(csec_poly_value_eval(h, v), csec_poly_value_characteristic(h))
+    def derivative(): PolyFp = new PolyFp(csec_poly_value_derivative(h))
     // The polynomial divided by its leading coefficient.
-    def monic(): PolyFp = new PolyFp(csec_poly_monic(h))
+    def monic(): PolyFp = new PolyFp(csec_poly_value_monic(h))
     // The monic greatest common divisor.
-    def gcd(o: PolyFp): PolyFp = new PolyFp(csec_poly_gcd(h, o.h))
-    def isIrreducible(): Boolean = csec_poly_is_irreducible(h) != 0
-    def toString(): String = csec_poly_to_string(h)
+    def gcd(o: PolyFp): PolyFp = new PolyFp(csec_poly_value_gcd(h, o.h))
+    def isIrreducible(): Boolean = csec_poly_value_is_irreducible(h) != 0
+    def toString(): String = csec_poly_value_to_string(h)
 
-    def operator +(o: PolyFp): PolyFp = new PolyFp(csec_poly_add(h, o.h))
-    def operator -(o: PolyFp): PolyFp = new PolyFp(csec_poly_sub(h, o.h))
-    def operator *(o: PolyFp): PolyFp = new PolyFp(csec_poly_mul(h, o.h))
+    def operator +(o: PolyFp): PolyFp = new PolyFp(csec_poly_value_add(h, o.h))
+    def operator -(o: PolyFp): PolyFp = new PolyFp(csec_poly_value_sub(h, o.h))
+    def operator *(o: PolyFp): PolyFp = new PolyFp(csec_poly_value_mul(h, o.h))
     // Euclidean quotient and remainder: f == (f / g) * g + f % g.
-    def operator /(o: PolyFp): PolyFp = new PolyFp(csec_poly_div(h, o.h))
-    def operator %(o: PolyFp): PolyFp = new PolyFp(csec_poly_rem(h, o.h))
-    def operator +(k: Long): PolyFp = new PolyFp(csec_poly_add(h, csec_poly_constant(k, csec_poly_characteristic(h))))
-    def operator -(k: Long): PolyFp = new PolyFp(csec_poly_sub(h, csec_poly_constant(k, csec_poly_characteristic(h))))
-    def operator *(k: Long): PolyFp = new PolyFp(csec_poly_scale(h, k))
-    def operator +(c: Fp): PolyFp = new PolyFp(csec_poly_add(h, csec_poly_constant(c.r, c.p)))
-    def operator -(c: Fp): PolyFp = new PolyFp(csec_poly_sub(h, csec_poly_constant(c.r, c.p)))
-    def operator *(c: Fp): PolyFp = new PolyFp(csec_poly_mul(h, csec_poly_constant(c.r, c.p)))
-    def operator -(): PolyFp = new PolyFp(csec_poly_scale(h, -1))
-    def operator **(e: Long): PolyFp = new PolyFp(csec_poly_pow(h, e))
-    def operator ==(o: PolyFp): Boolean = csec_poly_equals(h, o.h) != 0
-    def operator !=(o: PolyFp): Boolean = csec_poly_equals(h, o.h) == 0
+    def operator /(o: PolyFp): PolyFp = new PolyFp(csec_poly_value_div(h, o.h))
+    def operator %(o: PolyFp): PolyFp = new PolyFp(csec_poly_value_rem(h, o.h))
+    def operator +(k: Long): PolyFp = new PolyFp(csec_poly_value_add(h, csec_poly_value_constant(k, csec_poly_value_characteristic(h))))
+    def operator -(k: Long): PolyFp = new PolyFp(csec_poly_value_sub(h, csec_poly_value_constant(k, csec_poly_value_characteristic(h))))
+    def operator *(k: Long): PolyFp = new PolyFp(csec_poly_value_scale(h, k))
+    def operator +(c: Fp): PolyFp = new PolyFp(csec_poly_value_add(h, csec_poly_value_constant(c.r, c.p)))
+    def operator -(c: Fp): PolyFp = new PolyFp(csec_poly_value_sub(h, csec_poly_value_constant(c.r, c.p)))
+    def operator *(c: Fp): PolyFp = new PolyFp(csec_poly_value_mul(h, csec_poly_value_constant(c.r, c.p)))
+    def operator -(): PolyFp = new PolyFp(csec_poly_value_scale(h, -1))
+    def operator **(e: Long): PolyFp = new PolyFp(csec_poly_value_pow(h, e))
+    def operator ==(o: PolyFp): Boolean = csec_poly_value_equals(h, o.h) != 0
+    def operator !=(o: PolyFp): Boolean = csec_poly_value_equals(h, o.h) == 0
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -316,7 +316,7 @@ struct GFq(v: Long, p: Long, m: Long) {
     // The multiplicative order of a nonzero element.
     def order(): Long = csec_gf_element_order(v, p, m)
     // The polynomial representative (degree < k).
-    def poly(): PolyFp = new PolyFp(csec_gf_to_poly(v, p))
+    def poly(): PolyFp = new PolyFp(csec_gf_to_poly_value(v, p))
     // Written in the generator `a`, e.g. "a^2 + a + 1".
     def toString(): String = csec_gf_to_string(v, p)
 
@@ -343,23 +343,23 @@ struct GaloisField(p: Long, m: Long) {
     // The number of elements, p^k.
     def order(): Long = csec_gf_order(m, p)
     // The defining irreducible polynomial m.
-    def modulus(): PolyFp = new PolyFp(csec_gf_to_poly(m, p))
+    def modulus(): PolyFp = new PolyFp(csec_gf_to_poly_value(m, p))
     def zero(): GFq = new GFq(0, p, m)
     def one(): GFq = new GFq(csec_gf_from_int(1, p), p, m)
     // The constant c (an element of the prime subfield).
     def of(c: Long): GFq = new GFq(csec_gf_from_int(c, p), p, m)
     // The class of the polynomial f (reduced modulo m).
-    def of(f: PolyFp): GFq = new GFq(csec_gf_from_poly(f.h, p, m), p, m)
+    def of(f: PolyFp): GFq = new GFq(csec_gf_from_poly_value(f.h, p, m), p, m)
     // The class `a` of x; it generates the field over GF(p).
-    def generator(): GFq = new GFq(csec_gf_from_poly(csec_poly_monomial(1, 1, p), p, m), p, m)
+    def generator(): GFq = new GFq(csec_gf_from_poly_value(csec_poly_value_monomial(1, 1, p), p, m), p, m)
     // A generator of the multiplicative group (order p^k - 1).
     def primitiveElement(): GFq = new GFq(csec_gf_primitive_element(p, m), p, m)
     // The element whose packed base-p digits are `packed` (0 <= packed < p^k).
-    def element(packed: Long): GFq = new GFq(csec_gf_from_poly(csec_gf_to_poly(packed, p), p, m), p, m)
+    def element(packed: Long): GFq = new GFq(csec_gf_from_poly_value(csec_gf_to_poly_value(packed, p), p, m), p, m)
 }
 
 // GF(p^k) using the smallest monic irreducible polynomial of degree k over GF(p).
 def galoisField(p: Long, k: Long): GaloisField = new GaloisField(p, csec_gf_find_modulus(p, k))
 // GF(p^k) = GF(p)[x]/(modulus) for a chosen irreducible polynomial (AlgebraError otherwise).
 def galoisField(modulus: PolyFp): GaloisField =
-    new GaloisField(csec_poly_characteristic(modulus.h), csec_gf_modulus_from_poly(modulus.h))
+    new GaloisField(csec_poly_value_characteristic(modulus.h), csec_gf_modulus_from_poly_value(modulus.h))

@@ -1,0 +1,14 @@
+def calculate(n: Int): Int {
+    return n + 1;
+}
+
+def main(): Int {
+    var total: Int = 0;
+    for (i <- 0 until 6) {
+        val future = async calculate(i);
+        val first: Int = await future;
+        val second: Int = await future;
+        total += first + second;
+    }
+    return total;
+}

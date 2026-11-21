@@ -18,6 +18,8 @@
 #include <mutex>
 #include <utility>
 
+#include <new>
+
 #include "context_switch.inc"
 
 namespace csec_microthread {
@@ -404,21 +406,40 @@ namespace csec_microthread {
 struct Future {
     std::mutex mutex;
     bool done = false;
+    bool failed = false;
+    bool transfer = false;
+    bool consumed = false;
     long long value = 0;
+    void (*drop)(void*) = nullptr;
     Scheduler* owner = nullptr;
     std::vector<int> waiters; // pids of `owner` blocked in await
+
+    ~Future() {
+        if (drop && !consumed) drop(reinterpret_cast<void*>(static_cast<uintptr_t>(value)));
+    }
 };
+
+static void destroyFuture(void* address) {
+    static_cast<Future*>(address)->~Future();
+}
 }
 
 extern "C" {
 
 void* csec_future_new(void) {
-    auto* future = new csec_microthread::Future();
+    void* storage = csecAlloc(sizeof(csec_microthread::Future));
+    if (!storage) return nullptr;
+    auto* future = new (storage) csec_microthread::Future();
     future->owner = &csec_microthread::scheduler;
+    csec_rc_adopt_with(future, reinterpret_cast<void*>(csec_microthread::destroyFuture));
     return future;
 }
 
 void csec_future_complete(void* handle, long long value) {
+    csec_future_complete_managed(handle, value, nullptr, 0);
+}
+
+void csec_future_complete_managed(void* handle, long long value, void* drop, int transfer) {
     using namespace csec_microthread;
     auto* future = static_cast<Future*>(handle);
     if (!future) return;
@@ -428,6 +449,8 @@ void csec_future_complete(void* handle, long long value) {
         if (future->done) return;
         future->done = true;
         future->value = value;
+        future->drop = reinterpret_cast<void (*)(void*)>(drop);
+        future->transfer = transfer != 0;
         if (future->owner == &scheduler) waiters.swap(future->waiters);
     }
     for (int pid : waiters) {
@@ -449,14 +472,31 @@ int csec_future_ready(void* handle) {
 long long csec_future_await(void* handle) {
     using namespace csec_microthread;
     auto* future = static_cast<Future*>(handle);
-    if (!future) return 0;
+    if (!future) {
+        std::fputs("csec: could not allocate an async result\n", stderr);
+        std::exit(70);
+    }
     auto& s = ensureScheduler();
     for (;;) {
         Process* self = s.current;
         const bool local = future->owner == &s;
         {
             std::lock_guard<std::mutex> lock(future->mutex);
-            if (future->done) return future->value;
+            if (future->done) {
+                if (future->failed) {
+                    std::fputs("csec: could not start an async task\n", stderr);
+                    std::exit(70);
+                }
+                if (future->consumed) {
+                    std::fputs("csec: an owned async result can only be taken once\n", stderr);
+                    std::exit(70);
+                }
+                future->consumed = future->transfer;
+                if (future->drop && !future->transfer) {
+                    csec_rc_retain(reinterpret_cast<void*>(static_cast<uintptr_t>(future->value)));
+                }
+                return future->value;
+            }
             if (local) future->waiters.push_back(self->pid);
         }
         if (!local) {
@@ -475,6 +515,19 @@ long long csec_future_await(void* handle) {
 // Used by `async f(args)`; the generated thunk calls csec_future_complete itself.
 int csec_async_start(void* code, void* env, long long envSize) {
     return csec_process_spawn(code, env, envSize);
+}
+
+int csec_future_start(void* handle, void* code, void* env, long long envSize) {
+    auto* future = static_cast<csec_microthread::Future*>(handle);
+    if (!future) return 0;
+    csec_rc_retain(future);
+    const int pid = csec_process_spawn(code, env, envSize);
+    if (!pid) {
+        future->failed = true;
+        future->done = true;
+        csec_rc_release(future);
+    }
+    return pid;
 }
 
 } // extern "C"

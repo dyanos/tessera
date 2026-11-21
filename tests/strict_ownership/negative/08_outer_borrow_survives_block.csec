@@ -1,0 +1,16 @@
+class Image() {
+    def id(): Int = 0
+}
+
+def inspect(value: &Image): Int = value.id()
+
+def main(): Int {
+    var image: Image = new Image();
+    val outer: &Image = &image;
+    {
+        val inner: &Image = &image;
+        inspect(&image);
+    }
+    free(image);
+    return outer.id();
+}
