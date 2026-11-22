@@ -1,0 +1,66 @@
+def bump(p: &mut Int)
+    requires p < 100
+    ensures p > 0
+{
+    p = 1;
+}
+
+def opaque(p: &mut Int) {
+}
+
+def caller(): Int {
+    var x = 0;
+    bump(&mut x);
+    assert(x > 0);
+    assert(x == 1);
+    var y = 5;
+    opaque(&mut y);
+    assert(y == 5);
+    return x;
+}
+
+def loopy(n: Int): Int
+    requires n >= 0
+{
+    var z = 0;
+    var i = 0;
+    while (i < n) invariant i >= 0 {
+        opaque(&mut z);
+        i = i + 1;
+    }
+    assert(z == 0);
+    return z;
+}
+
+def half(a: Int, b: Int): Int
+    requires a / b > 0
+{
+    return 0;
+}
+
+def half2(a: Int, b: Int): Int
+    requires b != 0
+    requires a / b > 0
+    ensures result == a / b
+{
+    return a / b;
+}
+
+def bigSpec(n: Int): Int
+    requires n >= 0 and n <= 100000
+    ensures result == n * n * n * n / (n + 1) or true
+{
+    return 0;
+}
+
+def badEnsures(a: Int): Int
+    ensures 10 / result > 0
+{
+    return a;
+}
+
+def useHalf(): Int
+    ensures half2(4, result) == 2
+{
+    return 2;
+}
