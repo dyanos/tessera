@@ -83,6 +83,7 @@ borrow/move  = '&' | '<-' ;                                  (* '&mut' = '&' 'mu
 punct        = ':' '.' ',' ';' '(' ')' '{' '}' '[' ']' '_' ;
 arrows       = '->' | '=>' ;                                 (* '->' lambda body / '=>' match-arm & fn-type *)
 attribute    = '[@' ;
+spec-block   = '[%' | '%]' ;                                 (* specification only: tess --verify, never compiled *)
 latex        = '$' | '$$' | '\' ;
 misc         = '!' '#' '@' "'" '<:' '<%' '>:' '?' ;          (* '?' = postfix try, see 5 *)
 logical      = '&&' | '||' ;                                 (* spellings of the keywords and / or *)
@@ -110,8 +111,9 @@ dotted-name  = identifier { '.' identifier } ;
 attribute    = '[@' ident [ '(' [ arg-list ] ')' ] ']' ;     (* [@DllImport("m","cos")], [@Intrinsic] *)
 
 function     = [ 'async' ] [ 'unsafe' ] [ 'inline' ] [ 'constexpr' ]
-               'def' fn-name '(' [ params ] ')' [ ':' type ] { contract } fn-body ;
-contract     = 'requires' expr | 'ensures' expr ;            (* contextual words; see LANGUAGE_SPEC.md 12 *)
+               'def' fn-name '(' [ params ] ')' [ ':' type ] { contract | '[%' { contract [ ';' ] } '%]' } fn-body ;
+contract     = ( 'requires' | 'ensures' | 'decreases' ) [ identifier ':' ] expr ;
+                                                            (* contextual words; see LANGUAGE_SPEC.md 12 *)
 fn-name      = member-name | 'operator' operator ;        (* a keyword may name a method: def filter(...) *)
                                                             (* operator - / + / ! / ~ with no parameters overloads the unary form *)
 member-name  = identifier | keyword ;                      (* after '.' or 'def' only *)
@@ -188,9 +190,9 @@ l-value      = identifier
              | names ;                                       (* tuple destructure: a, b, c = f() *)
 
 if-stmt      = 'if' '(' expr ')' block [ 'else' ( block | if-stmt ) ] ;
-while-stmt   = 'while' '(' expr ')' { loop-spec } block ;
-for-stmt     = 'for' '(' identifier '<-' iterable ')' { loop-spec } block ;
-loop-spec    = 'invariant' expr | 'decreases' expr ;        (* checked by tess --verify only *)
+while-stmt   = 'while' '(' expr ')' { loop-spec | '[%' { loop-spec [ ';' ] } '%]' } block ;
+for-stmt     = 'for' '(' identifier '<-' iterable ')' { loop-spec | '[%' { loop-spec [ ';' ] } '%]' } block ;
+loop-spec    = ( 'invariant' | 'decreases' ) [ identifier ':' ] expr ;   (* checked by tess --verify only *)
              | 'for' '(' identifier ',' identifier '<-' token-range ')' block ;
              | 'for' '(' identifier ',' identifier '<-' expr ')' block ;   (* key, value of a Dict *)
 iterable     = expr | range ;                              (* an array, a range, a Dict or a Set *)

@@ -544,17 +544,37 @@ Functions and loops may carry specifications that `tess --verify` proves with th
 and checked at run time.
 
 ```
-function   = ... 'def' fn-name '(' [ params ] ')' [ ':' type ] { contract } fn-body ;
-contract   = 'requires' expr | 'ensures' expr ;
-while-stmt = 'while' '(' expr ')' { loop-spec } block ;
-for-stmt   = 'for' '(' identifier '<-' iterable ')' { loop-spec } block ;
-loop-spec  = 'invariant' expr | 'decreases' expr ;
+function   = ... 'def' fn-name '(' [ params ] ')' [ ':' type ] { contract | fn-spec } fn-body ;
+contract   = ( 'requires' | 'ensures' | 'decreases' ) [ identifier ':' ] expr ;
+fn-spec    = '[%' { contract [ ';' ] } '%]' ;
+while-stmt = 'while' '(' expr ')' { loop-spec | loop-block } block ;
+for-stmt   = 'for' '(' identifier '<-' iterable ')' { loop-spec | loop-block } block ;
+loop-spec  = ( 'invariant' | 'decreases' ) [ identifier ':' ] expr ;
+loop-block = '[%' { loop-spec [ ';' ] } '%]' ;
 assert     = 'assert' '(' expr [ ',' expr ] ')' ;
 ```
 
 `requires`, `ensures`, `invariant`, `decreases`, and `result` are contextual words: they keep
 working as ordinary identifiers elsewhere. A clause expression ends where the body starts (`{`, or
 `=` for an expression body), so `def twice(x: Int): Int requires x < 1000 = x * 2` is valid.
+
+Long specifications can be grouped in a `[% ... %]` block between the signature (or loop header)
+and the body. Everything inside `[% ... %]` is specification only and is never compiled. Inline
+clauses and blocks can be mixed; `;` between clauses in a block is optional. A clause may be named
+(`ensures nonneg: result >= 0`); diagnostics then show the name.
+
+```csec
+def fact(n: Int): Long
+[%
+    requires 0 <= n and n <= 20
+    ensures positive: result >= 1
+    decreases n
+%]
+{
+    if (n == 0) { return 1; }
+    return n * fact(n - 1);
+}
+```
 
 ```csec
 def safeDiv(a: Int, b: Int): Int
@@ -592,8 +612,17 @@ For every function defined in the input file (imported modules contribute only t
   returned value;
 - every `assert(c)` holds where it is reached; afterwards `c` is assumed;
 - every call to a function with contracts satisfies the callee's `requires`; the result is known
-  only through the callee's `ensures` (calls are verified modularly, so recursion needs no
-  special handling); a callee without contracts returns an unknown value;
+  only through the callee's `ensures` (calls are verified modularly); a callee without contracts
+  returns an unknown value. A variable passed as `&mut x` has an unknown value after the call,
+  constrained only by the callee's `ensures` (where the parameter names its value after the call);
+- the function's own clauses are well defined: no division by zero, and every call inside them
+  satisfies the callee's `requires`. Each `requires` may assume the ones before it, each `ensures`
+  the `requires` and the `ensures` before it, and each `invariant` the invariants before it;
+- recursion: a function in a recursion cycle (direct, or through other functions) that has
+  `decreases` measures must make them smaller at every recursive call, in the lexicographic order
+  on non-negative integers (the first measure decreases and stays non-negative, or stays equal and
+  the next one decreases, and so on). Every function in the cycle needs the same number of measures.
+  A recursive function without `decreases` is verified, but its termination is not (a note);
 - integer division and remainder: the divisor is not zero, and `MIN / -1` does not occur;
 - shifts: the amount is in `[0, width)`;
 - integer arithmetic does not overflow its type (`Int` is 32-bit, `Long` 64-bit, `Short` 16-bit,
@@ -656,7 +685,7 @@ one from the same Z3 version into `deps/z3-static` (on Windows matching tess's C
 `-Config Debug` or `-Config Release [-DllCrt]`).
 
 The self-hosted compiler accepts all of this syntax: it drops the specification clauses and
-compiles `assert` as a run-time check (§5).
+`[% ... %]` blocks and compiles `assert` as a run-time check (§5).
 
 ## 13. Logic and proofs (`import std.logic`)
 

@@ -75,14 +75,18 @@ FunctionDeclaration
   = "def" __ FunctionRest
 
 FunctionRest
-  = MemberName _ "(" _ Parameters? _ ")" _ (":" _ Type)? _ (ContractClause _)*
+  = MemberName _ "(" _ Parameters? _ ")" _ (":" _ Type)? _ ((ContractClause / FunctionSpecBlock) _)*
     ("=" _ Expression / "{" _ Statement* _ "}")?
 
 ContractClause
-  = ("requires" / "ensures") __ Expression
+  = ("requires" / "ensures" / "decreases") __ (Identifier _ ":" _)? Expression
+
+FunctionSpecBlock
+  = "[%" _ (ContractClause _ (";" _)?)* "%]"
 
 LoopSpec
-  = ("invariant" / "decreases") __ Expression
+  = ("invariant" / "decreases") __ (Identifier _ ":" _)? Expression
+  / "[%" _ (("invariant" / "decreases") __ (Identifier _ ":" _)? Expression _ (";" _)?)* "%]"
 
 Parameters
   = Parameter (_ "," _ Parameter)*

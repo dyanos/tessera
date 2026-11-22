@@ -35,8 +35,10 @@ private:
     bool matchWord(const std::string& value);
     void expectWord(const std::string& value);
     void expectClosingAngle();
-    // `requires e` / `ensures e` / `invariant e` / `decreases e` clauses (contextual words) for `node`.
+    // `requires e` / `ensures e` / `invariant e` / `decreases e` clauses (contextual words) for `node`,
+    // written inline or inside `[% ... %]` blocks.
     void parseContractClauses(ASTNode& node, bool functionClauses);
+    void parseContractClauseList(ASTNode& node, bool functionClauses);
     std::unique_ptr<ASTNode> parseStatementWithoutLine();
     bool matchIdentifierName();
     // A member or method name: an identifier, or a keyword after '.' / 'def' (`frame.filter(...)`).

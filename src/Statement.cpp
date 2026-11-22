@@ -23,15 +23,38 @@ std::unique_ptr<ASTNode> Parser::parseStatement() {
 }
 
 void Parser::parseContractClauses(ASTNode& node, bool functionClauses) {
+	parseContractClauseList(node, functionClauses);
+	while (match(TokenType::OPERATOR, "[%")) {
+		while (!isAtEnd() && !check(TokenType::OPERATOR, "%]")) {
+			if (match(TokenType::OPERATOR, ";")) continue;
+			const size_t before = position;
+			parseContractClauseList(node, functionClauses);
+			if (position == before) {
+				error(std::string("Expected ") + (functionClauses ? "'requires', 'ensures' or 'decreases'" : "'invariant' or 'decreases'") +
+				      " in '[% ... %]', found '" + peek().value + "'");
+				advance();
+			}
+		}
+		expect(TokenType::OPERATOR, "%]");
+		parseContractClauseList(node, functionClauses);
+	}
+}
+
+void Parser::parseContractClauseList(ASTNode& node, bool functionClauses) {
 	while (true) {
 		std::string word;
-		if (functionClauses && (checkWord("requires") || checkWord("ensures"))) word = peek().value;
+		if (functionClauses && (checkWord("requires") || checkWord("ensures") || checkWord("decreases"))) word = peek().value;
 		else if (!functionClauses && (checkWord("invariant") || checkWord("decreases"))) word = peek().value;
 		else break;
 		const int line = peek().line;
 		advance();
-		const size_t first = position;
 		ContractClause clause;
+		if ((check(TokenType::IDENTIFIER) || check(TokenType::KEYWORD)) && position + 1 < tokens.size() &&
+		    tokens[position + 1].type == TokenType::OPERATOR && tokens[position + 1].value == ":") {
+			clause.name = advance().value;
+			advance();
+		}
+		const size_t first = position;
 		// Not parseExpression(): in `def f(): Int requires x > 0 = body` the '=' starts the body.
 		clause.expression = parsePipelineExpression();
 		clause.line = line;
@@ -41,6 +64,7 @@ void Parser::parseContractClauses(ASTNode& node, bool functionClauses) {
 			if (!clause.text.empty()) clause.text += " ";
 			clause.text += t.type == TokenType::STRING_LITERAL ? "\"" + t.value + "\"" : t.value;
 		}
+		if (!clause.name.empty()) clause.text = clause.name + ": " + clause.text;
 		if (clause.expression) clause.expression->line = line;
 		if (!node.contracts) node.contracts = std::make_shared<ContractClauses>();
 		if (word == "requires") node.contracts->requiresClauses.push_back(std::move(clause));

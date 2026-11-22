@@ -15,6 +15,7 @@
 #include "verifier.h"
 #include "source_map.h"
 #include "all_ast.h"
+#include "ast_walk.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -194,44 +195,46 @@ struct State {
 
 struct ProgramInfo {
     std::map<std::string, std::vector<FunctionDeclarationNode*>> functions;
+    std::map<const FunctionDeclarationNode*, int> component;
+    std::set<const FunctionDeclarationNode*> recursive;
+    bool sameComponent(const FunctionDeclarationNode* a, const FunctionDeclarationNode* b) const {
+        auto x = component.find(a);
+        auto y = component.find(b);
+        return x != component.end() && y != component.end() && x->second == y->second;
+    }
 };
 
+const std::string* mutableArgument(ASTNode* node) {
+    ASTNode* operand = nullptr;
+    if (auto* prefix = dynamic_cast<PrefixExpressionNode*>(node)) {
+        if (prefix->op == "&mut") operand = prefix->expression.get();
+    }
+    else if (auto* unary = dynamic_cast<UnaryExpressionNode*>(node)) {
+        if (unary->op == "&mut") operand = unary->expression.get();
+    }
+    auto* id = dynamic_cast<IdentifierNode*>(operand);
+    return id ? &id->value : nullptr;
+}
+
 void collectAssigned(ASTNode* node, std::set<std::string>& names) {
-    if (!node) return;
-    if (auto* assign = dynamic_cast<AssignmentExpressionNode*>(node)) {
-        if (auto* id = dynamic_cast<IdentifierNode*>(assign->left.get())) names.insert(id->value);
-        collectAssigned(assign->right.get(), names);
-        return;
-    }
-    if (auto* postfix = dynamic_cast<PostfixExpressionNode*>(node)) {
-        if (auto* id = dynamic_cast<IdentifierNode*>(postfix->expression.get())) names.insert(id->value);
-        return;
-    }
-    if (auto* destructuring = dynamic_cast<DestructuringAssignmentNode*>(node)) {
-        for (const auto& target : destructuring->targets) names.insert(target.name);
-        return;
-    }
-    if (auto* block = dynamic_cast<BlockNode*>(node)) {
-        for (auto& s : block->statements) collectAssigned(s.get(), names);
-        return;
-    }
-    if (auto* ifNode = dynamic_cast<IfStatementNode*>(node)) {
-        collectAssigned(ifNode->thenBlock.get(), names);
-        collectAssigned(ifNode->elseBlock.get(), names);
-        return;
-    }
-    if (auto* loop = dynamic_cast<WhileStatementNode*>(node)) {
-        collectAssigned(loop->body.get(), names);
-        return;
-    }
-    if (auto* loop = dynamic_cast<ForStatementNode*>(node)) {
-        collectAssigned(loop->body.get(), names);
-        return;
-    }
-    if (auto* decl = dynamic_cast<VariableDeclarationNode*>(node)) {
-        collectAssigned(decl->initializer.get(), names);
-        return;
-    }
+    ast_walk::walk(node, nullptr, [&](ASTNode* n, std::unique_ptr<ASTNode>*) {
+        if (auto* assign = dynamic_cast<AssignmentExpressionNode*>(n)) {
+            if (auto* id = dynamic_cast<IdentifierNode*>(assign->left.get())) names.insert(id->value);
+        }
+        else if (auto* postfix = dynamic_cast<PostfixExpressionNode*>(n)) {
+            if (auto* id = dynamic_cast<IdentifierNode*>(postfix->expression.get())) names.insert(id->value);
+        }
+        else if (auto* prefix = dynamic_cast<PrefixExpressionNode*>(n)) {
+            if (prefix->op == "++" || prefix->op == "--") {
+                if (auto* id = dynamic_cast<IdentifierNode*>(prefix->expression.get())) names.insert(id->value);
+            }
+        }
+        else if (auto* destructuring = dynamic_cast<DestructuringAssignmentNode*>(n)) {
+            for (const auto& target : destructuring->targets) names.insert(target.name);
+        }
+        if (const std::string* name = mutableArgument(n)) names.insert(*name);
+        return true;
+    });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -276,7 +279,7 @@ public:
         // `requires` clauses are assumed; they must not contradict each other.
         if (function.contracts) {
             for (auto& clause : function.contracts->requiresClauses) {
-                Val c = evalContract(clause.expression.get(), start);
+                Val c = evalContract(clause.expression.get(), start, true);
                 if (c.known() && c.sort.isBool) start.pc = start.pc && *c.e;
             }
             if (!function.contracts->requiresClauses.empty() && !satisfiable(start.pc)) {
@@ -284,6 +287,21 @@ public:
                       "the requires clauses of '" + function.name + "' contradict each other; it can never be called");
                 return;
             }
+        }
+
+        if (function.contracts && !function.contracts->decreases.empty()) {
+            for (auto& clause : function.contracts->decreases) {
+                Val d = evalContract(clause.expression.get(), start, true);
+                if (!d.known() || d.sort.isBool) {
+                    note(clause.line, "'decreases " + clause.text + "' uses values the verifier does not model");
+                    entryMeasures.clear();
+                    break;
+                }
+                entryMeasures.push_back(widen(d, 64));
+            }
+        }
+        else if (program.recursive.count(&function)) {
+            note(function.line, "'" + function.name + "' is recursive and has no decreases clause; its termination is not checked");
         }
 
         std::vector<State> ends = execBlock(function.body.get(), {start});
@@ -301,6 +319,8 @@ private:
     FunctionDeclarationNode& function;
     std::vector<Diagnostic>& diagnostics;
     std::vector<std::pair<std::string, z3::expr>> parameterValues;
+    std::vector<z3::expr> entryMeasures;
+    std::set<const FunctionDeclarationNode*> expanding;
     std::vector<z3::expr> background;  // range facts of every introduced integer
     Sort returnSort;
     int currentLine = 0;
@@ -308,6 +328,7 @@ private:
     size_t liveStates = 0;
     bool tooManyPaths = false;
     bool suppressSideChecks = false;
+    bool contractMode = false;
     std::set<std::string> notedUnsupported;
 
     struct BranchFacts {
@@ -506,7 +527,7 @@ private:
 
     // Converting to a narrower type must keep the value (integer encoding) -- it would wrap otherwise.
     void checkNarrowing(const State& s, const Val& v, const Sort& sort, const std::string& what) {
-        if (!intMode() || !v.known() || v.sort.isBool || !sort.supported() || sort.isBool) return;
+        if (contractMode || !intMode() || !v.known() || v.sort.isBool || !sort.supported() || sort.isBool) return;
         if (sort.width >= v.sort.width) return;
         sideCheck(s, ctx.bool_val(true), inRange(*v.e, sort.width),
                   what + " may not fit in " + sortName(sort) + " (the value would wrap around)");
@@ -514,17 +535,23 @@ private:
 
     // The result of an arithmetic operation stays in its type's range.
     void checkRange(const State& s, const z3::expr& guard, const z3::expr& e, unsigned width, const std::string& text) {
-        if (!intMode()) return;
+        if (contractMode || !intMode()) return;
         sideCheck(s, guard, inRange(e, width), "'" + text + "' may overflow " + sortName({false, width}));
     }
 
     // ---- expressions ----
 
-    Val evalContract(ASTNode* node, State& s) {
-        const bool saved = suppressSideChecks;
-        suppressSideChecks = true;
+    Val evalContract(ASTNode* node, State& s, bool own = false) {
+        const bool savedSuppress = suppressSideChecks;
+        const bool savedContract = contractMode;
+        const int savedLine = currentLine;
+        suppressSideChecks = savedSuppress || !own;
+        contractMode = true;
+        if (own && node && node->line > 0) currentLine = node->line;
         Val v = eval(node, s);
-        suppressSideChecks = saved;
+        suppressSideChecks = savedSuppress;
+        contractMode = savedContract;
+        currentLine = savedLine;
         return v;
     }
 
@@ -557,7 +584,14 @@ private:
         if (auto* unary = dynamic_cast<UnaryExpressionNode*>(node)) return evalUnary(*unary, s);
         if (auto* call = dynamic_cast<FunctionCallNode*>(node)) return evalCall(*call, s);
         if (auto* ifNode = dynamic_cast<IfStatementNode*>(node)) return evalIfExpression(*ifNode, s);
-        if (dynamic_cast<MethodCallNode*>(node)) return unknownOf(node, "method call '" + exprText(node) + "'");
+        if (auto* prefix = dynamic_cast<PrefixExpressionNode*>(node)) {
+            if (prefix->op == "&" || prefix->op == "&mut" || prefix->op == "<-") return eval(prefix->expression.get(), s);
+            return unknownOf(node, "expression '" + exprText(node) + "'");
+        }
+        if (auto* method = dynamic_cast<MethodCallNode*>(node)) {
+            havocMutableArguments(method->arguments, s);
+            return unknownOf(node, "method call '" + exprText(node) + "'");
+        }
         return unknownOf(node, "expression '" + exprText(node) + "'");
     }
 
@@ -661,7 +695,7 @@ private:
         const unsigned width = resultSort.supported() && !resultSort.isBool ? resultSort.width : common;
         const z3::expr x = resize(a, common, width);
         const z3::expr y = resize(b, common, width);
-        const bool wrapReport = !intMode() && verifierOptions().reportOverflow;
+        const bool wrapReport = !contractMode && !intMode() && verifierOptions().reportOverflow;
         const std::string overflowText = "'" + text + "' may overflow " + sortName({false, width});
         const z3::expr always = ctx.bool_val(true);
         if (op == "+") {
@@ -683,8 +717,10 @@ private:
             const z3::expr zero = num(0, width);
             sideCheck(s, always, y != zero, "possible division by zero in '" + text + "'");
             // MIN / -1 does not fit the type (undefined behaviour in the compiled code).
-            sideCheck(s, y != zero, !(x == num(minOf(width), width) && y == num(-1, width)),
-                      "'" + text + "' overflows when dividing the minimum " + sortName({false, width}) + " by -1");
+            if (!contractMode) {
+                sideCheck(s, y != zero, !(x == num(minOf(width), width) && y == num(-1, width)),
+                          "'" + text + "' overflows when dividing the minimum " + sortName({false, width}) + " by -1");
+            }
             return intVal(op == "/" ? divide(x, y) : remainder(x, y), width);
         }
         if (op == "&") return intVal(fromBits(toBits(x, width) & toBits(y, width)), width);
@@ -703,12 +739,13 @@ private:
     }
 
     Val evalUnary(UnaryExpressionNode& node, State& s) {
+        if (node.op == "&" || node.op == "&mut") return eval(node.expression.get(), s);
         Val v = eval(node.expression.get(), s);
         if (!v.known()) return unknownOf(&node, "expression '" + exprText(&node) + "'");
         if (node.op == "!" && v.sort.isBool) return boolVal(!*v.e);
         if (node.op == "+" && !v.sort.isBool) return v;
         if (node.op == "-" && !v.sort.isBool) {
-            if (intMode() || verifierOptions().reportOverflow) {
+            if (!contractMode && (intMode() || verifierOptions().reportOverflow)) {
                 sideCheck(s, ctx.bool_val(true), *v.e != num(minOf(v.sort.width), v.sort.width),
                           "'" + exprText(&node) + "' overflows for the minimum " + sortName(v.sort));
             }
@@ -767,10 +804,18 @@ private:
         for (auto& argument : call.arguments) arguments.push_back(eval(argument.get(), s));
         auto callType = call.getType();
         Sort resultSort = sortOf(callType.get());
-        if (!callee) return unknownOf(&call, "call to '" + call.functionName + "'");
+        if (!callee) {
+            havocMutableArguments(call.arguments, s);
+            return unknownOf(&call, "call to '" + call.functionName + "'");
+        }
         if (callee->returnType) resultSort = sortOf(callee->returnType.get());
         Val result = unknown(resultSort, call.functionName);
-        if (!callee->contracts) return result;
+        if (!contractMode) checkRecursiveCall(call, *callee, arguments, s);
+        if (!callee->contracts || expanding.count(callee)) {
+            havocMutableArguments(call.arguments, s);
+            return result;
+        }
+        expanding.insert(callee);
 
         // Evaluate the callee's clauses with its parameters bound to the arguments.
         State calleeState(ctx);
@@ -795,12 +840,86 @@ private:
                   "call '" + exprText(&call) + "' may violate the requirement '" + clause.text + "' of '" +
                   callee->name + "'");
         }
+        std::vector<std::pair<std::string, Val>> written;
+        for (size_t i = 0; i < callee->parameters.size() && i < call.arguments.size(); ++i) {
+            const std::string* name = mutableArgument(call.arguments[i].get());
+            auto* p = dynamic_cast<ParameterNode*>(callee->parameters[i].get());
+            if (!name || !p) continue;
+            Val after = unknown(sortOf(p->type.get()), *name);
+            calleeState.env[p->name] = after;
+            written.push_back({*name, after});
+        }
         calleeState.env["result"] = result;
         for (auto& clause : callee->contracts->ensuresClauses) {
             Val c = evalContract(clause.expression.get(), calleeState);
             if (c.known() && c.sort.isBool) s.pc = s.pc && *c.e;
         }
+        expanding.erase(callee);
+        for (const auto& [name, after] : written) {
+            auto it = s.env.find(name);
+            if (it == s.env.end()) continue;
+            Val stored;
+            stored.sort = it->second.sort;
+            if (auto converted = convert(after, stored.sort)) stored.e = *converted;
+            else if (stored.sort.supported()) stored.e = fresh(stored.sort, name);
+            it->second = stored;
+        }
         return result;
+    }
+
+    State bindParameters(const FunctionDeclarationNode& callee, const std::vector<Val>& arguments, const State& s) {
+        State bound(ctx);
+        bound.pc = s.pc;
+        for (size_t i = 0; i < callee.parameters.size(); ++i) {
+            auto* p = dynamic_cast<ParameterNode*>(callee.parameters[i].get());
+            if (!p) continue;
+            const Sort sort = sortOf(p->type.get());
+            Val v;
+            v.sort = sort;
+            if (i < arguments.size()) {
+                if (auto converted = convert(arguments[i], sort)) v.e = *converted;
+            }
+            if (!v.e && sort.supported()) v.e = fresh(sort, p->name);
+            bound.env[p->name] = v;
+        }
+        return bound;
+    }
+
+    z3::expr lexLess(const std::vector<z3::expr>& next, const std::vector<z3::expr>& old, size_t i = 0) {
+        const z3::expr smaller = next[i] >= num(0, 64) && next[i] < old[i];
+        if (i + 1 == next.size()) return smaller;
+        return smaller || (next[i] == old[i] && lexLess(next, old, i + 1));
+    }
+
+    void checkRecursiveCall(FunctionCallNode& call, const FunctionDeclarationNode& callee, const std::vector<Val>& arguments,
+                            const State& s) {
+        if (suppressSideChecks || !program.sameComponent(&function, &callee)) return;
+        if (!function.contracts || function.contracts->decreases.empty() || entryMeasures.empty()) return;
+        const std::string text = exprText(&call);
+        if (!callee.contracts || callee.contracts->decreases.size() != function.contracts->decreases.size()) {
+            error(currentLine, "the recursive call '" + text + "' cannot be checked for termination: '" + callee.name +
+                               "' needs as many decreases measures as '" + function.name + "'");
+            return;
+        }
+        State calleeState = bindParameters(callee, arguments, s);
+        std::vector<z3::expr> next;
+        for (auto& clause : callee.contracts->decreases) {
+            Val d = evalContract(clause.expression.get(), calleeState);
+            if (!d.known() || d.sort.isBool) return;
+            next.push_back(widen(d, 64));
+        }
+        std::string measures;
+        for (auto& clause : function.contracts->decreases) measures += (measures.empty() ? "" : ", ") + clause.text;
+        check(s, lexLess(next, entryMeasures), currentLine,
+              "the recursive call '" + text + "' may not decrease 'decreases " + measures + "' (the recursion may not terminate)");
+    }
+
+    void havocMutableArguments(const std::vector<std::unique_ptr<ASTNode>>& arguments, State& s) {
+        std::set<std::string> names;
+        for (auto& argument : arguments) {
+            if (const std::string* name = mutableArgument(argument.get())) names.insert(*name);
+        }
+        havoc(s, names);
     }
 
     // ---- statements ----
@@ -881,12 +1000,13 @@ private:
             post.env["result"] = bound;
         }
         for (auto& clause : function.contracts->ensuresClauses) {
-            Val c = evalContract(clause.expression.get(), post);
+            Val c = evalContract(clause.expression.get(), post, true);
             if (!c.known() || !c.sort.isBool) {
                 note(clause.line, "ensures '" + clause.text + "' uses values the verifier does not model; it was not checked");
                 continue;
             }
             check(post, *c.e, line, "'" + function.name + "' may return without satisfying 'ensures " + clause.text + "'");
+            post.pc = post.pc && *c.e;
         }
     }
 
@@ -1055,19 +1175,26 @@ private:
         const int loopLine = currentLine;
         ContractClauses* contracts = loopNode.contracts.get();
 
-        auto evalInvariants = [&](State& state, std::vector<Invariant>& out) {
+        auto evalInvariants = [&](State& state, std::vector<Invariant>& out, bool own) {
             if (!contracts) return;
+            State scratch = state;
             for (auto& clause : contracts->invariants) {
-                Val v = evalContract(clause.expression.get(), state);
-                if (v.known() && v.sort.isBool) out.push_back({*v.e, clause.text, clause.line});
-                else note(clause.line, "invariant '" + clause.text + "' uses values the verifier does not model");
+                Val v = evalContract(clause.expression.get(), own ? scratch : state, own);
+                if (v.known() && v.sort.isBool) {
+                    out.push_back({*v.e, clause.text, clause.line});
+                    if (own) scratch.pc = scratch.pc && *v.e;
+                }
+                else {
+                    note(clause.line, "invariant '" + clause.text + "' uses values the verifier does not model");
+                }
             }
+            if (own) state.pc = scratch.pc;
         };
 
         // 1. The invariants hold on entry.
         {
             std::vector<Invariant> entry;
-            evalInvariants(s, entry);
+            evalInvariants(s, entry, false);
             for (auto& inv : entry) {
                 check(s, inv.condition, inv.line, "loop invariant '" + inv.text + "' may not hold when the loop is entered");
             }
@@ -1079,7 +1206,7 @@ private:
         State head = s;
         havoc(head, modified);
         std::vector<Invariant> invariants;
-        evalInvariants(head, invariants);
+        evalInvariants(head, invariants, true);
         for (auto& inv : invariants) head.pc = head.pc && inv.condition;
 
         Val c = eval(conditionNode, head);
@@ -1103,7 +1230,7 @@ private:
         if (contracts && !contracts->decreases.empty()) {
             auto& clause = contracts->decreases.front();
             measureText = clause.text;
-            Val d = evalContract(clause.expression.get(), bodyState);
+            Val d = evalContract(clause.expression.get(), bodyState, true);
             if (d.known() && !d.sort.isBool) {
                 measure = widen(d, 64);
                 check(bodyState, *measure >= num(0, 64), clause.line,
@@ -1124,7 +1251,7 @@ private:
                 }
                 end.jump = 0;
                 std::vector<Invariant> after;
-                evalInvariants(end, after);
+                evalInvariants(end, after, false);
                 for (auto& inv : after) {
                     check(end, inv.condition, inv.line, "loop invariant '" + inv.text + "' may not be preserved by an iteration");
                 }
@@ -1201,18 +1328,26 @@ private:
                                            const std::function<void(State&)>& stepFn) {
         const int loopLine = currentLine;
         ContractClauses* contracts = loop.contracts.get();
-        auto invariantsOf = [&](State& state, std::vector<Invariant>& out) {
+        auto invariantsOf = [&](State& state, std::vector<Invariant>& out, bool own) {
             out.push_back({*state.env[counter].e >= start, counter + " >= start of the range", loopLine});
             if (!contracts) return;
+            State scratch = state;
+            scratch.pc = scratch.pc && out.back().condition;
             for (auto& clause : contracts->invariants) {
-                Val v = evalContract(clause.expression.get(), state);
-                if (v.known() && v.sort.isBool) out.push_back({*v.e, clause.text, clause.line});
-                else note(clause.line, "invariant '" + clause.text + "' uses values the verifier does not model");
+                Val v = evalContract(clause.expression.get(), own ? scratch : state, own);
+                if (v.known() && v.sort.isBool) {
+                    out.push_back({*v.e, clause.text, clause.line});
+                    if (own) scratch.pc = scratch.pc && *v.e;
+                }
+                else {
+                    note(clause.line, "invariant '" + clause.text + "' uses values the verifier does not model");
+                }
             }
+            if (own) state.pc = scratch.pc;
         };
         {
             std::vector<Invariant> atEntry;
-            invariantsOf(entry, atEntry);
+            invariantsOf(entry, atEntry, false);
             for (auto& inv : atEntry) {
                 check(entry, inv.condition, inv.line, "loop invariant '" + inv.text + "' may not hold when the loop is entered");
             }
@@ -1223,7 +1358,7 @@ private:
         State head = entry;
         havoc(head, modified);
         std::vector<Invariant> invariants;
-        invariantsOf(head, invariants);
+        invariantsOf(head, invariants, true);
         for (auto& inv : invariants) head.pc = head.pc && inv.condition;
         if ((!contracts || contracts->invariants.empty())) {
             std::string list;
@@ -1235,7 +1370,7 @@ private:
         bodyState.pc = head.pc && *c.e;
         std::optional<z3::expr> measure;
         if (contracts && !contracts->decreases.empty()) {
-            Val d = evalContract(contracts->decreases.front().expression.get(), bodyState);
+            Val d = evalContract(contracts->decreases.front().expression.get(), bodyState, true);
             if (d.known() && !d.sort.isBool) {
                 measure = widen(d, 64);
                 check(bodyState, *measure >= num(0, 64), contracts->decreases.front().line,
@@ -1254,7 +1389,7 @@ private:
                 end.jump = 0;
                 stepFn(end);
                 std::vector<Invariant> after;
-                invariantsOf(end, after);
+                invariantsOf(end, after, false);
                 for (auto& inv : after) {
                     const std::string message = inv.text == counter + " >= start of the range"
                         ? "the loop counter '" + counter + "' may wrap around past the maximum " + sortName({false, width})
@@ -1289,6 +1424,72 @@ void collectFunctions(ASTNode* node, ProgramInfo& info) {
     }
 }
 
+std::vector<FunctionDeclarationNode*> calledFunctions(FunctionDeclarationNode& function, const ProgramInfo& info) {
+    std::vector<FunctionDeclarationNode*> out;
+    auto visit = [&](ASTNode* n, std::unique_ptr<ASTNode>*) {
+        if (auto* call = dynamic_cast<FunctionCallNode*>(n)) {
+            auto it = info.functions.find(call->functionName);
+            if (it != info.functions.end()) {
+                for (auto* candidate : it->second) {
+                    if (candidate->parameters.size() == call->arguments.size()) out.push_back(candidate);
+                }
+            }
+        }
+        return true;
+    };
+    if (function.body) ast_walk::walk(function.body.get(), nullptr, visit);
+    return out;
+}
+
+void buildCallGraph(ProgramInfo& info) {
+    std::map<FunctionDeclarationNode*, std::vector<FunctionDeclarationNode*>> edges;
+    std::vector<FunctionDeclarationNode*> all;
+    for (auto& [name, list] : info.functions) {
+        for (auto* f : list) {
+            all.push_back(f);
+            edges[f] = calledFunctions(*f, info);
+        }
+    }
+    std::map<FunctionDeclarationNode*, int> index;
+    std::map<FunctionDeclarationNode*, int> low;
+    std::set<FunctionDeclarationNode*> onStack;
+    std::vector<FunctionDeclarationNode*> stack;
+    int counter = 0;
+    int components = 0;
+    std::function<void(FunctionDeclarationNode*)> connect = [&](FunctionDeclarationNode* v) {
+        index[v] = low[v] = counter++;
+        stack.push_back(v);
+        onStack.insert(v);
+        for (auto* w : edges[v]) {
+            if (!index.count(w)) {
+                connect(w);
+                low[v] = std::min(low[v], low[w]);
+            }
+            else if (onStack.count(w)) {
+                low[v] = std::min(low[v], index[w]);
+            }
+        }
+        if (low[v] != index[v]) return;
+        std::vector<FunctionDeclarationNode*> members;
+        FunctionDeclarationNode* w = nullptr;
+        do {
+            w = stack.back();
+            stack.pop_back();
+            onStack.erase(w);
+            info.component[w] = components;
+            members.push_back(w);
+        } while (w != v);
+        const bool selfCall = std::find(edges[v].begin(), edges[v].end(), v) != edges[v].end();
+        if (members.size() > 1 || selfCall) {
+            for (auto* m : members) info.recursive.insert(m);
+        }
+        ++components;
+    };
+    for (auto* f : all) {
+        if (!index.count(f)) connect(f);
+    }
+}
+
 bool definedIn(const FunctionDeclarationNode& function, const std::string& mainFile) {
     const SourceLocation location = sourceLocationOf(function.line);
     if (location.file.empty()) return false;
@@ -1301,6 +1502,7 @@ bool definedIn(const FunctionDeclarationNode& function, const std::string& mainF
 int verifyProgram(ASTNode* program, const std::string& mainFile) {
     ProgramInfo info;
     collectFunctions(program, info);
+    buildCallGraph(info);
     z3::context ctx;
     std::vector<Diagnostic> diagnostics;
     int functionCount = 0;

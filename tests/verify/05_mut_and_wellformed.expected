@@ -1,0 +1,11 @@
+﻿05_mut_and_wellformed.csec:15: error: assertion 'x == 1' may fail
+05_mut_and_wellformed.csec:18: error: assertion 'y == 5' may fail
+05_mut_and_wellformed.csec:31: error: assertion 'z == 0' may fail
+05_mut_and_wellformed.csec:36: error: possible division by zero in 'a / b'
+05_mut_and_wellformed.csec:46: error: 'a / b' overflows when dividing the minimum Int by -1
+05_mut_and_wellformed.csec:57: error: possible division by zero in '10 / result'
+05_mut_and_wellformed.csec:59: error: 'badEnsures' may return without satisfying 'ensures 10 / result > 0'
+verified: bump (1 check)
+verified: bigSpec (2 checks)
+verified: useHalf (3 checks)
+verify: 9 function(s), 22 check(s), 7 error(s), 0 warning(s)

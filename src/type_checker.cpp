@@ -832,6 +832,7 @@ void TypeChecker::visit(FunctionDeclarationNode& node) {
     if (node.contracts) {
         // `requires` sees the parameters; `ensures` also sees `result`, the returned value.
         for (auto& clause : node.contracts->requiresClauses) checkContractClause(clause, "requires", true);
+        for (auto& clause : node.contracts->decreases) checkContractClause(clause, "decreases", false);
         cg.symbolTable.enterScope();
         if (node.returnType && !node.returnType->isVoidTy() && node.returnType->getName() != "Unit") {
             bindVariable("result", node.returnType, false);

@@ -44,8 +44,10 @@ syn region  tesseraDslBlock     matchgroup=tesseraDelimiter start=/\<\%(molecule
 syn cluster tesseraDslItems     contains=tesseraDslWord
 
 " ---- contracts (LANGUAGE_SPEC.md 12): `requires x > 0 ensures result >= x` ----
-" A clause runs from its keyword to the body: `{`, a lone `=`, or `;`. `result` is the return value.
-syn region  tesseraContract     matchgroup=tesseraContractKeyword start=/\.\@<!\<\%(requires\|ensures\|invariant\|decreases\)\>\%(\s*[=:,);]\)\@!/ end=/\ze\%({\|;\|[=!<>]\@<!=[=>]\@!\|\<\%(requires\|ensures\|invariant\|decreases\)\>\)/ contains=TOP
+" A clause runs from its keyword to the body: `{`, a lone `=`, `;`, or `%]`. `result` is the return value.
+" `[% ... %]` holds specifications; it is never compiled.
+syn region  tesseraSpecBlock    matchgroup=tesseraContractKeyword start=/\[%/ end=/%]/ contains=TOP
+syn region  tesseraContract     matchgroup=tesseraContractKeyword start=/\.\@<!\<\%(requires\|ensures\|invariant\|decreases\)\>\%(\s*[=:,);]\)\@!/ end=/\ze\%({\|;\|%]\|[=!<>]\@<!=[=>]\@!\|\<\%(requires\|ensures\|invariant\|decreases\)\>\)/ contains=TOP
 syn keyword tesseraResult       result contained containedin=tesseraContract
 
 " ---- types ----

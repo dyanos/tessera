@@ -819,7 +819,7 @@ static size_t csec_lex_operator_width(const std::string& source, size_t index) {
     // the tess lexer's initializeOperators() (src/lexer.cpp); keep the three in sync. Single-character
     // operators are handled separately by the caller.
     static const char* const operators[] = {
-        "[@", "=>", "<-", "->", "<=", ">=", "==", "&&", "||", "++", "--",
+        "[@", "[%", "%]", "=>", "<-", "->", "<=", ">=", "==", "&&", "||", "++", "--",
         "!=", "+=", "-=", "*=", "/=", "%=", "<<", ">>", "..", "$$", "**"
     };
     for (const char* op : operators) {
@@ -877,22 +877,34 @@ static char* csec_strip_contract_clauses(char* tokens) {
     auto clauseWord = [&](size_t i, bool function) {
         if (i >= items.size() || items[i].first != 'I') return false;
         const std::string& t = items[i].second;
-        return function ? (t == "requires" || t == "ensures") : (t == "invariant" || t == "decreases");
+        return function ? (t == "requires" || t == "ensures" || t == "decreases") : (t == "invariant" || t == "decreases");
     };
     // Drops the clauses starting at `i`; returns the index of the body ('{' or, for functions, '=').
     std::vector<bool> keep(items.size(), true);
     bool stripped = false;
+    for (size_t i = 0; i < items.size(); ++i) {
+        if (!is(i, 'O', "[%")) continue;
+        stripped = true;
+        for (; i < items.size() && !is(i, 'O', "%]"); ++i) keep[i] = false;
+        if (i < items.size()) keep[i] = false;
+    }
+    auto skipDropped = [&](size_t i) {
+        while (i < items.size() && !keep[i]) ++i;
+        return i;
+    };
     auto dropClauses = [&](size_t i, bool function) {
+        i = skipDropped(i);
         while (clauseWord(i, function)) {
             int depth = 0;
             keep[i++] = false;
             stripped = true;
             for (; i < items.size(); ++i) {
-                if (depth == 0 && (clauseWord(i, function) || is(i, 'O', "{") || (function && is(i, 'O', "=")))) break;
+                if (depth == 0 && (clauseWord(i, function) || is(i, 'O', "{") || is(i, 'O', "[%") || (function && is(i, 'O', "=")))) break;
                 if (is(i, 'O', "(") || is(i, 'O', "[")) ++depth;
                 else if ((is(i, 'O', ")") || is(i, 'O', "]")) && depth > 0) --depth;
                 keep[i] = false;
             }
+            i = skipDropped(i);
         }
     };
     for (size_t i = 0; i < items.size(); ++i) {
@@ -905,7 +917,7 @@ static char* csec_strip_contract_clauses(char* tokens) {
                 // Skip the return type: up to the body or a clause word, outside brackets.
                 int depth = 0;
                 for (++j; j < items.size(); ++j) {
-                    if (depth == 0 && (is(j, 'O', "{") || is(j, 'O', "=") || is(j, 'O', ";") || clauseWord(j, true))) break;
+                    if (depth == 0 && (is(j, 'O', "{") || is(j, 'O', "=") || is(j, 'O', ";") || is(j, 'O', "[%") || clauseWord(j, true))) break;
                     if (is(j, 'O', "(") || is(j, 'O', "[") || is(j, 'O', "<")) ++depth;
                     else if ((is(j, 'O', ")") || is(j, 'O', "]") || is(j, 'O', ">")) && depth > 0) --depth;
                     else if (is(j, 'O', ">>")) depth = depth > 1 ? depth - 2 : 0;
