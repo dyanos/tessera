@@ -1,0 +1,79 @@
+def fact(n: Int): Long
+[%
+    requires 0 <= n and n <= 20
+    ensures positive: result >= 1
+    decreases n
+%]
+{
+    if (n == 0) { return 1; }
+    return n * fact(n - 1);
+}
+
+def bad(n: Int): Int
+[%
+    requires n >= 0;
+    decreases n;
+%]
+{
+    if (n == 0) { return 0; }
+    return bad(n + 1);
+}
+
+def isEven(n: Int): Bool
+    requires n >= 0
+    [% decreases n %]
+{
+    if (n == 0) { return true; }
+    return isOdd(n - 1);
+}
+
+def isOdd(n: Int): Bool
+[% requires n >= 0 decreases n %]
+{
+    if (n == 0) { return false; }
+    return isEven(n - 1);
+}
+
+def ack(m: Int, n: Int): Int
+[%
+    requires m >= 0 and n >= 0 and m <= 3 and n <= 3
+    decreases m
+    decreases n
+%]
+{
+    if (m == 0) { return n + 1; }
+    if (n == 0) { return ack(m - 1, 1); }
+    return ack(m - 1, ack(m, n - 1));
+}
+
+def noMeasure(n: Int): Int {
+    if (n <= 0) { return 0; }
+    return noMeasure(n - 1);
+}
+
+def named(x: Int): Int
+[%
+    requires small: x < 1000
+    ensures twice: result == 2 * x + 1
+%] = x * 2
+
+def sumTo(n: Int): Int
+    requires 0 <= n and n <= 10000
+    ensures result == n * (n + 1) / 2
+{
+    var s = 0;
+    var i = 0;
+    while (i < n) [%
+        invariant 0 <= i and i <= n
+        invariant s == i * (i + 1) / 2
+        decreases n - i
+    %] {
+        i = i + 1;
+        s = s + i;
+    }
+    return s;
+}
+
+def main(): Int {
+    return named(3) + sumTo(4);
+}

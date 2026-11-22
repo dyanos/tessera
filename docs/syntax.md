@@ -167,6 +167,23 @@ def main(): Int {
 }
 ```
 
+Long specifications go in a `[% ... %]` block between the signature and the body; everything in
+it is specification only. Clauses can be named, and `decreases` on a function proves that its
+recursion ends:
+
+```ts
+def fact(n: Int): Long
+[%
+    requires 0 <= n and n <= 20
+    ensures positive: result >= 1
+    decreases n
+%]
+{
+    if (n == 0) { return 1; }
+    return n * fact(n - 1);
+}
+```
+
 It also reports division by zero, `if` conditions that are always true or false, calls that break
 a callee's `requires`, and contradictory `requires`. By default every integer operation must stay
 in its type's range; `--verify-wrap` uses wrap-around arithmetic instead. The clauses are not

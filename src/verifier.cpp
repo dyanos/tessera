@@ -195,6 +195,13 @@ struct State {
 
 struct ProgramInfo {
     std::map<std::string, std::vector<FunctionDeclarationNode*>> functions;
+    std::map<const FunctionDeclarationNode*, int> component;
+    std::set<const FunctionDeclarationNode*> recursive;
+    bool sameComponent(const FunctionDeclarationNode* a, const FunctionDeclarationNode* b) const {
+        auto x = component.find(a);
+        auto y = component.find(b);
+        return x != component.end() && y != component.end() && x->second == y->second;
+    }
 };
 
 const std::string* mutableArgument(ASTNode* node) {
@@ -282,6 +289,21 @@ public:
             }
         }
 
+        if (function.contracts && !function.contracts->decreases.empty()) {
+            for (auto& clause : function.contracts->decreases) {
+                Val d = evalContract(clause.expression.get(), start, true);
+                if (!d.known() || d.sort.isBool) {
+                    note(clause.line, "'decreases " + clause.text + "' uses values the verifier does not model");
+                    entryMeasures.clear();
+                    break;
+                }
+                entryMeasures.push_back(widen(d, 64));
+            }
+        }
+        else if (program.recursive.count(&function)) {
+            note(function.line, "'" + function.name + "' is recursive and has no decreases clause; its termination is not checked");
+        }
+
         std::vector<State> ends = execBlock(function.body.get(), {start});
         // Falling off the end of the body: for a Unit function this is the return.
         for (auto& s : ends) {
@@ -297,6 +319,8 @@ private:
     FunctionDeclarationNode& function;
     std::vector<Diagnostic>& diagnostics;
     std::vector<std::pair<std::string, z3::expr>> parameterValues;
+    std::vector<z3::expr> entryMeasures;
+    std::set<const FunctionDeclarationNode*> expanding;
     std::vector<z3::expr> background;  // range facts of every introduced integer
     Sort returnSort;
     int currentLine = 0;
@@ -517,9 +541,6 @@ private:
 
     // ---- expressions ----
 
-    // A specification is evaluated with mathematical integers (no overflow checks). The function's own
-    // clauses must also be well defined (no division by zero, the requires of the functions they call);
-    // a callee's clauses evaluated at a call site were checked where the callee is defined.
     Val evalContract(ASTNode* node, State& s, bool own = false) {
         const bool savedSuppress = suppressSideChecks;
         const bool savedContract = contractMode;
@@ -789,10 +810,12 @@ private:
         }
         if (callee->returnType) resultSort = sortOf(callee->returnType.get());
         Val result = unknown(resultSort, call.functionName);
-        if (!callee->contracts) {
+        if (!contractMode) checkRecursiveCall(call, *callee, arguments, s);
+        if (!callee->contracts || expanding.count(callee)) {
             havocMutableArguments(call.arguments, s);
             return result;
         }
+        expanding.insert(callee);
 
         // Evaluate the callee's clauses with its parameters bound to the arguments.
         State calleeState(ctx);
@@ -817,8 +840,6 @@ private:
                   "call '" + exprText(&call) + "' may violate the requirement '" + clause.text + "' of '" +
                   callee->name + "'");
         }
-        // A `&mut` argument may be changed by the callee: after the call it has a new value, known only
-        // through the callee's ensures.
         std::vector<std::pair<std::string, Val>> written;
         for (size_t i = 0; i < callee->parameters.size() && i < call.arguments.size(); ++i) {
             const std::string* name = mutableArgument(call.arguments[i].get());
@@ -833,6 +854,7 @@ private:
             Val c = evalContract(clause.expression.get(), calleeState);
             if (c.known() && c.sort.isBool) s.pc = s.pc && *c.e;
         }
+        expanding.erase(callee);
         for (const auto& [name, after] : written) {
             auto it = s.env.find(name);
             if (it == s.env.end()) continue;
@@ -843,6 +865,53 @@ private:
             it->second = stored;
         }
         return result;
+    }
+
+    State bindParameters(const FunctionDeclarationNode& callee, const std::vector<Val>& arguments, const State& s) {
+        State bound(ctx);
+        bound.pc = s.pc;
+        for (size_t i = 0; i < callee.parameters.size(); ++i) {
+            auto* p = dynamic_cast<ParameterNode*>(callee.parameters[i].get());
+            if (!p) continue;
+            const Sort sort = sortOf(p->type.get());
+            Val v;
+            v.sort = sort;
+            if (i < arguments.size()) {
+                if (auto converted = convert(arguments[i], sort)) v.e = *converted;
+            }
+            if (!v.e && sort.supported()) v.e = fresh(sort, p->name);
+            bound.env[p->name] = v;
+        }
+        return bound;
+    }
+
+    z3::expr lexLess(const std::vector<z3::expr>& next, const std::vector<z3::expr>& old, size_t i = 0) {
+        const z3::expr smaller = next[i] >= num(0, 64) && next[i] < old[i];
+        if (i + 1 == next.size()) return smaller;
+        return smaller || (next[i] == old[i] && lexLess(next, old, i + 1));
+    }
+
+    void checkRecursiveCall(FunctionCallNode& call, const FunctionDeclarationNode& callee, const std::vector<Val>& arguments,
+                            const State& s) {
+        if (suppressSideChecks || !program.sameComponent(&function, &callee)) return;
+        if (!function.contracts || function.contracts->decreases.empty() || entryMeasures.empty()) return;
+        const std::string text = exprText(&call);
+        if (!callee.contracts || callee.contracts->decreases.size() != function.contracts->decreases.size()) {
+            error(currentLine, "the recursive call '" + text + "' cannot be checked for termination: '" + callee.name +
+                               "' needs as many decreases measures as '" + function.name + "'");
+            return;
+        }
+        State calleeState = bindParameters(callee, arguments, s);
+        std::vector<z3::expr> next;
+        for (auto& clause : callee.contracts->decreases) {
+            Val d = evalContract(clause.expression.get(), calleeState);
+            if (!d.known() || d.sort.isBool) return;
+            next.push_back(widen(d, 64));
+        }
+        std::string measures;
+        for (auto& clause : function.contracts->decreases) measures += (measures.empty() ? "" : ", ") + clause.text;
+        check(s, lexLess(next, entryMeasures), currentLine,
+              "the recursive call '" + text + "' may not decrease 'decreases " + measures + "' (the recursion may not terminate)");
     }
 
     void havocMutableArguments(const std::vector<std::unique_ptr<ASTNode>>& arguments, State& s) {
@@ -1355,6 +1424,72 @@ void collectFunctions(ASTNode* node, ProgramInfo& info) {
     }
 }
 
+std::vector<FunctionDeclarationNode*> calledFunctions(FunctionDeclarationNode& function, const ProgramInfo& info) {
+    std::vector<FunctionDeclarationNode*> out;
+    auto visit = [&](ASTNode* n, std::unique_ptr<ASTNode>*) {
+        if (auto* call = dynamic_cast<FunctionCallNode*>(n)) {
+            auto it = info.functions.find(call->functionName);
+            if (it != info.functions.end()) {
+                for (auto* candidate : it->second) {
+                    if (candidate->parameters.size() == call->arguments.size()) out.push_back(candidate);
+                }
+            }
+        }
+        return true;
+    };
+    if (function.body) ast_walk::walk(function.body.get(), nullptr, visit);
+    return out;
+}
+
+void buildCallGraph(ProgramInfo& info) {
+    std::map<FunctionDeclarationNode*, std::vector<FunctionDeclarationNode*>> edges;
+    std::vector<FunctionDeclarationNode*> all;
+    for (auto& [name, list] : info.functions) {
+        for (auto* f : list) {
+            all.push_back(f);
+            edges[f] = calledFunctions(*f, info);
+        }
+    }
+    std::map<FunctionDeclarationNode*, int> index;
+    std::map<FunctionDeclarationNode*, int> low;
+    std::set<FunctionDeclarationNode*> onStack;
+    std::vector<FunctionDeclarationNode*> stack;
+    int counter = 0;
+    int components = 0;
+    std::function<void(FunctionDeclarationNode*)> connect = [&](FunctionDeclarationNode* v) {
+        index[v] = low[v] = counter++;
+        stack.push_back(v);
+        onStack.insert(v);
+        for (auto* w : edges[v]) {
+            if (!index.count(w)) {
+                connect(w);
+                low[v] = std::min(low[v], low[w]);
+            }
+            else if (onStack.count(w)) {
+                low[v] = std::min(low[v], index[w]);
+            }
+        }
+        if (low[v] != index[v]) return;
+        std::vector<FunctionDeclarationNode*> members;
+        FunctionDeclarationNode* w = nullptr;
+        do {
+            w = stack.back();
+            stack.pop_back();
+            onStack.erase(w);
+            info.component[w] = components;
+            members.push_back(w);
+        } while (w != v);
+        const bool selfCall = std::find(edges[v].begin(), edges[v].end(), v) != edges[v].end();
+        if (members.size() > 1 || selfCall) {
+            for (auto* m : members) info.recursive.insert(m);
+        }
+        ++components;
+    };
+    for (auto* f : all) {
+        if (!index.count(f)) connect(f);
+    }
+}
+
 bool definedIn(const FunctionDeclarationNode& function, const std::string& mainFile) {
     const SourceLocation location = sourceLocationOf(function.line);
     if (location.file.empty()) return false;
@@ -1367,6 +1502,7 @@ bool definedIn(const FunctionDeclarationNode& function, const std::string& mainF
 int verifyProgram(ASTNode* program, const std::string& mainFile) {
     ProgramInfo info;
     collectFunctions(program, info);
+    buildCallGraph(info);
     z3::context ctx;
     std::vector<Diagnostic> diagnostics;
     int functionCount = 0;

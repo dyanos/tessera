@@ -1,0 +1,13 @@
+﻿06_spec_blocks_and_recursion.csec:9: error: 'n * fact(n - 1)' may overflow Long
+06_spec_blocks_and_recursion.csec:19: error: 'n + 1' may overflow Int
+06_spec_blocks_and_recursion.csec:19: error: the recursive call 'bad(n + 1)' may not decrease 'decreases n' (the recursion may not terminate)
+06_spec_blocks_and_recursion.csec:46: error: call 'ack(m - 1, ack(m, n - 1))' may violate the requirement 'm >= 0 and n >= 0 and m <= 3 and n <= 3' of 'ack'
+06_spec_blocks_and_recursion.csec:49: note: 'noMeasure' is recursive and has no decreases clause; its termination is not checked
+06_spec_blocks_and_recursion.csec:54: error: 'x * 2' may overflow Int
+06_spec_blocks_and_recursion.csec:54: error: 'named' may return without satisfying 'ensures twice: result == 2 * x + 1'
+verified: isEven (3 checks)
+verified: isOdd (3 checks)
+verified: noMeasure (1 check)
+verified: sumTo (11 checks)
+verified: main (3 checks)
+verify: 9 function(s), 42 check(s), 6 error(s), 0 warning(s)
