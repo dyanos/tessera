@@ -184,6 +184,26 @@ def fact(n: Int): Long
 }
 ```
 
+A top-level `[% ... %]` declares specification functions (their body is their definition) and
+lemmas (facts proved once and used by calling them in ghost code); a `[% ... %]` statement in a
+body is ghost code that only the verifier runs:
+
+```ts
+[%
+    def tri(n: Int): Int [% requires n >= 0; decreases n %] {
+        return if (n == 0) { 0 } else { n + tri(n - 1) };
+    }
+    lemma triFormula(n: Int) [% requires n >= 0; ensures 2 * tri(n) == n * (n + 1); decreases n %] {
+        if (n > 0) { triFormula(n - 1); }
+    }
+%]
+
+def closedForm(n: Int): Int [% requires 0 <= n and n <= 1000; ensures result == tri(n) %] {
+    [% triFormula(n); %]
+    return n * (n + 1) / 2;
+}
+```
+
 It also reports division by zero, `if` conditions that are always true or false, calls that break
 a callee's `requires`, and contradictory `requires`. By default every integer operation must stay
 in its type's range; `--verify-wrap` uses wrap-around arithmetic instead. The clauses are not

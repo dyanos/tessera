@@ -81,8 +81,10 @@ struct ContractClauses {
     std::vector<ContractClause> ensuresClauses;
     std::vector<ContractClause> invariants;
     std::vector<ContractClause> decreases;
+    std::vector<std::shared_ptr<ASTNode>> definitions;
     bool empty() const {
-        return requiresClauses.empty() && ensuresClauses.empty() && invariants.empty() && decreases.empty();
+        return requiresClauses.empty() && ensuresClauses.empty() && invariants.empty() && decreases.empty() &&
+               definitions.empty();
     }
 };
 

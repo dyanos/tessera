@@ -44,6 +44,8 @@ public:
         isAsync = other.isAsync;
         isIntrinsic = other.isIntrinsic;
         isOverride = other.isOverride;
+        isSpecification = other.isSpecification;
+        isLemma = other.isLemma;
         dllImportLibrary = other.dllImportLibrary;
         externalSymbolName = other.externalSymbolName;
     }
@@ -62,6 +64,8 @@ public:
             isConstexpr = other.isConstexpr;
             isUnsafe = other.isUnsafe;
             isOverride = other.isOverride;
+            isSpecification = other.isSpecification;
+            isLemma = other.isLemma;
             dllImportLibrary = other.dllImportLibrary;
             externalSymbolName = other.externalSymbolName;
         }
@@ -69,6 +73,8 @@ public:
     }
 
     bool isExternal = false;
+    bool isSpecification = false;
+    bool isLemma = false;
     bool isConstexpr = false;
     bool isUnsafe = false;
     bool isAsync = false;

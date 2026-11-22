@@ -1,0 +1,94 @@
+[%
+    def square(x: Int): Int = x * x
+
+    def tri(n: Int): Int
+    [%
+        requires n >= 0
+        decreases n
+    %]
+    {
+        return if (n == 0) { 0 } else { n + tri(n - 1) };
+    }
+
+    def loops(n: Int): Int = loops(n) + 1
+
+    def multi(n: Int): Int {
+        val k = n + 1;
+        return k;
+    }
+
+    lemma wrong(n: Int) [% requires n >= 0 ensures tri(n) == n %] { }
+
+    lemma triFormula(n: Int)
+    [%
+        requires n >= 0
+        ensures 2 * tri(n) == n * (n + 1)
+        decreases n
+    %]
+    {
+        if (n > 0) {
+            triFormula(n - 1);
+        }
+    }
+%]
+
+def sq(x: Int): Int
+    requires -1000 <= x and x <= 1000
+    ensures result == square(x)
+{
+    return x * x;
+}
+
+def sumTo(n: Int): Int
+[%
+    requires 0 <= n and n <= 1000
+    ensures result == tri(n)
+%]
+{
+    var s = 0;
+    var i = 0;
+    while (i < n) [%
+        invariant 0 <= i and i <= n
+        invariant s == tri(i)
+        invariant bounded: 0 <= s and s <= i * 1000
+    %] {
+        i = i + 1;
+        s = s + i;
+    }
+    return s;
+}
+
+def closedForm(n: Int): Int
+[%
+    requires 0 <= n and n <= 1000
+    ensures result == tri(n)
+%]
+{
+    [% triFormula(n); %]
+    return n * (n + 1) / 2;
+}
+
+def withGhost(n: Int): Int
+[%
+    requires 0 <= n and n <= 100
+    ensures result == 2 * n
+    def twice(k: Int): Int = k + k
+%]
+{
+    var r = 0;
+    var i = 0;
+    [% var steps = 0; %]
+    while (i < n) [%
+        invariant 0 <= i and i <= n and r == twice(i) and steps == i
+    %] {
+        r = r + 2;
+        i = i + 1;
+        [% steps = steps + 1; %]
+    }
+    [% assert(steps == n); %]
+    return r;
+}
+
+def main(): Int {
+    return sq(3) + sumTo(4) + closedForm(4) + withGhost(5);
+}

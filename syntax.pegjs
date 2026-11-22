@@ -82,7 +82,13 @@ ContractClause
   = ("requires" / "ensures" / "decreases") __ (Identifier _ ":" _)? Expression
 
 FunctionSpecBlock
-  = "[%" _ (ContractClause _ (";" _)?)* "%]"
+  = "[%" _ ((ContractClause / "def" __ FunctionRest) _ (";" _)?)* "%]"
+
+SpecificationDeclarations
+  = "[%" _ (("def" / "lemma") __ FunctionRest _ (";" _)?)* "%]"
+
+GhostBlock
+  = "[%" _ Statement* _ "%]"
 
 LoopSpec
   = ("invariant" / "decreases") __ (Identifier _ ":" _)? Expression

@@ -39,6 +39,8 @@ private:
     // written inline or inside `[% ... %]` blocks.
     void parseContractClauses(ASTNode& node, bool functionClauses);
     void parseContractClauseList(ASTNode& node, bool functionClauses);
+    void parseSpecificationDeclarations(std::vector<std::unique_ptr<ASTNode>>& out);
+    std::unique_ptr<ASTNode> parseGhostBlock();
     std::unique_ptr<ASTNode> parseStatementWithoutLine();
     bool matchIdentifierName();
     // A member or method name: an identifier, or a keyword after '.' / 'def' (`frame.filter(...)`).

@@ -12,6 +12,7 @@ public:
 			statements.push_back(stmt->clone());
         }
         isUnsafeContext = other.isUnsafeContext;
+        isSpecification = other.isSpecification;
         isUnatomic = other.isUnatomic;
 		nodeType = ASTNodeType::BLOCK;
 	}
@@ -23,6 +24,7 @@ public:
                 statements.push_back(stmt ? stmt->clone() : nullptr);
             }
             isUnsafeContext = other.isUnsafeContext;
+            isSpecification = other.isSpecification;
             isUnatomic = other.isUnatomic;
             nodeType = ASTNodeType::BLOCK;
         }
@@ -31,6 +33,7 @@ public:
 
     std::vector<std::unique_ptr<ASTNode>> statements;
     bool isUnsafeContext = false;
+    bool isSpecification = false;
     bool isUnatomic = false;
 
     void accept(ASTVisitor& visitor) override;

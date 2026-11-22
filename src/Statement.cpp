@@ -27,6 +27,15 @@ void Parser::parseContractClauses(ASTNode& node, bool functionClauses) {
 	while (match(TokenType::OPERATOR, "[%")) {
 		while (!isAtEnd() && !check(TokenType::OPERATOR, "%]")) {
 			if (match(TokenType::OPERATOR, ";")) continue;
+			if (functionClauses && match(TokenType::KEYWORD, "def")) {
+				auto definition = parseFunctionDeclaration();
+				if (definition) {
+					definition->isSpecification = true;
+					if (!node.contracts) node.contracts = std::make_shared<ContractClauses>();
+					node.contracts->definitions.push_back(std::shared_ptr<ASTNode>(std::move(definition)));
+				}
+				continue;
+			}
 			const size_t before = position;
 			parseContractClauseList(node, functionClauses);
 			if (position == before) {
@@ -38,6 +47,45 @@ void Parser::parseContractClauses(ASTNode& node, bool functionClauses) {
 		expect(TokenType::OPERATOR, "%]");
 		parseContractClauseList(node, functionClauses);
 	}
+}
+
+void Parser::parseSpecificationDeclarations(std::vector<std::unique_ptr<ASTNode>>& out) {
+	expect(TokenType::OPERATOR, "[%");
+	while (!isAtEnd() && !check(TokenType::OPERATOR, "%]")) {
+		if (match(TokenType::OPERATOR, ";")) continue;
+		bool lemma = false;
+		if (checkWord("lemma") && position + 1 < tokens.size() &&
+		    (tokens[position + 1].type == TokenType::IDENTIFIER || tokens[position + 1].type == TokenType::KEYWORD)) {
+			advance();
+			lemma = true;
+		}
+		else if (!match(TokenType::KEYWORD, "def")) {
+			error("Expected 'def' or 'lemma' in a top-level '[% ... %]', found '" + peek().value + "'");
+			advance();
+			continue;
+		}
+		auto function = parseFunctionDeclaration();
+		if (!function) continue;
+		function->isSpecification = true;
+		function->isLemma = lemma;
+		out.push_back(std::move(function));
+	}
+	expect(TokenType::OPERATOR, "%]");
+}
+
+std::unique_ptr<ASTNode> Parser::parseGhostBlock() {
+	const int line = peek().line;
+	expect(TokenType::OPERATOR, "[%");
+	auto block = std::make_unique<BlockNode>();
+	block->isSpecification = true;
+	block->line = line;
+	while (!isAtEnd() && !check(TokenType::OPERATOR, "%]")) {
+		if (match(TokenType::OPERATOR, ";")) continue;
+		auto statement = parseStatement();
+		if (statement) block->statements.push_back(std::move(statement));
+	}
+	expect(TokenType::OPERATOR, "%]");
+	return block;
 }
 
 void Parser::parseContractClauseList(ASTNode& node, bool functionClauses) {
@@ -58,11 +106,17 @@ void Parser::parseContractClauseList(ASTNode& node, bool functionClauses) {
 		// Not parseExpression(): in `def f(): Int requires x > 0 = body` the '=' starts the body.
 		clause.expression = parsePipelineExpression();
 		clause.line = line;
+		const Token* before = nullptr;
 		for (size_t i = first; i < position && i < tokens.size(); ++i) {
 			const Token& t = tokens[i];
 			if (t.type == TokenType::COMMENT) continue;
-			if (!clause.text.empty()) clause.text += " ";
+			const bool closing = t.type == TokenType::OPERATOR && (t.value == ")" || t.value == "]" || t.value == ",");
+			const bool opening = before && before->type == TokenType::OPERATOR && (before->value == "(" || before->value == "[");
+			const bool call = before && t.type == TokenType::OPERATOR && (t.value == "(" || t.value == "[") &&
+			                  (before->type == TokenType::IDENTIFIER || before->value == ")" || before->value == "]");
+			if (before && !closing && !opening && !call) clause.text += " ";
 			clause.text += t.type == TokenType::STRING_LITERAL ? "\"" + t.value + "\"" : t.value;
+			before = &t;
 		}
 		if (!clause.name.empty()) clause.text = clause.name + ": " + clause.text;
 		if (clause.expression) clause.expression->line = line;
@@ -75,6 +129,7 @@ void Parser::parseContractClauseList(ASTNode& node, bool functionClauses) {
 }
 
 std::unique_ptr<ASTNode> Parser::parseStatementWithoutLine() {
+	if (check(TokenType::OPERATOR, "[%")) return parseGhostBlock();
 	bool isConstexpr = false;
 	if (check(TokenType::KEYWORD, "constexpr")) {
 		isConstexpr = true;
