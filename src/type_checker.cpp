@@ -567,6 +567,7 @@ void TypeChecker::checkOwnedValueUse(ASTNode* node, const std::string& context) 
 }
 
 void TypeChecker::markMoved(const std::string& name) {
+    if (specificationDepth > 0) return;
     auto* state = findOwnership(name);
     if (!state) return;
     if (!state->borrows.empty()) {
@@ -682,6 +683,8 @@ void TypeChecker::checkTypeResolved(const std::unique_ptr<Type>& type, const std
 }
 
 void TypeChecker::visit(VariableDeclarationNode& node) {
+    if (specificationDepth > 0) ghostVariables.insert(node.name);
+    else ghostVariables.erase(node.name);
     if (node.initializer) {
         // `val d: Dict<K, V> = {...}` (including an empty `{}`) takes its type from the annotation.
         if (auto* dictLiteral = dynamic_cast<DictLiteralNode*>(node.initializer.get())) {
@@ -811,6 +814,9 @@ void TypeChecker::visit(VariableDeclarationNode& node) {
 
 void TypeChecker::visit(FunctionDeclarationNode& node) {
     auto& cg = CodeGenerator::getInstance();
+    if (node.isSpecification) ++specificationDepth;
+    std::set<std::string> savedGhostVariables = std::move(ghostVariables);
+    ghostVariables.clear();
     auto* functionSymbol = ensureFunctionSymbol(node);
     auto* savedCurrentSymbol = cg.symbolTable.getCurrentSymbol();
     cg.symbolTable.saveCurrentSymbol();
@@ -830,6 +836,12 @@ void TypeChecker::visit(FunctionDeclarationNode& node) {
     }
 
     if (node.contracts) {
+        for (auto& definition : node.contracts->definitions) {
+            auto* local = dynamic_cast<FunctionDeclarationNode*>(definition.get());
+            if (!local) continue;
+            specificationFunctions.insert(local->name);
+            local->accept(*this);
+        }
         // `requires` sees the parameters; `ensures` also sees `result`, the returned value.
         for (auto& clause : node.contracts->requiresClauses) checkContractClause(clause, "requires", true);
         for (auto& clause : node.contracts->decreases) checkContractClause(clause, "decreases", false);
@@ -899,6 +911,8 @@ void TypeChecker::visit(FunctionDeclarationNode& node) {
     cg.symbolTable.exitScope();
     cg.symbolTable.popCurrentSymbol();
     cg.symbolTable.setCurrentSymbol(savedCurrentSymbol);
+    ghostVariables = std::move(savedGhostVariables);
+    if (node.isSpecification) --specificationDepth;
 }
 
 void TypeChecker::visit(ExpressionNode& node) {
@@ -1061,6 +1075,7 @@ void TypeChecker::visit(ProgramNode& node) {
         if (!stmtNode) continue;
 
         if (auto* functionNode = dynamic_cast<FunctionDeclarationNode*>(stmtNode)) {
+            if (functionNode->isSpecification) specificationFunctions.insert(functionNode->name);
             ensureFunctionSymbol(*functionNode);
         }
         else if (auto* classNode = dynamic_cast<ClassDeclarationNode*>(stmtNode)) {
@@ -1367,6 +1382,17 @@ void TypeChecker::visit(ReturnStatementNode& node) {
 
 void TypeChecker::visit(BlockNode& node) {
     auto& cg = CodeGenerator::getInstance();
+    if (node.isSpecification) {
+        ++specificationDepth;
+        for (auto& stmt : node.statements) {
+            if (!stmt) continue;
+            if (stmt->line > 0) currentLine = stmt->line;
+            stmt->accept(*this);
+        }
+        --specificationDepth;
+        node.type = std::make_unique<BasicType>("Unit");
+        return;
+    }
     cg.symbolTable.enterScope();
     enterOwnershipScope();
     if (node.isUnsafeContext) {
@@ -2167,6 +2193,9 @@ static bool isIntegerLiteralText(const std::string& text) {
 }
 
 void TypeChecker::visit(IdentifierNode& node) {
+    if (specificationDepth == 0 && ghostVariables.count(node.value)) {
+        reportError("Type error: the ghost variable '" + node.value + "' exists only in specifications; compiled code cannot use it");
+    }
     checkIdentifierUse(node.value);
     auto* symbol = CodeGenerator::getInstance().symbolTable.lookup(node.value);
     if (!symbol) {
@@ -2195,6 +2224,9 @@ void TypeChecker::visit(ValueNode& node) {
 }
 
 void TypeChecker::visit(FunctionCallNode& node) {
+    if (specificationDepth == 0 && specificationFunctions.count(node.functionName)) {
+        reportError("Type error: '" + node.functionName + "' is declared in '[% ... %]', so only specifications can call it");
+    }
     static int callDepth = 0;
     static bool callNestingExceeded = false;
     if (callNestingExceeded) return;
@@ -2520,6 +2552,13 @@ void TypeChecker::visit(ArrayCreationExpressionNode& node) {
 }
 
 void TypeChecker::visit(AssignmentExpressionNode& node) {
+    if (specificationDepth > 0) {
+        auto* target = dynamic_cast<IdentifierNode*>(node.left.get());
+        if (!target || !ghostVariables.count(target->value)) {
+            reportError("Type error: specification code can assign only its own ghost variables, not '" +
+                        (target ? target->value : std::string("this target")) + "'");
+        }
+    }
     if (node.left) {
         node.left->accept(*this);
     }
@@ -2880,7 +2919,9 @@ void TypeChecker::visit(FilterStatementNode& node) {
 
 void TypeChecker::checkContractClause(ContractClause& clause, const std::string& kind, bool boolean) {
     if (!clause.expression) return;
+    ++specificationDepth;
     clause.expression->accept(*this);
+    --specificationDepth;
     auto clauseType = clause.expression->getType();
     if (!isResolvedType(clauseType)) return;
     const bool isBool = clauseType->getName() == "Boolean" || clauseType->getName() == "Bool";

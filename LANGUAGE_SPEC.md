@@ -660,7 +660,62 @@ fail). No code is generated in this mode.
 - `--verify-timeout <ms>` sets the per-check solver time limit (default 10000). A check the solver
   cannot decide in time is reported as an error with "could not decide"; nothing is assumed proven.
 
-### 12.3 Modelled fragment
+### 12.3 Specification functions, lemmas, and ghost code
+
+A `[% ... %]` block can also hold specification-only declarations and statements:
+
+```
+spec-decls = '[%' { ( 'def' | 'lemma' ) fn-decl-rest } '%]' ;   (* at the top level *)
+fn-spec    = '[%' { contract [ ';' ] | 'def' fn-decl-rest } '%]' ;
+ghost      = '[%' { statement } '%]' ;                          (* as a statement *)
+```
+
+- **Specification functions.** A `def` in a top-level `[% ... %]` is a specification function. Its
+  body must be a single expression (`= e` or `{ return e; }`, branching with `if (c) { a } else
+  { b }`), and it is the function's definition: the verifier knows `f(x)` exactly, not only through
+  an `ensures`. Integers in it are mathematical (no overflow). A recursive specification function
+  needs `decreases`; without it the definition could contradict itself, so it is an error and the
+  function is treated as unknown. A `def` inside a function's `[% ... %]` is local to that
+  function's clauses and ghost code and may use the function's parameters.
+- **Lemmas.** `lemma name(params) [% requires ... ensures ... decreases ... %] { ... }` declares a
+  fact (`ensures`) under assumptions (`requires`); its body, ghost code, is the proof and is
+  verified like a function body. Calling a lemma in ghost code checks its `requires` and adds its
+  `ensures` as a fact. A lemma that calls itself is a proof by induction; its `decreases` makes
+  sure the induction is well founded.
+- **Ghost code.** A `[% ... %]` statement inside a function body runs only in the verifier:
+  `var`/`val` declarations (ghost variables, which stay visible after the block), assignments to
+  ghost variables, `assert`, `if`, and lemma calls. Ghost code cannot assign variables of the
+  compiled program, and compiled code cannot read ghost variables.
+
+Only specifications (clauses, specification functions, lemmas, ghost code) may call a
+specification function or a lemma. An ordinary function may be called from a specification too,
+but its result is known only through its `ensures`. The compiler checks the types of all
+specification code and then removes it; it never reaches code generation.
+
+```csec
+[%
+    def tri(n: Int): Int
+    [% requires n >= 0; decreases n %]
+    {
+        return if (n == 0) { 0 } else { n + tri(n - 1) };
+    }
+
+    lemma triFormula(n: Int)
+    [% requires n >= 0; ensures 2 * tri(n) == n * (n + 1); decreases n %]
+    {
+        if (n > 0) { triFormula(n - 1); }
+    }
+%]
+
+def closedForm(n: Int): Int
+[% requires 0 <= n and n <= 1000; ensures result == tri(n) %]
+{
+    [% triFormula(n); %]
+    return n * (n + 1) / 2;
+}
+```
+
+### 12.4 Modelled fragment
 
 Modelled: `Int`, `Long`, `Short`, `Byte`, `Char`, `Bool` locals and parameters; literals;
 arithmetic, comparison, logical (`and`, `or`, `!`, `implies`, `iff`, `xor`), and bitwise operators;
@@ -670,7 +725,7 @@ methods, fields, collections, globals) is an unknown value: the verifier may the
 it cannot prove, but it never proves a false property. Such places are listed as notes. Methods of
 classes and structs are not verified yet.
 
-### 12.4 Building with Z3
+### 12.5 Building with Z3
 
 Z3 is an external C++ library. `scripts/fetch_z3.ps1` (Windows) or `scripts/fetch_z3.sh` (macOS,
 Linux) downloads the official release into `deps/z3` (the Windows script checks its SHA-256); CMake

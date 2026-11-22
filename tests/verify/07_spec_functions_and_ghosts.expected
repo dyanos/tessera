@@ -1,0 +1,11 @@
+﻿07_spec_functions_and_ghosts.csec:13: error: 'loops' is recursive, so it needs a decreases clause: without one its definition could be contradictory
+07_spec_functions_and_ghosts.csec:15: error: the body of the specification function 'multi' must be a single expression ('= e' or '{ return e; }')
+07_spec_functions_and_ghosts.csec:20: error: 'wrong' may return without satisfying 'ensures tri(n) == n'
+verified: tri (2 checks)
+verified: triFormula (6 checks)
+verified: sq (2 checks)
+verified: sumTo (11 checks)
+verified: closedForm (7 checks)
+verified: withGhost (6 checks)
+verified: main (7 checks)
+verify: 12 function(s), 43 check(s), 3 error(s), 0 warning(s)

@@ -49,6 +49,7 @@ syn cluster tesseraDslItems     contains=tesseraDslWord
 syn region  tesseraSpecBlock    matchgroup=tesseraContractKeyword start=/\[%/ end=/%]/ contains=TOP
 syn region  tesseraContract     matchgroup=tesseraContractKeyword start=/\.\@<!\<\%(requires\|ensures\|invariant\|decreases\)\>\%(\s*[=:,);]\)\@!/ end=/\ze\%({\|;\|%]\|[=!<>]\@<!=[=>]\@!\|\<\%(requires\|ensures\|invariant\|decreases\)\>\)/ contains=TOP
 syn keyword tesseraResult       result contained containedin=tesseraContract
+syn keyword tesseraContractKeyword lemma contained containedin=tesseraSpecBlock
 
 " ---- types ----
 syn keyword tesseraType         Int Long Short Byte Float Double Real Bool Boolean Char String

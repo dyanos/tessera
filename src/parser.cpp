@@ -17,6 +17,10 @@ Parser::Parser(std::vector<Token>& tokens)
 std::unique_ptr<ASTNode> Parser::parse() {
 	auto program = std::make_unique<ProgramNode>();
 	while (!isAtEnd()) {
+		if (check(TokenType::OPERATOR, "[%")) {
+			parseSpecificationDeclarations(program->statements);
+			continue;
+		}
 		auto stmt = parseTopStatement();
 		if (stmt) {
 			program->statements.push_back(std::move(stmt));

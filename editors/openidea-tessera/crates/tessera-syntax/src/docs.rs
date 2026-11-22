@@ -86,6 +86,7 @@ pub fn keyword_doc(word: &str) -> Option<&'static str> {
         "invariant" => "Loop invariant, checked by `tess --verify`: `while (i < n) invariant 0 <= i and i <= n { ... }`",
         "decreases" => "Termination measure, checked by `tess --verify`. On a loop, `decreases n - i` must stay non-negative and shrink every iteration; on a recursive function, every recursive call must make it smaller and keep it non-negative. Several `decreases` clauses compare lexicographically.",
         "result" => "The function's return value inside an `ensures` clause.",
+        "lemma" => "Inside a top-level `[% ... %]`: a fact (`ensures`) proved under `requires` by its ghost-code body. Calling it in ghost code (`[% lemmaName(x); %]`) adds the fact. Checked by `tess --verify`, never compiled.",
         "molecule" => "Molecular-dynamics simulation block (`atom`, `bond`, `steps`, `dt`, `temperature`).",
         "cfd" => "Computational fluid dynamics block (`grid`, `viscosity`, `velocity`, `steps`, `dt`).",
         "ode" => "ODE integration block (`euler`, `from`, `to`, `step`).",

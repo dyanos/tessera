@@ -6,6 +6,7 @@
 #include "ast.h"
 #include "codegen.h"
 #include "utils.h"
+#include "verifier.h"
 
 #include <iostream>
 #include <fstream>
@@ -85,6 +86,7 @@ bool ModuleLoader::parseModuleFile(const std::string& filepath, SymbolTable& mod
     auto savedSymbolTable = std::move(codegenSymbolTable);
     try {
         codegenSymbolTable = std::move(moduleSymbols);
+        stripSpecifications(ast.get());
         ast->codegen();
         moduleSymbols = std::move(codegenSymbolTable);
         codegenSymbolTable = std::move(savedSymbolTable);

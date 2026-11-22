@@ -193,6 +193,10 @@ if-stmt      = 'if' '(' expr ')' block [ 'else' ( block | if-stmt ) ] ;
 while-stmt   = 'while' '(' expr ')' { loop-spec | '[%' { loop-spec [ ';' ] } '%]' } block ;
 for-stmt     = 'for' '(' identifier '<-' iterable ')' { loop-spec | '[%' { loop-spec [ ';' ] } '%]' } block ;
 loop-spec    = ( 'invariant' | 'decreases' ) [ identifier ':' ] expr ;   (* checked by tess --verify only *)
+spec-decls   = '[%' { ( 'def' | 'lemma' ) fn-name '(' [ params ] ')' [ ':' type ] { contract | fn-spec } fn-body } '%]' ;
+                                                            (* top level: specification functions and lemmas *)
+fn-spec      = '[%' { contract [ ';' ] | 'def' fn-name '(' [ params ] ')' [ ':' type ] { contract | fn-spec } fn-body } '%]' ;
+ghost-block  = '[%' { statement } '%]' ;                     (* a statement: ghost code for tess --verify *)
              | 'for' '(' identifier ',' identifier '<-' token-range ')' block ;
              | 'for' '(' identifier ',' identifier '<-' expr ')' block ;   (* key, value of a Dict *)
 iterable     = expr | range ;                              (* an array, a range, a Dict or a Set *)

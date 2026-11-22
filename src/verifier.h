@@ -26,3 +26,5 @@ std::string verifierExpressionText(ASTNode* node);
 // Verifies every function defined in `mainFile` (imported modules are only used for their
 // contracts). Prints diagnostics; returns 0 when no error was found, 1 otherwise.
 int verifyProgram(ASTNode* program, const std::string& mainFile);
+
+void stripSpecifications(ASTNode* program);

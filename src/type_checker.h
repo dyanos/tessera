@@ -170,6 +170,9 @@ private:
     std::set<std::string> reportedCallErrors;  // callReport(): each message (with its location) once
     int unsafeContextDepth = 0;
     int loopDepth = 0;
+    int specificationDepth = 0;
+    std::set<std::string> specificationFunctions;
+    std::set<std::string> ghostVariables;
     const Type* currentReturnType = nullptr;  // declared return type of the function being checked
     const Type* expectedType = nullptr;       // see visitExpecting
     int currentLine = 0;                      // line of the statement being checked

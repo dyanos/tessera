@@ -1783,6 +1783,7 @@ int main(int argc, char** argv) {
         auto mainFile = std::filesystem::weakly_canonical(std::filesystem::path(inputFile), canonicalError);
         return verifyProgram(ast.get(), canonicalError ? inputFile : mainFile.string());
     }
+    stripSpecifications(ast.get());
     if (debugInfo) {
         // CodeView for the MSVC toolchain (Visual Studio, WinDbg), DWARF elsewhere.
 #ifdef _WIN32

@@ -29,6 +29,7 @@ void forEachChild(ASTNode* node, F&& f) {
         for (auto& c : node->contracts->ensuresClauses) one(c.expression);
         for (auto& c : node->contracts->invariants) one(c.expression);
         for (auto& c : node->contracts->decreases) one(c.expression);
+        for (auto& d : node->contracts->definitions) if (d) f(d.get(), nullptr);
     }
 
     if (auto* n = dynamic_cast<ProgramNode*>(node)) { many(n->statements); return; }
