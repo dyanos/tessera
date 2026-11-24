@@ -1,0 +1,5 @@
+def main(): Int {
+    val m = true;
+    val a = new Tensor<Float, 2, m>;
+    return 0;
+}

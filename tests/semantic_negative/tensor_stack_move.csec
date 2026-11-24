@@ -1,0 +1,5 @@
+def main(): Int {
+    var a = Tensor<Float, 2>();
+    val moved = <- a;
+    return 0;
+}

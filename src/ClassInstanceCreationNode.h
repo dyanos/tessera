@@ -6,6 +6,7 @@ class ClassInstanceCreationNode : public ASTNode {
 public:
     std::string className;
     bool defaultValue = false;
+    bool stackTensor = false;
     std::vector<std::unique_ptr<ASTNode>> arguments;
     std::vector<std::unique_ptr<Type>> templateArgs;  // e.g. new Stack<Int>()
 
@@ -30,6 +31,7 @@ public:
         nodeType = other.nodeType;
         className = other.className;
         defaultValue = other.defaultValue;
+        stackTensor = other.stackTensor;
         for (const auto& arg : other.arguments) {
             arguments.push_back(arg ? arg->clone() : nullptr);
         }
@@ -42,6 +44,7 @@ public:
             nodeType = other.nodeType;
             className = other.className;
             defaultValue = other.defaultValue;
+            stackTensor = other.stackTensor;
             arguments.clear();
             arguments.reserve(other.arguments.size());
             for (const auto& arg : other.arguments) {

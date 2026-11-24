@@ -1,0 +1,17 @@
+def multiply(a: &Tensor<Float, :_m, :_k>, b: &Tensor<Float, :_k, :_n>): Tensor<Float, :_m, :_n> = a @ b
+
+def forward(a: &Tensor<Float, :_rows, :_inner>, b: &Tensor<Float, :_inner, :_columns>): Tensor<Float, :_rows, :_columns> = multiply(&a, &b) + 0
+
+def product(inner: Int): Tensor<Float, 2, 5> {
+    var m = inner;
+    val a = new Tensor<Float, 2, m>(1.0);
+    val b = new Tensor<Float, m, 5>(2.0);
+    return forward(&a, &b);
+}
+
+def main(): Int {
+    val result = product(3);
+    val expected: Float = 6.0;
+    if (result[1, 4] == expected) { return 0; }
+    return 1;
+}

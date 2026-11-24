@@ -1,0 +1,5 @@
+def multiply(a: &Tensor<Float, :_m, :_k>, b: &Tensor<Float, :_k, :_n>): Tensor<Float, :_n, :_m> = a @ b
+
+def main(): Int {
+    return 0;
+}

@@ -1,0 +1,12 @@
+def multiply(a: &Tensor<Float, :_m, :_k>, b: &Tensor<Float, :_k, :_n>): Tensor<Float, :_m, :_n> = a @ b
+
+def product(left: Int, right: Int): Tensor<Float, 2, 5> {
+    val a = new Tensor<Float, 2, left>;
+    val b = new Tensor<Float, right, 5>;
+    return multiply(&a, &b);
+}
+
+def main(): Int {
+    val result = product(3, 3);
+    return 0;
+}

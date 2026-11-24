@@ -114,6 +114,7 @@ private:
     std::unique_ptr<ASTNode> parseExpression();
     std::vector<std::unique_ptr<ASTNode>> parseArgumentList();
     std::unique_ptr<Type> parseTemplateArgumentAsType();
+    std::unique_ptr<Type> parseAllocationTypeArgument(bool tensorAxis);
 
     std::vector<std::unique_ptr<ASTNode>> parseCallParameterList();
     std::vector<std::unique_ptr<ParameterNode>> parseParameterList();

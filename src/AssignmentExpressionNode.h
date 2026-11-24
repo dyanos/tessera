@@ -7,6 +7,7 @@ public:
     std::unique_ptr<ASTNode> left;
     std::unique_ptr<ASTNode> right;
     std::string op = "=";
+    bool rebindsStackTensor = false;
     // `f(name = value)`: a named call argument, resolved against the callee's parameter names before
     // type checking (default_arguments.cpp). Never evaluated as an assignment.
     bool isNamedArgument = false;
@@ -23,7 +24,7 @@ public:
     AssignmentExpressionNode(const AssignmentExpressionNode& other)
         : left(other.left ? other.left->clone() : nullptr),
           right(other.right ? other.right->clone() : nullptr),
-          op(other.op), isNamedArgument(other.isNamedArgument) {
+          op(other.op), rebindsStackTensor(other.rebindsStackTensor), isNamedArgument(other.isNamedArgument) {
         line = other.line;
         nodeType = ASTNodeType::ASSIGNMENT_EXPRESSION;
 	}
@@ -32,6 +33,7 @@ public:
             left = other.left ? other.left->clone() : nullptr;
             right = other.right ? other.right->clone() : nullptr;
             op = other.op;
+            rebindsStackTensor = other.rebindsStackTensor;
             isNamedArgument = other.isNamedArgument;
             nodeType = ASTNodeType::ASSIGNMENT_EXPRESSION;
         }

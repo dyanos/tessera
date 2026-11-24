@@ -61,6 +61,12 @@ void collectReferencedIdentifiers(ASTNode* node, std::set<std::string>& names) {
         else if (auto* assignment = dynamic_cast<AssignmentNode*>(n)) {
             names.insert(assignment->name);
         }
+        else if (auto* creation = dynamic_cast<ClassInstanceCreationNode*>(n); creation && creation->className == "Tensor") {
+            for (const auto& argument : creation->templateArgs) {
+                const auto* axis = dynamic_cast<const TensorAxisType*>(argument.get());
+                if (axis && axis->form == TensorAxisType::Form::RuntimeReference) names.insert(axis->getName());
+            }
+        }
         else if (auto* access = dynamic_cast<AccessFieldNode*>(n)) {
             // The field name is not a reference to a variable.
             collectReferencedIdentifiers(access->base.get(), names);

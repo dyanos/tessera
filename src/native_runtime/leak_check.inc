@@ -1,3 +1,5 @@
+#include <atomic>
+
 namespace csec_leak {
 
 struct Tracker {

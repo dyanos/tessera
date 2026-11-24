@@ -248,9 +248,9 @@ tests/positive/10_integration/175_tensor_move_return_execution.csec 0 0
 tests/positive/10_integration/176_tensor_move_then_use_execution.csec 0 0
 tests/positive/10_integration/176_wide_class_field_execution.csec 0 0
 tests/positive/10_integration/177_declared_wide_field_execution.csec 0 0
-tests/positive/10_integration/178_new_array_return_execution.csec 1 NA
-tests/positive/10_integration/179_vector_return_alias_execution.csec 1 NA
-tests/positive/10_integration/180_vector_array_arg_alias_execution.csec 1 NA
+tests/positive/10_integration/178_new_array_return_execution.csec 0 0
+tests/positive/10_integration/179_vector_return_alias_execution.csec 0 0
+tests/positive/10_integration/180_vector_array_arg_alias_execution.csec 0 0
 tests/positive/10_integration/181_mutual_recursion_execution.csec 0 0
 tests/positive/10_integration/182_this_method_self_call_execution.csec 0 0
 tests/positive/10_integration/183_operator_overload_dispatch_execution.csec 0 0
@@ -307,6 +307,7 @@ tests/positive/11_tensor/125_tensor_escape_shadowing.csec 0 0
 tests/positive/11_tensor/126_tensor_index_out_of_bounds.csec 0 1
 tests/positive/11_tensor/127_tensor_shape_mismatch.csec 0 1
 tests/positive/11_tensor/128_tensor_slice_out_of_range.csec 0 1
+tests/positive/11_tensor/129_selfhost_tensor_scope.csec 0 0
 tests/positive/12_native/120_stdout_functions.csec 0 0
 tests/positive/12_native/121_stdin_functions.csec 0 0
 tests/positive/12_native/122_math_functions.csec 0 0
@@ -343,6 +344,7 @@ tests/positive/14_language/232_shared_payload_release.csec 0 0
 tests/positive/14_language/233_loop_locals_stack.csec 0 0
 tests/positive/14_language/234_immutable_alias_bindings.csec 0 0
 tests/positive/14_language/235_memory_lifetimes.csec 0 0
+tests/positive/14_language/238_future_lifetimes.csec 0 0
 tests/selfhost_concurrency/01_spawn_named.csec 0 42
 tests/selfhost_concurrency/02_async_go.csec 0 42
 tests/selfhost_concurrency/03_thread_atomic.csec 0 42
@@ -360,11 +362,14 @@ tests/selfhost_concurrency/14_contracts.csec 0 42
 tests/selfhost_concurrency/15_logical_symbols.csec 0 42
 tests/selfhost_concurrency/16_float_literal_value.csec 0 42
 tests/selfhost_concurrency/17_hex_with_e.csec 0 42
+tests/selfhost_concurrency/18_future_scope.csec 0 42
 tests/semantic_positive/ownership_clone.csec 0 2
 tests/semantic_positive/parallel_api_emit_ir.csec 0 3
 tests/semantic_positive/pmap_openmp_capture_emit_ir.csec 0 0
 tests/semantic_positive/preduce_emit_ir.csec 0 34
 tests/semantic_positive/raw_pointer_deref_in_unsafe_context.csec 0 0
+tests/semantic_positive/tensor_shape_shared_dimension.csec 0 0
+tests/semantic_positive/tensor_stack_allocation.csec 0 0
 tests/stdlib/data/alias_helper.csec 0 0
 tests/stdlib/negative/01_thread_start_by_reference.csec 1 NA
 tests/stdlib/negative/02_thread_start_without_import.csec 1 NA
@@ -409,3 +414,4 @@ tests/stdlib/positive/34_logic_substitute_growth.csec 0 0
 tests/stdlib/positive/35_pipe_free_wakes_reader.csec 0 0
 tests/stdlib/positive/36_thread_self_join.csec 0 0
 tests/stdlib/positive/37_dataframe_npy_malformed.csec 0 0
+tests/stdlib/positive/38_polynomial_lifetime.csec 0 0

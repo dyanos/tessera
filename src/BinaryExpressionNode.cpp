@@ -1212,6 +1212,21 @@ std::unique_ptr<Type> BinaryExpressionNode::getType() {
         return std::make_unique<UnknownType>();
     }
 
+    if (op == "@") {
+        auto matrixType = [](Type* operand) {
+            if (auto* borrow = dynamic_cast<BorrowType*>(operand)) operand = borrow->baseType.get();
+            auto* tensor = dynamic_cast<GenericType*>(operand);
+            return tensor && tensor->getName() == "Tensor" && tensor->typeArguments.size() == 3 ? tensor : nullptr;
+        };
+        auto* lhs = matrixType(leftType.get());
+        auto* rhs = matrixType(rightType.get());
+        if (lhs && rhs) {
+            auto result = std::make_unique<GenericType>(*lhs);
+            result->typeArguments[2] = rhs->typeArguments[2]->clone();
+            return result;
+        }
+    }
+
     if ((op == "in" || op == "notin") && (isDictType(rightType.get()) || isSetType(rightType.get()))) {
         return std::make_unique<BasicType>("Boolean");
     }

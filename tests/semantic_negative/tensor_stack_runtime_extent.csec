@@ -1,0 +1,6 @@
+def allocate(m: Int): Int {
+    var a = Tensor<Float, 2, m>();
+    return 0;
+}
+
+def main(): Int = allocate(3)

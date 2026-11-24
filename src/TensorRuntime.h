@@ -2,7 +2,6 @@
 
 #include "codegen.h"
 
-#include <cctype>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -17,16 +16,6 @@ namespace TensorRuntime {
 
 inline bool isTensorTypeName(const std::string& name) {
     return name == "Tensor" || name.rfind("Tensor$", 0) == 0;
-}
-
-inline bool isIntegerLiteralName(const std::string& name) {
-    if (name.empty()) return false;
-    size_t start = name[0] == '-' ? 1 : 0;
-    if (start == name.size()) return false;
-    for (size_t i = start; i < name.size(); ++i) {
-        if (!std::isdigit(static_cast<unsigned char>(name[i]))) return false;
-    }
-    return true;
 }
 
 inline llvm::StructType* getTensorStructType(CodeGenerator& cg) {
@@ -136,6 +125,14 @@ inline void tensorFailIf(CodeGenerator& cg, llvm::Value* failed, const char* mes
     cg.builder.SetInsertPoint(okBB);
 }
 
+inline void initializeTensorStorage(CodeGenerator& cg, llvm::Value* tensor, llvm::Value* rank,
+                                    llvm::Value* dims, llvm::Value* count, llvm::Value* data) {
+    cg.builder.CreateStore(rank, tensorField(cg, tensor, 0, "tensor.rank.slot"));
+    cg.builder.CreateStore(dims, tensorField(cg, tensor, 1, "tensor.dims.slot"));
+    cg.builder.CreateStore(count, tensorField(cg, tensor, 2, "tensor.count.slot"));
+    cg.builder.CreateStore(data, tensorField(cg, tensor, 3, "tensor.data.slot"));
+}
+
 inline llvm::Value* allocateTensor(CodeGenerator& cg, llvm::Value* rank, llvm::Value* count) {
     auto* tensorPtrTy = getTensorPointerType(cg);
     auto* i64Ty = llvm::Type::getInt64Ty(cg.context);
@@ -165,42 +162,85 @@ inline llvm::Value* allocateTensor(CodeGenerator& cg, llvm::Value* rank, llvm::V
             cg.builder.CreateAnd(cg.builder.CreateIsNull(data, "tensor.data.null"),
                                  cg.builder.CreateICmpNE(count, i64(cg, 0)))), "tensor.alloc.failed");
     tensorFailIf(cg, allocationFailed, "Tensor error: out of memory");
-    cg.builder.CreateStore(rank, tensorField(cg, tensor, 0, "tensor.rank.slot"));
-    cg.builder.CreateStore(dims, tensorField(cg, tensor, 1, "tensor.dims.slot"));
-    cg.builder.CreateStore(count, tensorField(cg, tensor, 2, "tensor.count.slot"));
-    cg.builder.CreateStore(data, tensorField(cg, tensor, 3, "tensor.data.slot"));
+    initializeTensorStorage(cg, tensor, rank, dims, count, data);
     cg.markFreshTensor(tensor);
     return tensor;
 }
 
-inline std::vector<int64_t> dimensionsFromTemplateArgs(const std::vector<std::unique_ptr<Type>>& templateArgs) {
-    std::vector<int64_t> dims;
-    for (size_t i = 1; i < templateArgs.size(); ++i) {
-        if (!templateArgs[i] || !isIntegerLiteralName(templateArgs[i]->getName())) continue;
-        int64_t dim = std::stoll(templateArgs[i]->getName());
-        if (dim > 0) dims.push_back(dim);
-    }
-    return dims;
-}
-
-inline llvm::Value* createTensor(CodeGenerator& cg, const std::vector<int64_t>& dims, llvm::Value* fillValue) {
-    int64_t count = 1;
-    for (int64_t dim : dims) count *= dim;
-
-    llvm::Value* tensor = allocateTensor(cg, i64(cg, static_cast<int64_t>(dims.size())), i64(cg, count));
-    llvm::Value* dimsPtr = loadDims(cg, tensor);
-    llvm::Value* dataPtr = loadData(cg, tensor);
-
+inline void initializeTensorElements(CodeGenerator& cg, llvm::Value* dimsPtr, llvm::Value* dataPtr,
+                                     const std::vector<llvm::Value*>& dims, llvm::Value* count,
+                                     llvm::Value* fillValue) {
     for (size_t i = 0; i < dims.size(); ++i) {
-        llvm::Value* slot = cg.builder.CreateGEP(llvm::Type::getInt64Ty(cg.context), dimsPtr, i64(cg, static_cast<int64_t>(i)), "tensor.dim.slot");
-        cg.builder.CreateStore(i64(cg, dims[i]), slot);
+        llvm::Value* slot = cg.builder.CreateGEP(llvm::Type::getInt64Ty(cg.context), dimsPtr,
+                                                i64(cg, static_cast<int64_t>(i)), "tensor.dim.slot");
+        cg.builder.CreateStore(dims[i], slot);
     }
 
     llvm::Value* fill = toDouble(cg, fillValue);
-    emitCountedLoop(cg, i64(cg, count), "tensor.fill", [&](llvm::Value* index) {
+    emitCountedLoop(cg, count, "tensor.fill", [&](llvm::Value* index) {
         llvm::Value* slot = cg.builder.CreateGEP(llvm::Type::getDoubleTy(cg.context), dataPtr, index, "tensor.data.slot");
         cg.builder.CreateStore(fill, slot);
     });
+}
+
+inline constexpr uint64_t stackTensorByteLimit = 64 * 1024;
+
+inline uint64_t stackTensorElementLimit(size_t rank) {
+    constexpr uint64_t slots = (stackTensorByteLimit - 32) / 8;
+    return rank < slots ? slots - rank : 0;
+}
+
+inline llvm::Value* createStackTensor(CodeGenerator& cg, const std::vector<llvm::Value*>& dims, llvm::Value* fillValue) {
+    const uint64_t limit = stackTensorElementLimit(dims.size());
+    uint64_t count = 1;
+    for (auto* dim : dims) {
+        const auto* constant = llvm::dyn_cast<llvm::ConstantInt>(dim);
+        if (!constant || constant->getSExtValue() <= 0) {
+            cg.reportError("Stack Tensor dimensions must be positive compile-time integers");
+            return nullptr;
+        }
+        const uint64_t extent = constant->getZExtValue();
+        if (count > limit / extent) {
+            cg.error("Stack Tensor exceeds ", stackTensorByteLimit, " bytes; use 'new Tensor' for heap allocation");
+            return nullptr;
+        }
+        count *= extent;
+    }
+
+    auto* tensor = cg.createEntryAlloca(getTensorStructType(cg), "tensor.stack.header");
+    auto* rank = i64(cg, static_cast<int64_t>(dims.size()));
+    auto* countValue = i64(cg, static_cast<int64_t>(count));
+    llvm::Value* axes = llvm::ConstantPointerNull::get(getTensorPointerType(cg));
+    if (!dims.empty()) axes = cg.createEntryAlloca(llvm::Type::getInt64Ty(cg.context), "tensor.stack.dims", rank);
+    auto* data = cg.createEntryAlloca(llvm::Type::getDoubleTy(cg.context), "tensor.stack.data", countValue);
+    initializeTensorStorage(cg, tensor, rank, axes, countValue, data);
+    initializeTensorElements(cg, axes, data, dims, countValue, fillValue);
+    return tensor;
+}
+
+inline llvm::Value* createTensor(CodeGenerator& cg, const std::vector<llvm::Value*>& dims, llvm::Value* fillValue) {
+    auto* i64Ty = llvm::Type::getInt64Ty(cg.context);
+    auto* i128Ty = llvm::Type::getInt128Ty(cg.context);
+    llvm::Value* count = i64(cg, 1);
+    llvm::Value* invalidDim = llvm::ConstantInt::getFalse(cg.context);
+    llvm::Value* overflow = llvm::ConstantInt::getFalse(cg.context);
+    for (llvm::Value* dim : dims) {
+        invalidDim = cg.builder.CreateOr(invalidDim, cg.builder.CreateICmpSLE(dim, i64(cg, 0)));
+        llvm::Value* product = cg.builder.CreateMul(cg.builder.CreateZExt(count, i128Ty),
+                                                   cg.builder.CreateZExt(dim, i128Ty), "tensor.extended.count");
+        overflow = cg.builder.CreateOr(overflow, cg.builder.CreateICmpUGT(product,
+                                                                         llvm::ConstantInt::get(i128Ty, UINT64_MAX)));
+        count = cg.builder.CreateTrunc(product, i64Ty, "tensor.new.count");
+    }
+    if (const auto* known = llvm::dyn_cast<llvm::ConstantInt>(invalidDim); !known || !known->isZero()) {
+        tensorFailIf(cg, invalidDim, "Tensor error: all dimensions must be positive");
+    }
+    if (const auto* known = llvm::dyn_cast<llvm::ConstantInt>(overflow); !known || !known->isZero()) {
+        tensorFailIf(cg, overflow, "Tensor error: tensor size is out of range");
+    }
+
+    llvm::Value* tensor = allocateTensor(cg, i64(cg, static_cast<int64_t>(dims.size())), count);
+    initializeTensorElements(cg, loadDims(cg, tensor), loadData(cg, tensor), dims, count, fillValue);
     return tensor;
 }
 

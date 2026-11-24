@@ -37,6 +37,11 @@ val label: String = "run";
 scale = scale + 1.0;
 ```
 
+Both forms use the same storage rules. Storage depends on the value's type
+and how it is created. A local scalar can use a register or stack storage.
+A `val` can hold a reference to a heap object, such as the result of `new` on a
+reference class.
+
 The type annotation is optional when the declaration has an initializer whose type is known: the
 variable (or constant) then takes the initializer's type.
 
@@ -943,15 +948,60 @@ or `String`. Methods: `add`, `remove`/`discard`, `contains`, `size`, `isEmpty`, 
 
 ## Tensors
 
-Tensor types carry an element type and a compile-time shape, `Tensor<Elem, D1,
-D2, …>`. Construct one with `new`, giving a fill value; read and write elements
-with a comma-separated index list, which also serves as an l-value:
+Tensor types carry an element type and a shape, `Tensor<Elem, D1, D2, …>`.
+A comma-separated index list reads or writes an element.
 
 ```ts
 val m: Tensor<Double, 3, 3> = new Tensor<Double, 3, 3>(0.0);  // 3x3 of zeros
 m[0, 0] = 2.0;                 // element write (l-value)
 val trace = m[0, 0] + m[1, 1] + m[2, 2];
 ```
+
+`Tensor<Elem, D1, D2, …>()` allocates a tensor on the stack.
+`new Tensor<Elem, D1, D2, …>()` allocates on the heap. Either form accepts an
+optional fill value and uses zero when the fill value is absent.
+
+```ts
+def example(n: Int): Float {
+	val local = Tensor<Float, 2, 3>(1.0);
+	var heap = new Tensor<Float, 2, n>();
+	return local[1, 2] + heap[0, 0];
+}
+```
+
+A stack tensor needs a local binding and a shape the compiler can determine
+at compile time. Each stack tensor uses at most 64 KiB, including its
+dimensions and data. You can read or write its elements and pass it to a
+function that borrows it locally. A stack tensor's lifetime ends when its
+function returns. To return the contents, return an owned copy such as
+`clone(local)`. A stack tensor bound with `var` can be reassigned by a stack
+constructor with the same shape and element type.
+
+A top-level function can name an axis `:_name`. Each occurrence of the same
+name in a signature requires the same size. Every named result axis must also
+appear in a parameter.
+
+```ts
+def multiply(
+	a: &Tensor<Float, :_m, :_k>,
+	b: &Tensor<Float, :_k, :_n>
+): Tensor<Float, :_m, :_n> = a @ b
+
+def product(size: Int): Tensor<Float, 2, 5> {
+	var m = size;
+	val a = new Tensor<Float, 2, m>(1.0);
+	val b = new Tensor<Float, m, 5>(2.0);
+	return multiply(&a, &b);
+}
+```
+
+A constructor reads an integer variable used as an axis size at allocation
+time. Later assignments to the variable leave the tensor's size as allocated.
+In the example, both constructors read the same value of `m`. The compiler
+uses that fact to verify `:_k` and infer `Tensor<Float, 2, 5>` at the call.
+A call fails to compile if the compiler cannot prove a required equality.
+Named axes are available on direct calls to non-overloaded top-level functions
+in the native compiler.
 
 Whole-tensor arithmetic is component-wise, with scalar broadcast, and the
 product operators bind tighter than `+`/`-`:

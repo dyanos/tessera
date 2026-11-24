@@ -18,6 +18,7 @@
 #include "ReturnStatementNode.h"
 #include "VariableDeclarationNode.h"
 #include "TensorRuntime.h"
+#include "tensor_shape.h"
 #include "type_utils.h"
 #include "tensor_builtins.h"
 
@@ -2037,7 +2038,10 @@ static llvm::Value* createTypedCallWithAdjustedArgs(
 
 llvm::Value* FunctionCallNode::codegen() {
     auto& cg = CodeGenerator::getInstance();
-    {
+    auto* shapedTarget = dynamic_cast<FunctionSymbol*>(cg.symbolTable.lookup(functionName));
+    const auto* signature = shapedTarget ? dynamic_cast<const FunctionType*>(shapedTarget->type.get()) : nullptr;
+    const bool shapedCall = signature && TensorShape::hasSignature(*signature);
+    if (!shapedCall) {
         bool handled = false;
         llvm::Value* tensorResult = codegenTensorBuiltin(*this, &handled);
         if (handled) return tensorResult;
@@ -2063,6 +2067,14 @@ llvm::Value* FunctionCallNode::codegen() {
         argValues.push_back(argValue);
         auto argType = arg->getType();
         argTypes.push_back(argType ? argType->clone() : std::make_unique<UnknownType>());
+    }
+
+    if (shapedCall) {
+        if (!type || !shapedTarget->function) {
+            cg.error("Tensor dimension constraint was not resolved for '", functionName, "'");
+            return nullptr;
+        }
+        return createCallWithAdjustedArgs(shapedTarget->function, argValues);
     }
 
     if (functionName == "__token_matches") {

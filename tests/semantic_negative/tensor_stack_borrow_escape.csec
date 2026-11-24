@@ -1,0 +1,9 @@
+def escape(a: &Tensor<Float, 2>): Tensor<Float, 2> = a
+
+def forward(a: &Tensor<Float, 2>): Tensor<Float, 2> = escape(&a)
+
+def main(): Int {
+    val local = Tensor<Float, 2>();
+    val escaped = forward(&local);
+    return 0;
+}
