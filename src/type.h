@@ -10,7 +10,7 @@
 class Type {
 public:
     // VARIABLE????댁꽌??寃???꾩슂
-    enum Kind { UNKNOWN=-1, BASIC=0, POINTER, ARRAY, STRUCT, CLASS, FUNCTION, GENERIC, VARIABLE, BOX, BORROW, MUTABLE_BORROW, UNSAFE_POINTER, TUPLE };
+    enum Kind { UNKNOWN=-1, BASIC=0, POINTER, ARRAY, STRUCT, CLASS, FUNCTION, GENERIC, VARIABLE, BOX, BORROW, MUTABLE_BORROW, UNSAFE_POINTER, TUPLE, TENSOR_AXIS };
 
 private:
     Kind kind;
@@ -566,6 +566,28 @@ public:
 
     std::unique_ptr<Type> clone() override {
         return std::make_unique<TypeVariableType>(getName());
+    }
+};
+
+class TensorAxisType final : public Type {
+public:
+    enum class Form { Symbol, RuntimeReference, RuntimeValue };
+
+    const Form form;
+
+    TensorAxisType(Form form, const std::string& name) : Type(Kind::TENSOR_AXIS, name), form(form) {}
+
+    bool equals(const Type& other) const override {
+        const auto* axis = dynamic_cast<const TensorAxisType*>(&other);
+        return axis && axis->form == form && axis->getName() == getName();
+    }
+
+    bool isSubtypeOf(const Type& other) const override {
+        return equals(other);
+    }
+
+    std::unique_ptr<Type> clone() override {
+        return std::make_unique<TensorAxisType>(*this);
     }
 };
 

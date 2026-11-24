@@ -230,7 +230,8 @@ llvm::Value* BlockNode::codegen() {
         if (auto* decl = dynamic_cast<VariableDeclarationNode*>(stmt.get())) {
             auto declType = decl->initializer ? decl->getType() : nullptr;
             if (declType && declType->getName() == "Tensor") {
-                decl->autoDrop = !decl->isMutable &&
+                const auto* constructor = dynamic_cast<ClassInstanceCreationNode*>(decl->initializer.get());
+                decl->autoDrop = !decl->isMutable && !(constructor && constructor->stackTensor) &&
                     (isStrictOwnership() || onlyBorrowingTensorUses(decl->name, statements, i + 1));
             }
             else if (isStrictOwnership() && initializerOwnsResult(decl->initializer.get())) {

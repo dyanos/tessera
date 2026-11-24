@@ -16,6 +16,17 @@ void AssignmentExpressionNode::accept(ASTVisitor& visitor) {
 }
 
 llvm::Value* AssignmentExpressionNode::codegen() {
+    if (rebindsStackTensor) {
+        auto& cg = CodeGenerator::getInstance();
+        auto* target = cg.symbolTable.lookup(static_cast<IdentifierNode*>(left.get())->value);
+        auto* tensor = right->codegen();
+        if (!tensor || !target || !target->isMutable || !target->value) {
+            cg.reportError("Cannot reassign a stack Tensor");
+            return nullptr;
+        }
+        cg.builder.CreateStore(tensor, target->value);
+        return cg.builder.getInt32(0);
+    }
     if (isNamedArgument) {
         // Every named argument is rewritten into a positional one before code generation; one left
         // here belongs to a call whose parameters were never matched.
@@ -249,5 +260,6 @@ llvm::Value* AssignmentExpressionNode::codegen() {
 }
 
 std::unique_ptr<Type> AssignmentExpressionNode::getType() {
+    if (rebindsStackTensor) return std::make_unique<BasicType>("Unit");
     return left->getType();
 }

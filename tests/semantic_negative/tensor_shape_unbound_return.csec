@@ -1,0 +1,5 @@
+def wrong(value: &Tensor<Float, :_n>): Tensor<Float, :_out> = new Tensor<Float, 3>
+
+def main(): Int {
+    return 0;
+}

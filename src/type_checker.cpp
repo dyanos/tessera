@@ -5,6 +5,7 @@
 #include "symbol.h"
 #include "type_utils.h"
 #include "dict_support.h"
+#include "tensor_shape.h"
 
 #include <algorithm>
 #include <iostream>
@@ -25,6 +26,25 @@ bool isTensorLikeType(const std::unique_ptr<Type>& type) {
     if (!type) return false;
     const std::string name = type->getName();
     return name == "Tensor" || name.rfind("Tensor$", 0) == 0;
+}
+
+bool containsNamedAxes(const Type* type) {
+    const auto any = [](const auto& entries) {
+        return std::any_of(entries.begin(), entries.end(), [](const auto& entry) {
+            return containsNamedAxes(entry.get());
+        });
+    };
+    if (TensorShape::isSymbol(type)) return true;
+    if (const auto* shaped = dynamic_cast<const GenericType*>(type)) return any(shaped->typeArguments);
+    if (const auto* borrow = dynamic_cast<const BorrowType*>(type)) return containsNamedAxes(borrow->baseType.get());
+    if (const auto* box = dynamic_cast<const BoxType*>(type)) return containsNamedAxes(box->baseType.get());
+    if (const auto* pointer = dynamic_cast<const UnsafePointerType*>(type)) return containsNamedAxes(pointer->baseType.get());
+    if (const auto* array = dynamic_cast<const ArrayType*>(type)) return containsNamedAxes(array->elementType.get());
+    if (const auto* tuple = dynamic_cast<const TupleType*>(type)) return any(tuple->elementTypes);
+    if (const auto* function = dynamic_cast<const FunctionType*>(type)) {
+        return containsNamedAxes(function->returnType.get()) || any(function->parameterTypes);
+    }
+    return false;
 }
 
 bool isI64IntegerAlias(const std::unique_ptr<Type>& type) {
@@ -681,7 +701,220 @@ void TypeChecker::checkTypeResolved(const std::unique_ptr<Type>& type, const std
     }
 }
 
+std::shared_ptr<const Type> TypeChecker::provenTensor(const ASTNode* expression) const {
+    const auto found = tensorShapes.find(expression);
+    return found == tensorShapes.end() ? nullptr : found->second;
+}
+
+void TypeChecker::rememberTensor(const ASTNode* expression, std::shared_ptr<const Type> shape) {
+    if (shape) tensorShapes[expression] = std::move(shape);
+    else tensorShapes.erase(expression);
+}
+
+void TypeChecker::checkTensorLifetimes(ASTNode& root) {
+    const auto stackOwner = [](const ASTNode* origin) {
+        return dynamic_cast<const ClassInstanceCreationNode*>(origin) != nullptr;
+    };
+    if (std::none_of(tensorLifetimeUses.begin(), tensorLifetimeUses.end(),
+            [&](const auto& use) { return stackOwner(use.second); })) return;
+
+    std::vector<std::pair<const ASTNode*, const ASTNode*>> forwards;
+    const auto walk = [&](const auto& self, ASTNode* node, ASTNode* parent, ASTNode* grandparent) -> void {
+        if (!node) return;
+        if (const auto reference = tensorLifetimeUses.find(node); reference != tensorLifetimeUses.end()) {
+            const auto* id = static_cast<const IdentifierNode*>(node);
+            const auto* source = reference->second;
+            bool localUse = tensorLifetimeOperators.count(parent) != 0;
+            if (const auto* indexed = dynamic_cast<const ArrayAccessNode*>(parent)) {
+                localUse = indexed->array.get() == node;
+            }
+            if (const auto* member = dynamic_cast<const AccessFieldNode*>(parent)) {
+                const auto* component = dynamic_cast<const IdentifierNode*>(member->field.get());
+                localUse = member->base.get() == node && component &&
+                    (component->value == "x" || component->value == "y" || component->value == "z" || component->value == "w");
+            }
+            if (const auto dot = id->value.find('.'); dot != std::string::npos) {
+                const auto component = id->value.substr(dot + 1);
+                localUse = !isBorrowExpression(parent) &&
+                    (component == "x" || component == "y" || component == "z" || component == "w");
+            }
+            if ((dynamic_cast<const ArrayAccessNode*>(parent) || dynamic_cast<const AccessFieldNode*>(parent)) &&
+                isBorrowExpression(grandparent)) localUse = false;
+            if (!localUse) {
+                const auto* borrow = dynamic_cast<const PrefixExpressionNode*>(parent);
+                const bool temporaryBorrow = borrow && (borrow->op == "&" || borrow->op == "&mut");
+                const auto* call = dynamic_cast<const FunctionCallNode*>(temporaryBorrow ? grandparent : parent);
+                if (call) {
+                    if (const auto target = tensorBorrowCalls.find(call); target != tensorBorrowCalls.end()) {
+                        if (!target->second) {
+                            localUse = true;
+                        }
+                        else if (const auto declaration = tensorBorrowTargets.find(target->second);
+                                 declaration != tensorBorrowTargets.end()) {
+                            const auto& parameters = declaration->second->parameters;
+                            for (size_t i = 0; i < call->arguments.size() && i < parameters.size(); ++i) {
+                                if (call->arguments[i].get() != (temporaryBorrow ? parent : node)) continue;
+                                const auto* parameter = dynamic_cast<const ParameterNode*>(parameters[i].get());
+                                if (parameter && dynamic_cast<const BorrowType*>(parameter->type.get()) &&
+                                    TensorShape::tensor(parameter->type.get())) {
+                                    forwards.emplace_back(source, parameter);
+                                    localUse = true;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if (!localUse) unsafeTensorLifetimes.insert(source);
+        }
+        ast_walk::forEachChild(node, [&](ASTNode* child, std::unique_ptr<ASTNode>*) {
+            self(self, child, node, parent);
+        });
+    };
+    walk(walk, &root, nullptr, nullptr);
+
+    bool changed;
+    do {
+        changed = false;
+        for (const auto& [source, destination] : forwards) {
+            if (unsafeTensorLifetimes.count(destination)) changed |= unsafeTensorLifetimes.insert(source).second;
+        }
+    } while (changed);
+    for (const auto* source : unsafeTensorLifetimes) {
+        if (stackOwner(source)) {
+            reportError("Type error: a stack Tensor cannot escape its local binding or transfer ownership");
+        }
+    }
+}
+
+std::shared_ptr<const Type> TypeChecker::freshIntegerValue(const std::string& name) {
+    return std::make_shared<TensorAxisType>(TensorAxisType::Form::RuntimeValue,
+        name + "#" + std::to_string(++nextIntegerValue));
+}
+
+static std::shared_ptr<const Type> integerLiteralSize(ASTNode* expression, const Type* destination) {
+    auto* literal = dynamic_cast<ValueNode*>(expression);
+    if (!literal || literal->valueType != TokenType::INTEGER_LITERAL || literal->value.empty() ||
+        literal->value.front() < '1' || literal->value.front() > '9' || !destination) return nullptr;
+    const auto type = literal->getType();
+    if (!type->isIntegerTy() || type->getName() != destination->getName()) return nullptr;
+    auto axis = std::make_shared<TypeVariableType>(literal->value);
+    return TensorShape::proven(axis.get()) ? axis : nullptr;
+}
+
+void TypeChecker::setShapeBinding(const std::string& name, const Type* type, ASTNode* initializer, bool mutableBinding) {
+    auto& state = ownershipScopes.back().at(name);
+    state.mutableBinding = mutableBinding;
+    if (ownershipScopes.size() <= shapeScopeStart) return;
+    state.shapeBinding = CodeGenerator::getInstance().symbolTable.lookup(name);
+    if (TensorShape::tensor(type)) state.tensorShape = provenTensor(initializer);
+    if (type && type->isIntegerTy()) {
+        state.integerValue = integerLiteralSize(initializer, type);
+        if (!state.integerValue) state.integerValue = freshIntegerValue(name);
+    }
+}
+
+TypeChecker::OwnershipState* TypeChecker::findShapeBinding(const std::string& name) {
+    const auto* symbol = CodeGenerator::getInstance().symbolTable.lookup(name);
+    for (size_t scope = ownershipScopes.size(); scope > shapeScopeStart; --scope) {
+        auto& bindings = ownershipScopes[scope - 1];
+        if (auto found = bindings.find(name); found != bindings.end()) {
+            return symbol && found->second.shapeBinding == symbol ? &found->second : nullptr;
+        }
+    }
+    return nullptr;
+}
+
+void TypeChecker::changeShapeBinding(const std::string& name, ASTNode* value, bool expose) {
+    if (auto* state = findShapeBinding(name)) {
+        state->addressExposed |= expose;
+        state->integerValue = state->addressExposed ? nullptr : integerLiteralSize(value, state->shapeBinding->type.get());
+        state->tensorShape = state->addressExposed || !TensorShape::tensor(state->shapeBinding->type.get())
+            ? nullptr : provenTensor(value);
+    }
+}
+
+void TypeChecker::forgetMutableShapes(bool expose) {
+    for (auto& scope : ownershipScopes) {
+        for (auto& [name, state] : scope) {
+            if (state.mutableBinding) {
+                state.addressExposed |= expose;
+                state.integerValue.reset();
+                state.tensorShape.reset();
+            }
+        }
+    }
+}
+
+void TypeChecker::checkTensorConstructor(ClassInstanceCreationNode& node) {
+    rememberTensor(&node, nullptr);
+    node.type.reset();
+    if (node.templateArgs.size() < 2) return;
+    auto resolvedType = node.getType();
+    auto* resolved = dynamic_cast<GenericType*>(resolvedType.get());
+    if (!resolved) return;
+    const size_t rank = TensorShape::rank(*resolved);
+    for (size_t i = 1; i <= rank; ++i) {
+        const auto* axis = dynamic_cast<const TensorAxisType*>(node.templateArgs[i].get());
+        if (!axis || axis->form != TensorAxisType::Form::RuntimeReference) {
+            if (!TensorShape::proven(node.templateArgs[i].get())) return;
+            continue;
+        }
+        const std::string name = axis->getName();
+        auto* symbol = CodeGenerator::getInstance().symbolTable.lookup(name);
+        if (!symbol || !symbol->type || !symbol->type->isIntegerTy() ||
+            (symbol->symbolType != SymbolType::VARIABLE && symbol->symbolType != SymbolType::FIELD)) {
+            reportError("Type error: Tensor axis " + std::to_string(i) +
+                        " requires an integer size, got '" + name + "'");
+            return;
+        }
+        checkIdentifierUse(name);
+        auto value = freshIntegerValue(name);
+        auto* state = findShapeBinding(name);
+        if (state && !state->addressExposed) {
+            if (!state->integerValue) state->integerValue = value;
+            value = state->integerValue;
+        }
+        resolved->typeArguments[i] = const_cast<Type*>(value.get())->clone();
+    }
+    node.type = resolvedType->clone();
+    rememberTensor(&node, std::move(resolvedType));
+}
+
+void TypeChecker::checkTensorReturn(ASTNode* expression) {
+    if (!requiredReturnShape) return;
+    const auto actual = provenTensor(expression);
+    const auto error = TensorShape::match(requiredReturnShape, actual.get());
+    if (!error.empty()) reportError("Type error: tensor return: " + error);
+}
+
+void TypeChecker::checkTensorCall(FunctionCallNode& node, const FunctionType& signature) {
+    if (!TensorShape::hasSignature(signature)) return;
+    node.type.reset();
+    if (node.arguments.size() != signature.parameterTypes.size()) {
+        reportError("Type error: wrong number of arguments to '" + node.functionName + "'");
+        return;
+    }
+    TensorShape::Bindings bindings;
+    for (size_t i = 0; i < node.arguments.size(); ++i) {
+        const auto* required = signature.parameterTypes[i].get();
+        if (!TensorShape::tensor(required)) continue;
+        const auto actual = provenTensor(node.arguments[i].get());
+        const auto error = TensorShape::match(required, actual.get(), &bindings);
+        if (!error.empty()) {
+            reportError("Type error: argument " + std::to_string(i + 1) + " to '" + node.functionName + "': " + error);
+            return;
+        }
+    }
+    node.type = TensorShape::substitute(signature.returnType.get(), bindings);
+    if (TensorShape::tensor(node.type.get())) rememberTensor(&node, node.type->clone());
+}
+
 void TypeChecker::visit(VariableDeclarationNode& node) {
+    if (node.hasExplicitType && containsNamedAxes(node.type.get())) {
+        reportError("Type error: named tensor dimensions belong to function signatures");
+    }
     if (node.initializer) {
         // `val d: Dict<K, V> = {...}` (including an empty `{}`) takes its type from the annotation.
         if (auto* dictLiteral = dynamic_cast<DictLiteralNode*>(node.initializer.get())) {
@@ -689,7 +922,20 @@ void TypeChecker::visit(VariableDeclarationNode& node) {
                 dictLiteral->type = node.type->clone();
             }
         }
+        const auto* savedStackTensor = allowedStackTensor;
+        const auto* construction = dynamic_cast<const ClassInstanceCreationNode*>(node.initializer.get());
+        if (construction && construction->stackTensor && !node.isField &&
+            dynamic_cast<const FunctionSymbol*>(CodeGenerator::getInstance().symbolTable.getCurrentSymbol())) {
+            allowedStackTensor = construction;
+        }
         visitExpecting(node.initializer.get(), node.hasExplicitType ? node.type.get() : nullptr);
+        allowedStackTensor = savedStackTensor;
+        if (construction && construction->stackTensor && node.hasExplicitType) {
+            const auto actual = provenTensor(construction);
+            if (actual && !TensorShape::match(node.type.get(), actual.get()).empty()) {
+                reportError("Type error: a stack Tensor initializer must match its binding type");
+            }
+        }
         if (node.hasExplicitType) coerceToInterface(node.initializer, node.type.get());
         auto initType = node.initializer->getType();
         if (!isResolvedType(initType)) {
@@ -807,12 +1053,46 @@ void TypeChecker::visit(VariableDeclarationNode& node) {
     }
     bindVariable(node.name, node.type, node.isMutable, node.isField ? SymbolType::FIELD : SymbolType::VARIABLE);
     declareOwnership(node.name, node.type);
+    if (!node.isField) setShapeBinding(node.name, node.type.get(), node.initializer.get(), node.isMutable);
+    if (const auto* construction = dynamic_cast<const ClassInstanceCreationNode*>(node.initializer.get());
+        construction && construction->stackTensor) {
+        findOwnership(node.name)->tensorLifetime = construction;
+    }
 }
 
 void TypeChecker::visit(FunctionDeclarationNode& node) {
     auto& cg = CodeGenerator::getInstance();
     auto* functionSymbol = ensureFunctionSymbol(node);
     auto* savedCurrentSymbol = cg.symbolTable.getCurrentSymbol();
+    const auto declaredType = node.getType();
+    const auto& signature = static_cast<const FunctionType&>(*declaredType);
+    const bool shapeSignature = TensorShape::hasSignature(signature);
+    const auto checkShapePosition = [this](const Type* type) {
+        if (containsNamedAxes(type) && !TensorShape::symbolic(type)) {
+            reportError("Type error: named tensor dimensions require a direct Tensor parameter or result");
+        }
+    };
+    checkShapePosition(signature.returnType.get());
+    for (const auto& parameter : signature.parameterTypes) checkShapePosition(parameter.get());
+    if (shapeSignature) {
+        if (savedCurrentSymbol || node.name == "main" || node.isExternal || node.isIntrinsic || node.isAsync || !node.body) {
+            reportError("Type error: named tensor dimensions require a directly callable function with a body");
+        }
+        std::set<std::string> inputAxes;
+        for (const auto& parameter : signature.parameterTypes) {
+            const auto names = TensorShape::variables(parameter.get());
+            inputAxes.insert(names.begin(), names.end());
+        }
+        for (const auto& name : TensorShape::variables(signature.returnType.get())) {
+            if (!inputAxes.count(name)) {
+                reportError("Type error: tensor return dimension '" + name + "' is absent from the parameters of '" + node.name + "'");
+            }
+        }
+    }
+    const size_t savedShapeScope = shapeScopeStart;
+    shapeScopeStart = ownershipScopes.size();
+    const Type* savedReturnShape = requiredReturnShape;
+    requiredReturnShape = shapeSignature && TensorShape::tensor(node.returnType.get()) ? node.returnType.get() : nullptr;
     cg.symbolTable.saveCurrentSymbol();
     cg.symbolTable.setCurrentSymbol(functionSymbol);
     cg.symbolTable.enterScope();
@@ -825,6 +1105,14 @@ void TypeChecker::visit(FunctionDeclarationNode& node) {
             if (parameterNode) {
                 bindVariable(parameterNode->name, parameterNode->type, false);
                 declareOwnership(parameterNode->name, parameterNode->type);
+                setShapeBinding(parameterNode->name, parameterNode->type.get(), nullptr, false);
+                if (dynamic_cast<const BorrowType*>(parameterNode->type.get()) &&
+                    TensorShape::tensor(parameterNode->type.get())) {
+                    findOwnership(parameterNode->name)->tensorLifetime = parameterNode;
+                }
+                if (shapeSignature && TensorShape::tensor(parameterNode->type.get())) {
+                    findOwnership(parameterNode->name)->tensorShape = parameterNode->type->clone();
+                }
             }
         }
     }
@@ -863,6 +1151,7 @@ void TypeChecker::visit(FunctionDeclarationNode& node) {
             }
         }
         auto bodyType = node.body->getType();
+        if (!statementDiverges(node.body.get())) checkTensorReturn(node.body.get());
 
         if (node.returnType) {
             if (isResolvedType(node.returnType) && isResolvedType(bodyType) &&
@@ -894,11 +1183,14 @@ void TypeChecker::visit(FunctionDeclarationNode& node) {
     inAsyncFunction = savedAsync;
     loopDepth = savedLoopDepth;
     currentReturnType = savedReturnType;
+    requiredReturnShape = savedReturnShape;
+    shapeScopeStart = savedShapeScope;
 
     exitOwnershipScope();
     cg.symbolTable.exitScope();
     cg.symbolTable.popCurrentSymbol();
     cg.symbolTable.setCurrentSymbol(savedCurrentSymbol);
+    if (!checkingProgram) checkTensorLifetimes(node);
 }
 
 void TypeChecker::visit(ExpressionNode& node) {
@@ -953,11 +1245,51 @@ bool TypeChecker::checkClassOperatorOperand(const std::string& op, const Type* l
 void TypeChecker::visit(BinaryExpressionNode& node) {
     narrowFloatOperands(node);
     visitBinaryExpression(node);
+    if (node.op == "@" || node.op == "inner" || node.op == "outer" || node.op == "tensor" ||
+        node.op == "+" || node.op == "-" || node.op == "*" || node.op == "/") {
+        auto isTensorOperand = [](ASTNode* operand) {
+            auto type = operand ? operand->getType() : nullptr;
+            return type && (TensorShape::tensor(type.get()) || type->isIntegerTy() ||
+                            type->isFloatTy() || type->isDoubleTy());
+        };
+        if ((tensorLifetimeUses.count(node.left.get()) || tensorLifetimeUses.count(node.right.get())) &&
+            isTensorOperand(node.left.get()) && isTensorOperand(node.right.get())) {
+            tensorLifetimeOperators.insert(&node);
+        }
+    }
+    rememberTensor(&node, nullptr);
+    const auto leftShape = provenTensor(node.left.get());
+    const auto rightShape = provenTensor(node.right.get());
+    if (!leftShape && !rightShape) return;
+    if (node.op == "@") {
+        const auto* left = TensorShape::tensor(leftShape.get());
+        const auto* right = TensorShape::tensor(rightShape.get());
+        if (left && right && TensorShape::rank(*left) == 2 && TensorShape::rank(*right) == 2 &&
+            TensorShape::sameAxis(left->typeArguments[2].get(), right->typeArguments[1].get())) {
+            auto result = std::make_shared<GenericType>(*left);
+            result->typeArguments[2] = right->typeArguments[2]->clone();
+            rememberTensor(&node, std::move(result));
+        }
+    }
+    else if (node.op == "+" || node.op == "-" || node.op == "*" || node.op == "/") {
+        if (leftShape && rightShape) {
+            if (TensorShape::match(leftShape.get(), rightShape.get()).empty()) rememberTensor(&node, leftShape);
+        }
+        else if (auto* scalar = leftShape ? node.right.get() : node.left.get()) {
+            const auto type = scalar->getType();
+            if (type && (type->isIntegerTy() || type->isFloatTy() || type->isDoubleTy())) {
+                rememberTensor(&node, leftShape ? leftShape : rightShape);
+            }
+        }
+    }
 }
 
 void TypeChecker::narrowFloatOperands(BinaryExpressionNode& node) {
     if (node.left) node.left->accept(*this);
+    const bool shortCircuit = node.op == "and" || node.op == "or" || node.op == "&&" || node.op == "||";
+    if (shortCircuit) forgetMutableShapes();
     if (node.right) node.right->accept(*this);
+    if (shortCircuit) forgetMutableShapes();
     const std::string& op = node.op;
     const bool numeric = op == "+" || op == "-" || op == "*" || op == "/" || op == "%" || op == "**" ||
         op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=";
@@ -1037,7 +1369,46 @@ void TypeChecker::visitBinaryExpression(BinaryExpressionNode& node) {
 }
 
 void TypeChecker::visit(ProgramNode& node) {
+    checkingProgram = true;
     enterOwnershipScope();
+    std::unordered_map<std::string, size_t> functionCounts;
+    std::set<std::string> shapeFunctions;
+    for (auto& statement : node.statements) {
+        ASTNode* declaration = statement.get();
+        while (auto* attribute = dynamic_cast<AttributeNode*>(declaration)) declaration = attribute->target.get();
+        if (auto* templated = dynamic_cast<TemplateDeclarationNode*>(declaration)) {
+            ast_walk::walk(templated->declaration.get(), nullptr, [&](ASTNode* child, std::unique_ptr<ASTNode>*) {
+                const auto* function = dynamic_cast<const FunctionDeclarationNode*>(child);
+                const auto* parameter = dynamic_cast<const ParameterNode*>(child);
+                if ((function && containsNamedAxes(function->returnType.get())) ||
+                    (parameter && containsNamedAxes(parameter->type.get()))) {
+                    reportError("Type error: named tensor dimensions are unsupported in template signatures");
+                }
+                return true;
+            });
+            declaration = templated->declaration.get();
+        }
+        if (auto* function = dynamic_cast<FunctionDeclarationNode*>(declaration)) {
+            ++functionCounts[function->name];
+            auto type = function->getType();
+            if (TensorShape::hasSignature(static_cast<const FunctionType&>(*type))) {
+                shapeFunctions.insert(function->name);
+                if (function->isIntrinsic || function->isExternal) {
+                    reportError("Type error: named tensor dimensions require a directly callable function with a body");
+                }
+            }
+        }
+    }
+    for (const auto& name : shapeFunctions) {
+        if (functionCounts.at(name) > 1) {
+            reportError("Type error: function '" + name + "' with named tensor dimensions cannot be overloaded");
+        }
+    }
+    forEachInterfaceMethod([&](const std::string&, FunctionDeclarationNode* method) {
+        if (!method) return;
+        auto type = method->getType();
+        if (containsNamedAxes(type.get())) reportError("Type error: interface methods cannot bind named tensor dimensions");
+    });
     indexCallSignatures(&node);
     expandTemplateBodies(&node, callReport());
     // Templates and class names first, so that applied template types in signatures (`Opt<Int>`) can
@@ -1057,11 +1428,26 @@ void TypeChecker::visit(ProgramNode& node) {
         }
         // `[@Attribute] def f(...)`: register the declaration under its attributes as well.
         ASTNode* stmtNode = slot.get();
-        while (auto* attribute = dynamic_cast<AttributeNode*>(stmtNode)) stmtNode = attribute->target.get();
+        bool importedFunction = false;
+        while (auto* attribute = dynamic_cast<AttributeNode*>(stmtNode)) {
+            if (auto* call = dynamic_cast<const FunctionCallNode*>(attribute->expr.get())) {
+                const auto& name = call->functionName;
+                importedFunction |= name == "DllImport" || name == "StaticLibraryImport" ||
+                                    name == "CppImport" || name == "CxxImport";
+            }
+            if (auto* id = dynamic_cast<const IdentifierNode*>(attribute->expr.get())) {
+                importedFunction |= id->value == "DllImport";
+            }
+            stmtNode = attribute->target.get();
+        }
         if (!stmtNode) continue;
 
         if (auto* functionNode = dynamic_cast<FunctionDeclarationNode*>(stmtNode)) {
-            ensureFunctionSymbol(*functionNode);
+            auto* symbol = ensureFunctionSymbol(*functionNode);
+            if (!importedFunction && functionNode->body && !functionNode->isExternal &&
+                !functionNode->isIntrinsic && !functionNode->isAsync && !functionNode->isUnsafe) {
+                tensorBorrowTargets[symbol] = functionNode;
+            }
         }
         else if (auto* classNode = dynamic_cast<ClassDeclarationNode*>(stmtNode)) {
             ensureClassSymbol(*classNode);
@@ -1082,6 +1468,8 @@ void TypeChecker::visit(ProgramNode& node) {
             stmt->accept(*this);
         }
     }
+    checkTensorLifetimes(node);
+    checkingProgram = false;
     exitOwnershipScope();
 }
 
@@ -1249,11 +1637,30 @@ void TypeChecker::visit(IfStatementNode& node) {
     if (!elseDiverges && !elseBreaks) {
         mergeMovedFrom(afterElse);
     }
+    for (size_t i = 0; i < ownershipScopes.size(); ++i) {
+        for (auto& [name, state] : ownershipScopes[i]) {
+            const auto& thenState = (thenDiverges || thenBreaks ? afterElse : afterThen)[i].at(name);
+            const auto& elseState = (elseDiverges || elseBreaks ? afterThen : afterElse)[i].at(name);
+            state.addressExposed = thenState.addressExposed || elseState.addressExposed;
+            state.integerValue = !state.addressExposed &&
+                TensorShape::sameAxis(thenState.integerValue.get(), elseState.integerValue.get())
+                ? thenState.integerValue : nullptr;
+            state.tensorShape = !state.addressExposed && thenState.tensorShape && elseState.tensorShape &&
+                TensorShape::match(thenState.tensorShape.get(), elseState.tensorShape.get()).empty()
+                ? thenState.tensorShape : nullptr;
+        }
+    }
+
+    const auto thenShape = provenTensor(node.thenBlock.get());
+    const auto elseShape = provenTensor(node.elseBlock.get());
+    rememberTensor(&node, thenShape && elseShape && TensorShape::match(thenShape.get(), elseShape.get()).empty()
+        ? thenShape : nullptr);
 
     node.type = node.getType();
 }
 
 void TypeChecker::visitLoopBody(ASTNode* body, size_t outerScopes) {
+    forgetMutableShapes();
     const auto beforeBody = ownershipScopes;
     loopExitStates.emplace_back();
     ++loopDepth;
@@ -1274,6 +1681,7 @@ void TypeChecker::visitLoopBody(ASTNode* body, size_t outerScopes) {
         }
     }
     for (const auto& exit : exits) mergeMovedFrom(exit);
+    forgetMutableShapes();
 }
 
 void TypeChecker::visit(ForStatementNode& node) {
@@ -1363,6 +1771,7 @@ void TypeChecker::visit(ReturnStatementNode& node) {
         }
         checkTypeResolved(node.expression->getType(), "return expression");
     }
+    checkTensorReturn(node.expression.get());
 }
 
 void TypeChecker::visit(BlockNode& node) {
@@ -1387,6 +1796,7 @@ void TypeChecker::visit(BlockNode& node) {
         }
     }
     node.type = lastType ? lastType->clone() : std::make_unique<UnknownType>();
+    rememberTensor(&node, node.statements.empty() ? nullptr : provenTensor(node.statements.back().get()));
     if (node.isUnsafeContext) {
         --unsafeContextDepth;
     }
@@ -1414,6 +1824,7 @@ void TypeChecker::visit(AssignmentNode& node) {
         reportError("Type error: a " + target->type->getName() + " handle '" + node.name +
                     "' cannot be reassigned; declare a new binding instead");
     }
+    changeShapeBinding(node.name, node.expression.get());
 }
 
 void TypeChecker::visit(ClassBodyNode& node) {
@@ -1924,6 +2335,7 @@ void TypeChecker::visit(MatchExpressionNode& node) {
     auto& cg = CodeGenerator::getInstance();
 
     for (size_t i = 0; i < node.cases.size(); ++i) {
+        forgetMutableShapes();
         auto& casePair = node.cases[i];
         // Resolve the patterns against the matched type (once; a cloned, already resolved match keeps them).
         casePair.first = resolvePattern(casePair.first.get(), matchType.get());
@@ -1993,6 +2405,7 @@ void TypeChecker::visit(MatchExpressionNode& node) {
     }
 
     node.type = resultType ? resultType->clone() : std::make_unique<UnknownType>();
+    forgetMutableShapes();
 }
 
 void TypeChecker::visit(RangeExpressionNode& node) {
@@ -2167,8 +2580,19 @@ static bool isIntegerLiteralText(const std::string& text) {
 }
 
 void TypeChecker::visit(IdentifierNode& node) {
+    rememberTensor(&node, nullptr);
     checkIdentifierUse(node.value);
     auto* symbol = CodeGenerator::getInstance().symbolTable.lookup(node.value);
+    const auto root = node.value.substr(0, node.value.find('.'));
+    if (const auto* state = findOwnership(root); state && state->tensorLifetime) {
+        const auto* binding = findShapeBinding(root);
+        if (binding == state) tensorLifetimeUses[&node] = state->tensorLifetime;
+        else if (!binding) {
+            unsafeTensorLifetimes.insert(state->tensorLifetime);
+            tensorLifetimeUses[&node] = state->tensorLifetime;
+        }
+    }
+    if (const auto* state = findShapeBinding(node.value)) rememberTensor(&node, state->tensorShape);
     if (!symbol) {
         // A non-type template parameter substituted into an instance's body is its value's text
         // (e.g. `7`); its type comes from IdentifierNode::getType, so do not pin it to Real.
@@ -2179,6 +2603,12 @@ void TypeChecker::visit(IdentifierNode& node) {
         return;
     }
     if (symbol->type && isResolvedType(symbol->type)) {
+        if (symbol->symbolType == SymbolType::FUNCTION) {
+            const auto* signature = dynamic_cast<const FunctionType*>(symbol->type.get());
+            if (signature && TensorShape::hasSignature(*signature)) {
+                reportError("Type error: function '" + node.value + "' has named tensor dimensions and must be called directly");
+            }
+        }
         return;
     }
     if (symbol->symbolType == SymbolType::NAMESPACE ||
@@ -2195,6 +2625,7 @@ void TypeChecker::visit(ValueNode& node) {
 }
 
 void TypeChecker::visit(FunctionCallNode& node) {
+    rememberTensor(&node, nullptr);
     static int callDepth = 0;
     static bool callNestingExceeded = false;
     if (callNestingExceeded) return;
@@ -2244,6 +2675,28 @@ void TypeChecker::visit(FunctionCallNode& node) {
             visitExpecting(node.arguments[i].get(), expectedArg);
             coerceToInterface(node.arguments[i], expectedArg);
         }
+    }
+    const auto* calledSymbol = cg.symbolTable.lookup(node.functionName);
+    const bool hasLifetimeArg = std::any_of(node.arguments.begin(), node.arguments.end(), [&](const auto& arg) {
+        if (tensorLifetimeUses.count(arg.get())) return true;
+        const auto* prefix = dynamic_cast<const PrefixExpressionNode*>(arg.get());
+        return prefix && tensorLifetimeUses.count(prefix->expression.get());
+    });
+    if (const auto* target = dynamic_cast<const FunctionSymbol*>(calledSymbol)) {
+        if (const auto* signature = dynamic_cast<const FunctionType*>(target->type.get())) checkTensorCall(node, *signature);
+        if (hasLifetimeArg && cg.symbolTable.functionOverloads(node.functionName).size() == 1) tensorBorrowCalls[&node] = target;
+    }
+    else if (hasLifetimeArg && !calledSymbol &&
+             (node.functionName == "clone" || node.functionName == "sum" || node.functionName == "mean" ||
+              node.functionName == "norm" || node.functionName == "zerosLike" || node.functionName == "onesLike" ||
+              node.functionName == "fullLike" || node.functionName == "argmin" || node.functionName == "argmax" ||
+              node.functionName == "max" || node.functionName == "min" || node.functionName == "prod" ||
+              node.functionName == "transpose" || node.functionName == "adjoint" ||
+              node.functionName == "conjugate" || node.functionName == "relu" || node.functionName == "softmax" ||
+              node.functionName == "fillUniform" || node.functionName == "fillNormal" ||
+              node.functionName == "mse" || node.functionName == "innerProduct" ||
+              node.functionName == "outerProduct" || node.functionName == "tensorProduct")) {
+        tensorBorrowCalls[&node] = nullptr;
     }
     if (!parameterTypes.empty()) {
         checkFunctionArguments(node.arguments, parameterTypes, node.functionName);
@@ -2484,6 +2937,23 @@ void TypeChecker::visit(AccessFieldNode& node) {
 
 void TypeChecker::visit(ClassInstanceCreationNode& node) {
     if (!expandArguments(node.arguments, CallTarget::Constructor, node.className, "", node.line)) return;
+    if (node.className == "Tensor") {
+        checkTensorConstructor(node);
+        if (node.stackTensor) {
+            if (allowedStackTensor != &node) {
+                reportError("Type error: a stack Tensor requires a direct local binding");
+            }
+            if (node.arguments.size() > 1) {
+                reportError("Type error: a stack Tensor accepts at most one fill value");
+            }
+            const auto actual = provenTensor(&node);
+            const auto* tensor = TensorShape::tensor(actual.get());
+            if (!tensor || std::any_of(tensor->typeArguments.begin() + 1, tensor->typeArguments.end(),
+                    [](const auto& axis) { return !TensorShape::literal(axis.get()); })) {
+                reportError("Type error: a stack Tensor requires compile-time dimension sizes");
+            }
+        }
+    }
     if (!node.templateArgs.empty()) {
         std::vector<const Type*> arguments;
         for (const auto& a : node.templateArgs) arguments.push_back(a.get());
@@ -2523,6 +2993,29 @@ void TypeChecker::visit(AssignmentExpressionNode& node) {
     if (node.left) {
         node.left->accept(*this);
     }
+    if (const auto reference = tensorLifetimeUses.find(node.left.get()); reference != tensorLifetimeUses.end()) {
+        const auto* original = dynamic_cast<const ClassInstanceCreationNode*>(reference->second);
+        auto* replacement = dynamic_cast<ClassInstanceCreationNode*>(node.right.get());
+        if (original && replacement && replacement->stackTensor && node.op == "=") {
+            const auto name = identifierName(node.left.get());
+            const auto* savedStackTensor = allowedStackTensor;
+            allowedStackTensor = replacement;
+            replacement->accept(*this);
+            allowedStackTensor = savedStackTensor;
+            const auto* binding = findShapeBinding(name);
+            if (!binding || !binding->mutableBinding || !binding->borrows.empty()) {
+                reportError("Type error: a stack Tensor reassignment requires an unborrowed var binding");
+            }
+            const auto expected = provenTensor(original);
+            const auto actual = provenTensor(replacement);
+            if (!TensorShape::match(expected.get(), actual.get()).empty()) {
+                reportError("Type error: a stack Tensor reassignment requires the same shape and element type");
+            }
+            node.rebindsStackTensor = true;
+            tensorLifetimeOperators.insert(&node);
+            return;
+        }
+    }
     // `d = {...}` / `d = {}` for a Dict variable, and `d[k] = {...}` for a nested Dict value, take the
     // target's type.
     if (auto* dictLiteral = dynamic_cast<DictLiteralNode*>(node.right.get())) {
@@ -2555,6 +3048,7 @@ void TypeChecker::visit(AssignmentExpressionNode& node) {
         }
     }
     if (!leftName.empty() && dynamic_cast<IdentifierNode*>(node.left.get())) {
+        changeShapeBinding(leftName, (node.op == "=" || node.op == "<-") ? node.right.get() : nullptr);
         auto leftType = node.left->getType();
         if (isRefcountHandleType(leftType.get())) {
             reportError("Type error: a " + leftType->getName() + " handle '" + leftName +
@@ -2609,6 +3103,7 @@ void TypeChecker::visit(PostfixExpressionNode& node) {
     if (node.expression) {
         node.expression->accept(*this);
     }
+    if (node.op == "++" || node.op == "--") changeShapeBinding(identifierName(node.expression.get()), nullptr);
     node.type = node.expression ? node.expression->getType() : std::make_unique<UnknownType>();
     checkTypeResolved(node.type, "postfix expression");
 }
@@ -2618,6 +3113,9 @@ void TypeChecker::visit(PrefixExpressionNode& node) {
         node.expression->accept(*this);
     }
     const std::string sourceName = movedOrBorrowedIdentifier(&node);
+    rememberTensor(&node, nullptr);
+    if (node.op == "<-" || node.op == "&" || node.op == "&mut") rememberTensor(&node, provenTensor(node.expression.get()));
+    if (node.op == "++" || node.op == "--") changeShapeBinding(identifierName(node.expression.get()), nullptr);
     if (node.op == "<-") {
         if (auto* id = dynamic_cast<IdentifierNode*>(node.expression.get())) {
             Symbol* source = CodeGenerator::getInstance().symbolTable.lookup(id->value);
@@ -2641,7 +3139,11 @@ void TypeChecker::visit(PrefixExpressionNode& node) {
     else if (node.op == "&" || node.op == "&mut") {
         if (!sourceName.empty()) {
             const size_t dot = sourceName.find('.');
-            markBorrowed(sourceName.substr(0, dot), node.op == "&mut", &node);
+            const auto name = sourceName.substr(0, dot);
+            const auto* binding = findShapeBinding(name);
+            const bool stackTensor = binding && dynamic_cast<const ClassInstanceCreationNode*>(binding->tensorLifetime);
+            if (!stackTensor && (node.op == "&mut" || unsafeContextDepth > 0)) changeShapeBinding(name, nullptr, true);
+            markBorrowed(name, node.op == "&mut", &node);
         }
     }
     else if (node.op == "async" || node.op == "go") {
@@ -2721,6 +3223,11 @@ void TypeChecker::visit(LoopControlNode& node) {
 
 void TypeChecker::visit(LambdaExpressionNode& node) {
     auto& cg = CodeGenerator::getInstance();
+    if (node.capturesByReference) forgetMutableShapes(true);
+    const size_t savedShapeScope = shapeScopeStart;
+    shapeScopeStart = ownershipScopes.size();
+    const Type* savedReturnShape = requiredReturnShape;
+    requiredReturnShape = nullptr;
     const int savedLoopDepth = loopDepth;
     loopDepth = 0;
     struct RestoreLoopDepth { int& depth; int saved; ~RestoreLoopDepth() { depth = saved; } } restoreLoopDepth{loopDepth, savedLoopDepth};
@@ -2755,8 +3262,12 @@ void TypeChecker::visit(LambdaExpressionNode& node) {
             }
             arg->accept(*this);
             if (paramNode) {
+                if (containsNamedAxes(paramNode->type.get())) {
+                    reportError("Type error: lambda parameters cannot bind named tensor dimensions");
+                }
                 bindVariable(paramNode->name, paramNode->type, false);
                 declareOwnership(paramNode->name, paramNode->type);
+                setShapeBinding(paramNode->name, paramNode->type.get(), nullptr, false);
             }
         }
     }
@@ -2765,6 +3276,8 @@ void TypeChecker::visit(LambdaExpressionNode& node) {
     }
     exitOwnershipScope();
     cg.symbolTable.exitScope();
+    shapeScopeStart = savedShapeScope;
+    requiredReturnShape = savedReturnShape;
     node.type = node.getType();
 }
 
@@ -2779,9 +3292,9 @@ void TypeChecker::visit(MapStatementNode& node) {
     enterOwnershipScope();
     bindVariable(node.variable, elementType, false);
     declareOwnership(node.variable, elementType);
-    if (node.body) {
-        node.body->accept(*this);
-    }
+    forgetMutableShapes();
+    if (node.body) node.body->accept(*this);
+    forgetMutableShapes();
     auto resolved = node.getType();
     if (!isResolvedType(resolved)) {
         std::vector<std::unique_ptr<Type>> typeArgs;
@@ -2808,9 +3321,9 @@ void TypeChecker::visit(PMapStatementNode& node) {
     enterOwnershipScope();
     bindVariable(node.variable, elementType, false);
     declareOwnership(node.variable, elementType);
-    if (node.body) {
-        node.body->accept(*this);
-    }
+    forgetMutableShapes();
+    if (node.body) node.body->accept(*this);
+    forgetMutableShapes();
     auto resolved = node.getType();
     if (!isResolvedType(resolved)) {
         std::vector<std::unique_ptr<Type>> typeArgs;
@@ -2843,9 +3356,9 @@ void TypeChecker::visit(ReduceStatementNode& node) {
     std::unique_ptr<Type> accType = node.initialValue ? node.initialValue->getType() : std::make_unique<UnknownType>();
     bindVariable(node.accumulatorVariable, accType, true);
     declareOwnership(node.accumulatorVariable, accType);
-    if (node.body) {
-        node.body->accept(*this);
-    }
+    forgetMutableShapes();
+    if (node.body) node.body->accept(*this);
+    forgetMutableShapes();
     if (node.initialValue) {
         node.initialValue->accept(*this);
     }
@@ -2865,9 +3378,9 @@ void TypeChecker::visit(FilterStatementNode& node) {
     enterOwnershipScope();
     bindVariable(node.variable, elementType, false);
     declareOwnership(node.variable, elementType);
-    if (node.body) {
-        node.body->accept(*this);
-    }
+    forgetMutableShapes();
+    if (node.body) node.body->accept(*this);
+    forgetMutableShapes();
     auto resolved = node.getType();
     if (!isResolvedType(resolved)) {
         std::vector<std::unique_ptr<Type>> typeArgs;
@@ -2901,6 +3414,7 @@ void TypeChecker::visitLoopContracts(ASTNode& loop) {
 }
 
 void TypeChecker::visit(WhileStatementNode& node) {
+    forgetMutableShapes();
     if (node.condition) {
         node.condition->accept(*this);
         checkTypeResolved(node.condition->getType(), "while condition");

@@ -1,0 +1,33 @@
+def multiply(a: &Tensor<Float, :_m, :_k>, b: &Tensor<Float, :_k, :_n>): Tensor<Float, :_m, :_n> = a @ b
+
+def fillEdge(b: &mut Tensor<Float, 3, 2>) {
+    b[0, 0] = 4.0;
+    b[1, 0] = 5.0;
+    b[2, 0] = 6.0;
+}
+
+def stackResult(): Int {
+    val a = Tensor<Float, 2, 3>(1.0);
+    var b = Tensor<Float, 3, 2>();
+    b = Tensor<Float, 3, 2>();
+    fillEdge(&mut b);
+    val product = multiply(&a, &b);
+    if (product[1, 0] == 15.0 && product[1, 1] == 0.0) { return 0; }
+    return 1;
+}
+
+def stackAndHeapResult(): Int {
+    val a: Tensor<Float, 2, 3> = Tensor<Float, 2, 3>(1.0);
+    val b = new Tensor<Float, 3, 2>(2.0);
+    val product = multiply(&a, &b);
+    if (product[1, 1] == 6.0) { return 0; }
+    return 2;
+}
+
+def main(): Int {
+    val extent = 2;
+    val vector = Tensor<Float, extent>(4.0);
+    val scalar = Tensor<Float, 0>(4.0);
+    if (vector[1] != 4.0) { return 3; }
+    return stackResult() + stackAndHeapResult();
+}

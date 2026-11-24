@@ -1,0 +1,6 @@
+def escape(): Tensor<Float, 2> {
+    val a = Tensor<Float, 2>();
+    a
+}
+
+def main(): Int = 0

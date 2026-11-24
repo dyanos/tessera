@@ -109,7 +109,14 @@ std::unique_ptr<Type> Parser::parseType() {
 		if (match(TokenType::OPERATOR, "<")) {
 			std::vector<std::unique_ptr<Type>> typeArgs;
 			do {
-				typeArgs.push_back(parseTemplateArgumentAsType());
+				if (typeName == "Tensor" && !typeArgs.empty() && match(TokenType::OPERATOR, ":")) {
+					if (!check(TokenType::IDENTIFIER) || peek().value.size() < 2 || peek().value.front() != '_') {
+						error("Expected a tensor dimension name beginning with '_' after ':'");
+					}
+					typeArgs.push_back(std::make_unique<TensorAxisType>(TensorAxisType::Form::Symbol, ":" + advance().value));
+				} else {
+					typeArgs.push_back(parseTemplateArgumentAsType());
+				}
 			} while (match(TokenType::OPERATOR, ","));
 			expectClosingAngle();
 			return std::make_unique<GenericType>(baseType, typeArgs);

@@ -20,6 +20,7 @@
 #include "all_ast.h"
 #include "type_checker.h"
 
+#include <charconv>
 #include <iostream>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/Function.h>
@@ -494,18 +495,55 @@ llvm::Value* ClassInstanceCreationNode::codegen() {
     }
 
     if (className == "Tensor") {
-        std::vector<int64_t> dims = TensorRuntime::dimensionsFromTemplateArgs(templateArgs);
-        const bool scalar = templateArgs.size() == 2 && templateArgs[1] && templateArgs[1]->getName() == "0";
-        if (dims.empty() && !scalar) {
-            std::cerr << "Error: Tensor requires at least one positive dimension" << std::endl;
+        const auto* resolved = dynamic_cast<const GenericType*>(type.get());
+        const auto& typeArguments = stackTensor && resolved ? resolved->typeArguments : templateArgs;
+        if (typeArguments.size() < 2) {
+            cg.reportError("Tensor requires at least one dimension");
             return nullptr;
+        }
+
+        std::vector<llvm::Value*> dims;
+        auto* i64Ty = llvm::Type::getInt64Ty(cg.context);
+        for (size_t i = 1; i < typeArguments.size(); ++i) {
+            const std::string name = typeArguments[i] ? typeArguments[i]->getName() : "";
+            const auto* axis = dynamic_cast<const TensorAxisType*>(typeArguments[i].get());
+            if (axis && axis->form == TensorAxisType::Form::RuntimeReference) {
+                if (stackTensor) {
+                    cg.error("Stack Tensor axis ", i, " requires a compile-time size; use 'new Tensor' for '", name, "'");
+                    return nullptr;
+                }
+                IdentifierNode reference(name);
+                const auto referenceType = reference.getType();
+                if (!referenceType || !referenceType->isIntegerTy()) {
+                    cg.error("Tensor axis ", i, " requires an integer variable, got '", name, "'");
+                    return nullptr;
+                }
+                llvm::Value* value = reference.codegen();
+                if (!value || !value->getType()->isIntegerTy()) {
+                    cg.error("Cannot read integer Tensor axis ", i, " from '", name, "'");
+                    return nullptr;
+                }
+                dims.push_back(cg.builder.CreateSExtOrTrunc(value, i64Ty, "tensor.dim.value"));
+                continue;
+            }
+            if (typeArguments.size() == 2 && name == "0") break;
+
+            int64_t dim = 0;
+            const auto end = name.data() + name.size();
+            const auto [ptr, ec] = std::from_chars(name.data(), end, dim);
+            if (ec != std::errc{} || ptr != end || dim <= 0) {
+                cg.error("Tensor axis ", i, " must be a positive integer literal, got '", name, "'");
+                return nullptr;
+            }
+            dims.push_back(llvm::ConstantInt::get(i64Ty, dim));
         }
 
         llvm::Value* fillValue = nullptr;
         if (!arguments.empty()) {
             fillValue = arguments.front()->codegen();
         }
-        return TensorRuntime::createTensor(cg, dims, fillValue);
+        return stackTensor ? TensorRuntime::createStackTensor(cg, dims, fillValue)
+                           : TensorRuntime::createTensor(cg, dims, fillValue);
     }
 
     // Built-in value aggregates: `new Complex(re, im)` etc. produce a struct value.
@@ -871,6 +909,7 @@ bool materializeTemplateClass(const std::string& mangledName) {
 std::unique_ptr<Type> ClassInstanceCreationNode::getType() {
     if (!templateArgs.empty()) {
         if (className == "Tensor") {
+            if (type) return type->clone();
             std::vector<std::unique_ptr<Type>> clonedArgs;
             clonedArgs.reserve(templateArgs.size());
             for (const auto& arg : templateArgs) {

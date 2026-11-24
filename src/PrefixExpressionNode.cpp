@@ -8,6 +8,7 @@
 #include "symbol.h"
 #include "type_checker.h"
 #include "type_utils.h"
+#include "TensorRuntime.h"
 
 #include <iostream>
 #include <llvm/IR/Constants.h>
@@ -230,6 +231,7 @@ llvm::Value* PrefixExpressionNode::codegen() {
         if (auto* id = dynamic_cast<IdentifierNode*>(expression.get())) {
             auto* symbol = CodeGenerator::getInstance().symbolTable.lookup(id->value);
             if (symbol && symbol->value) {
+                if (symbol->type && TensorRuntime::isTensorTypeName(symbol->type->getName())) return value;
                 // An immutable borrow of a pointer-valued local kept in a slot (String, array, …)
                 // yields the loaded pointer, so the reference is the underlying object — matching how
                 // class objects (bound as direct pointers) already behave, and letting member access

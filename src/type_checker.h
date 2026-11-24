@@ -18,6 +18,8 @@
 void setStrictOwnership(bool enabled);
 bool isStrictOwnership();
 bool typeIsCopy(const Type* type);
+struct Symbol;
+struct FunctionSymbol;
 
 // TypeChecker 클래스는 AST를 방문하여 타입 검사를 수행합니다.
 class TypeChecker : public ASTVisitor {
@@ -164,6 +166,12 @@ private:
         bool moved = false;
         bool owned = false;
         std::vector<Borrow> borrows;
+        bool mutableBinding = false;
+        bool addressExposed = false;
+        const Symbol* shapeBinding = nullptr;
+        std::shared_ptr<const Type> tensorShape;
+        std::shared_ptr<const Type> integerValue;
+        const ASTNode* tensorLifetime = nullptr;
     };
 
     int errorCount = 0;
@@ -171,6 +179,7 @@ private:
     int unsafeContextDepth = 0;
     int loopDepth = 0;
     const Type* currentReturnType = nullptr;  // declared return type of the function being checked
+    const Type* requiredReturnShape = nullptr;
     const Type* expectedType = nullptr;       // see visitExpecting
     int currentLine = 0;                      // line of the statement being checked
     const Type* blockResultExpected = nullptr;  // expected type of the next block's last statement  // enclosing while/for loops of the current function (break/continue targets)
@@ -178,6 +187,27 @@ private:
     // no-borrow-across-await rule is enforced at each await point.
     bool inAsyncFunction = false;
     std::vector<std::unordered_map<std::string, OwnershipState>> ownershipScopes;
+    std::unordered_map<const ASTNode*, std::shared_ptr<const Type>> tensorShapes;
+    std::unordered_map<const ASTNode*, const ASTNode*> tensorLifetimeUses;
+    std::unordered_map<const ASTNode*, const FunctionSymbol*> tensorBorrowCalls;
+    std::unordered_map<const FunctionSymbol*, const FunctionDeclarationNode*> tensorBorrowTargets;
+    std::set<const ASTNode*> tensorLifetimeOperators;
+    std::set<const ASTNode*> unsafeTensorLifetimes;
+    const ClassInstanceCreationNode* allowedStackTensor = nullptr;
+    bool checkingProgram = false;
+    void checkTensorLifetimes(ASTNode& root);
+    size_t nextIntegerValue = 0;
+    size_t shapeScopeStart = 0;
+    std::shared_ptr<const Type> provenTensor(const ASTNode* expression) const;
+    void rememberTensor(const ASTNode* expression, std::shared_ptr<const Type> shape);
+    std::shared_ptr<const Type> freshIntegerValue(const std::string& name);
+    void setShapeBinding(const std::string& name, const Type* type, ASTNode* initializer, bool mutableBinding);
+    void changeShapeBinding(const std::string& name, ASTNode* value, bool expose = false);
+    void forgetMutableShapes(bool expose = false);
+    OwnershipState* findShapeBinding(const std::string& name);
+    void checkTensorConstructor(ClassInstanceCreationNode& node);
+    void checkTensorReturn(ASTNode* expression);
+    void checkTensorCall(FunctionCallNode& node, const FunctionType& signature);
     std::vector<std::vector<std::vector<std::unordered_map<std::string, OwnershipState>>>> loopExitStates;
     void visitLoopBody(ASTNode* body, size_t outerScopes);
     void reportError(const std::string& message);

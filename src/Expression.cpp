@@ -120,6 +120,14 @@ static bool isFieldChainPath(const std::vector<std::string>& comps) {
     return comps.size() >= 2 && comps[0] != "this" && comps[0] != "super";
 }
 
+std::unique_ptr<Type> Parser::parseAllocationTypeArgument(bool tensorAxis) {
+    if (tensorAxis && check(TokenType::IDENTIFIER) &&
+        std::find(templateTypeParams.begin(), templateTypeParams.end(), peek().value) == templateTypeParams.end()) {
+        return std::make_unique<TensorAxisType>(TensorAxisType::Form::RuntimeReference, advance().value);
+    }
+    return parseTemplateArgumentAsType();
+}
+
 std::unique_ptr<ASTNode> Parser::parseSimpleExpression() {
 	std::unique_ptr<ASTNode> expr;
 
@@ -161,6 +169,7 @@ std::unique_ptr<ASTNode> Parser::parseSimpleExpression() {
          check(TokenType::KEYWORD, "super") ||
          check(TokenType::KEYWORD, "box"))) {
         advance();
+        const int identifierLine = previous().line;
         if (previous().value == "_") {
             return std::make_unique<UnitNode>();
         }
@@ -191,13 +200,14 @@ std::unique_ptr<ASTNode> Parser::parseSimpleExpression() {
 			saveTokenPosition();
 			advance(); // consume '<'
 			std::vector<std::unique_ptr<Type>> typeArgs;
+			const bool stackTensor = pathComponents.front() == "Tensor";
 			bool isTemplateCall = false;
 			// Try to parse template arg list followed by '>' and '('
 			auto firstType = parseTemplateArgumentAsType();
 			if (firstType && firstType->getKind() != Type::Kind::UNKNOWN) {
 				typeArgs.push_back(std::move(firstType));
 				while (match(TokenType::OPERATOR, ",")) {
-					typeArgs.push_back(parseTemplateArgumentAsType());
+					typeArgs.push_back(parseAllocationTypeArgument(stackTensor));
 				}
 				if (match(TokenType::OPERATOR, ">")) {
 					if (match(TokenType::OPERATOR, "(")) {
@@ -222,6 +232,13 @@ std::unique_ptr<ASTNode> Parser::parseSimpleExpression() {
 			}
 			if (isTemplateCall) {
 				discardTokenPosition();
+				if (stackTensor) {
+					auto constructor = std::make_unique<ClassInstanceCreationNode>("Tensor", parseArgumentList());
+					constructor->stackTensor = true;
+					constructor->line = identifierLine;
+					constructor->templateArgs = std::move(typeArgs);
+					return constructor;
+				}
 				auto callNode = std::make_unique<FunctionCallNode>();
 				callNode->functionName = pathComponents[0];
 				callNode->explicitTypeArgs = std::move(typeArgs);
@@ -415,7 +432,7 @@ std::unique_ptr<ASTNode> Parser::parseSimpleExpression() {
 			std::vector<std::unique_ptr<Type>> tmplArgs;
 			if (match(TokenType::OPERATOR, "<")) {
 				do {
-					tmplArgs.push_back(parseTemplateArgumentAsType());
+					tmplArgs.push_back(parseAllocationTypeArgument(id == "Tensor" && !tmplArgs.empty()));
 				} while (match(TokenType::OPERATOR, ","));
 				expectClosingAngle();
 			}

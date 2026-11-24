@@ -365,6 +365,8 @@ tests/semantic_positive/parallel_api_emit_ir.csec 0 3
 tests/semantic_positive/pmap_openmp_capture_emit_ir.csec 0 0
 tests/semantic_positive/preduce_emit_ir.csec 0 34
 tests/semantic_positive/raw_pointer_deref_in_unsafe_context.csec 0 0
+tests/semantic_positive/tensor_shape_shared_dimension.csec 0 0
+tests/semantic_positive/tensor_stack_allocation.csec 0 0
 tests/stdlib/data/alias_helper.csec 0 0
 tests/stdlib/negative/01_thread_start_by_reference.csec 1 NA
 tests/stdlib/negative/02_thread_start_without_import.csec 1 NA

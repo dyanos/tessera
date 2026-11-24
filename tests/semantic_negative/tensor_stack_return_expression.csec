@@ -1,0 +1,3 @@
+def escape(): Tensor<Float, 2> = Tensor<Float, 2>()
+
+def main(): Int = 0

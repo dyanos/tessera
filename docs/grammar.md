@@ -159,7 +159,8 @@ tuple-type   = '(' type ',' type { ',' type } ')' ;         (* multiple-return *
 applied-type = type-name [ generic-args ] ;
 generic-args = '<' type-arg { ',' type-arg } '>'            (* Tensor<Double,3,3> *)
              | '[' type-arg { ',' type-arg } ']' ;          (* Vector[Int], Matrix[Double] *)
-type-arg     = type | int-lit ;                             (* non-type args: dimensions *)
+type-arg     = type | int-lit | tensor-dim ;
+tensor-dim   = ':' identifier ;                            (* identifier begins with '_' and has at least two characters *)
 type-name    = 'Int' | 'Long' | 'Double' | 'Float' | 'Real' | 'Bool' | 'Boolean'
              | 'Char' | 'String' | 'Nat' | 'Unit' | 'Void'
              | 'Tensor' | 'Vector' | 'Matrix' | 'Shared' | 'Weak' | 'Dict' | 'Set' | identifier ;
@@ -167,6 +168,8 @@ type-name    = 'Int' | 'Long' | 'Double' | 'Float' | 'Real' | 'Bool' | 'Boolean'
 
 `Nat` is an arbitrary-precision integer (reference type). `struct`/value types are
 Copy; reference `class`, arrays, `box T`, `Shared`/`Weak` are owned (move-checked).
+The `tensor-dim` form is valid in the axis positions of a direct `Tensor` parameter
+or return type in a top-level function. A borrow of a tensor can use the same form.
 
 ---
 
@@ -249,11 +252,15 @@ index        = expr | [ expr ] ':' [ expr ] [ ':' expr ] ;  (* Fortran section t
 
 primary      = literal | identifier | '(' expr ')'
              | 'build' '{' { expr [ ';' ] } '}'
-             | 'new' applied-type call-args
+             | 'new' applied-type call-args | tensor-new | stack-tensor-new
              | identifier generic-args '.' identifier [ call-args ]   (* Option<Int>.None: a variant of a generic enum *)
              | lambda | if-expr | match-expr | array-lit | dict-lit | set-lit | latex-math
              | 'this' | 'super' | dsl-entry ;
 lambda       = '[' [ capture-list ] ']' '(' [ params ] ')' '->' block ;
+tensor-new   = 'new' tensor-constructor [ call-args ] ;
+stack-tensor-new = tensor-constructor call-args ;
+tensor-constructor = 'Tensor' '<' type ',' extent { ',' extent } '>' ;
+extent       = int-lit | identifier ;
 array-lit    = '[' [ expr { ',' expr } ] ']' ;
 dict-lit     = '{' [ expr ':' expr { ',' expr ':' expr } [ ',' ] ] '}' ;
                                                             (* Dict<K, V>; see below *)

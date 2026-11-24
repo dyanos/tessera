@@ -1,0 +1,8 @@
+def multiply(a: &Tensor<Float, :_m, :_k>, b: &Tensor<Float, :_k, :_n>): Tensor<Float, :_m, :_n> = a @ b
+
+def main(): Int {
+    val a = new Tensor<Float, 2, 3>;
+    val b = new Tensor<Float, 4, 5>;
+    val product = multiply(&a, &b);
+    return 0;
+}

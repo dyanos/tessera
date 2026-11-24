@@ -232,9 +232,11 @@ llvm::Value* VariableDeclarationNode::codegen() {
     // make a later return use a different LLVM Value and defeat cleanup ownership transfer.
     const bool tensorMoveInitializer = type && type->getName() == "Tensor" &&
         prefixInitializer && prefixInitializer->op == "<-";
+    const auto* constructor = dynamic_cast<ClassInstanceCreationNode*>(initializer.get());
+    const bool stackTensorInitializer = constructor && constructor->stackTensor;
     llvm::BasicBlock* declBlock = cg.builder.GetInsertBlock();
     const bool ownsTensorResult = cg.isFreshTensor(initValue) ||
-        (isStrictOwnership() && !dynamic_cast<IdentifierNode*>(initializer.get()) &&
+        (!stackTensorInitializer && isStrictOwnership() && !dynamic_cast<IdentifierNode*>(initializer.get()) &&
          !dynamic_cast<AccessFieldNode*>(initializer.get()) &&
          !(prefixInitializer && (prefixInitializer->op == "&" || prefixInitializer->op == "&mut")));
     const bool freshTensorInitializer = autoDrop && type && type->getName() == "Tensor" &&
@@ -244,9 +246,10 @@ llvm::Value* VariableDeclarationNode::codegen() {
     const bool bindPointerBackedValueDirectly =
         initValue &&
         initValue->getType()->isPointerTy() &&
+        !stackTensorInitializer &&
         !(isMutable && type && type->getName() == "Tensor") &&
         !(isMutable && type && type->getKind() == Type::Kind::CLASS && !declaredStructClass) &&
-        (dynamic_cast<ClassInstanceCreationNode*>(initializer.get()) != nullptr ||
+        (constructor != nullptr ||
          dynamic_cast<ArrayCreationExpressionNode*>(initializer.get()) != nullptr ||
          dynamic_cast<ArrayLiteralNode*>(initializer.get()) != nullptr ||
          // `map`/`filter`/`pmap` yield a bare element-base pointer (a collection buffer); bind it
